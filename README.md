@@ -130,3 +130,7 @@ SLURCETRAIL_INDEX_PATH=~/code/myproject \
 - Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. slurcetrail is an independent implementation and shares no code with it.
 - Screenshots show [LevelDB](https://github.com/google/leveldb) (BSD-3-Clause, © The LevelDB Authors).
 - Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), and [rfd](https://github.com/PolyMeilleur/rfd).
+
+## License
+
+[MIT](LICENSE) © 2026 Joseph DeFrancesco
