@@ -138,7 +138,7 @@ mod tests {
         let graph = CodeGraph {
             symbols,
             edges: Vec::new(),
-            file_contents: HashMap::new(),
+            ..CodeGraph::default()
         };
         let scene = build_overview(&graph, &fake_measure);
         assert_eq!(scene.groups.len(), MAX_FILES);

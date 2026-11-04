@@ -489,7 +489,7 @@ mod tests {
                     kind: EdgeKind::Calls,
                 })
                 .collect(),
-            file_contents: HashMap::new(),
+            ..CodeGraph::default()
         }
     }
 

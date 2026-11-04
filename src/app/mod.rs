@@ -1,7 +1,9 @@
 //! Top-level window: menu, symbol list, graph, code panel, status bar, and
 //! the lifecycle of background indexing jobs.
 
+mod code_panel;
 pub mod launch;
+mod locations;
 mod project;
 
 use std::path::PathBuf;
@@ -10,11 +12,11 @@ use launch::LaunchOptions;
 
 use egui::{Color32, Key, KeyboardShortcut, Modifiers, RichText};
 
-use crate::code_view::CodeView;
 use crate::graph::GraphView;
 use crate::index::job::IndexJob;
 use crate::index::{IndexError, IndexOptions, IndexOutcome};
 use crate::model::SymbolId;
+use code_panel::CodePanel;
 use project::Project;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
@@ -36,13 +38,11 @@ enum MenuAction {
 pub struct SlurcetrailApp {
     project: Project,
     graph_view: GraphView,
-    code_view: CodeView,
+    code_panel: CodePanel,
     search_query: String,
     /// Symbol-list rows for `filtered_for`; `None` means stale.
     filtered: Vec<SymbolId>,
     filtered_for: Option<String>,
-    /// Symbol whose source the code panel last showed (to scroll on change).
-    last_shown_symbol: Option<SymbolId>,
     job: Option<IndexJob>,
     status: Status,
     warnings: Vec<String>,
@@ -69,11 +69,10 @@ impl SlurcetrailApp {
         let mut app = Self {
             project,
             graph_view: GraphView::default(),
-            code_view: CodeView::default(),
+            code_panel: CodePanel::default(),
             search_query: String::new(),
             filtered: Vec::new(),
             filtered_for: None,
-            last_shown_symbol: None,
             job: None,
             status,
             warnings: Vec::new(),
@@ -138,9 +137,8 @@ impl SlurcetrailApp {
         ));
         self.project = Project::new(name.clone(), Some(root), outcome.graph);
         self.graph_view = GraphView::default();
-        self.code_view = CodeView::default();
+        self.code_panel = CodePanel::default();
         self.filtered_for = None;
-        self.last_shown_symbol = None;
         self.warnings = outcome.warnings;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{APP_NAME} — {name}")));
         self.apply_pending_symbol();
@@ -309,27 +307,8 @@ impl SlurcetrailApp {
             .default_size(260.0)
             .show(ui, |ui| {
                 let selected = self.graph_view.selected();
-                let is_new_selection = selected != self.last_shown_symbol;
-                self.last_shown_symbol = selected;
-
-                let Some(symbol) = selected.and_then(|id| self.project.graph.symbols.get(&id))
-                else {
-                    ui.centered_and_justified(|ui| ui.label("Select a symbol to view its source."));
-                    return;
-                };
-                match self.project.graph.file_contents.get(&symbol.file) {
-                    Some(contents) => {
-                        self.code_view.show(
-                            ui,
-                            &symbol.file,
-                            contents,
-                            Some(symbol.line),
-                            is_new_selection,
-                        );
-                    }
-                    None => {
-                        ui.label(format!("Source for {} is not available.", symbol.file));
-                    }
+                if let Some(id) = self.code_panel.show(ui, &self.project.graph, selected) {
+                    self.graph_view.select(id);
                 }
             });
     }

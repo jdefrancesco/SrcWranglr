@@ -19,7 +19,7 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 - **Respects `.gitignore`** and skips hidden folders, `node_modules`, and `target`.
 - **Tolerant of real-world code:** broken syntax, non-UTF-8 files, huge or minified files (oversized ones are skipped with a warning), and deeply nested expressions are all handled without crashing.
 - **Indexes** namespaces, classes, structs (including C `typedef struct {…} Name;`), functions, methods, and fields.
-- **Finds** *calls*, *inheritance*, *uses* (types and members), and *containment*. Name resolution follows enclosing scopes, base classes, and local variable types, so `Circle c; c.area()` links to `Circle::area`.
+- **Finds** *calls*, *inheritance*, *uses* (types and members), and *containment*, and records the exact line and column of each one. Name resolution follows enclosing scopes, base classes, and local variable types, so `Circle c; c.area()` links to `Circle::area`.
 
 ### Graph
 - **Sourcetrail-style trail:** callers left, active symbol center, callees and used symbols right.
@@ -30,7 +30,9 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 - A **per-file overview** shows when nothing is selected, and the canvas follows the light/dark theme.
 
 ### Source and navigation
-- **Code view** with syntax highlighting that jumps to and highlights the selected symbol's line, and stays smooth on large files.
+- **Clickable source:** every name the indexer resolved is underlined in the code view. Click it to explore that symbol, or hover it to see what it is.
+- **Every location, one click apart:** the code panel lists every place the selected symbol is declared or used (**◀ 3 / 11 ▶**) and names the function each use is in (*call in `DBImpl::Write`*). Click that name to explore it.
+- **Code view** with syntax highlighting that highlights the selected symbol everywhere it appears in the file, and stays smooth on large files.
 - **Searchable symbol list** with case-insensitive substring filtering, which stays fast with thousands of symbols.
 
 <table>
@@ -72,7 +74,8 @@ slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME]
 
 | Action | How |
 |---|---|
-| Explore a symbol | Click it in the graph or in the symbol list |
+| Explore a symbol | Click it in the graph, the symbol list, or the source |
+| Step through a symbol's locations | **◀ / ▶** above the code |
 | Go back | **◀ Back** |
 | See all files | **Overview** |
 | Zoom | Scroll or pinch over the graph, or the **− / +** buttons |
@@ -98,7 +101,8 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/graph/trail.rs` | Three-column, Sourcetrail-style layout around the active symbol |
 | `src/graph/overview.rs` | Per-file overview grid |
 | `src/graph/render.rs` | Pills, class boxes, bezier wires, legend, theming |
-| `src/code_view.rs` | Virtualized, highlighted source view |
+| `src/code_view/` | Virtualized source view with clickable, highlighted names |
+| `src/app/code_panel.rs` | Location stepping (◀ i / N ▶) for the selected symbol |
 
 ## Limitations
 

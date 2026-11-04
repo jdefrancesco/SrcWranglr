@@ -5,16 +5,18 @@
 //! which uses scope chains, base classes, and local variable types as
 //! heuristics, so overloads collapse into a single symbol.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use tree_sitter::{Node, Parser};
 
 use super::syntax::{
     clean_name, declarator_name, declared_name, field_children, find_function_declarator,
-    is_class_like, is_function_pointer, join, line_of, named_children, segments, text, type_name,
+    is_class_like, is_function_pointer, join, line_of, name_span, named_children, segments, text,
+    type_name,
 };
 
-use crate::model::{EdgeKind, SymbolKind};
+use crate::model::{EdgeKind, Span, SymbolKind};
 
 /// Guards recursion through nested namespaces/classes on pathological input.
 const MAX_DECL_DEPTH: usize = 256;
@@ -29,6 +31,8 @@ pub struct Decl {
     pub line: u32,
     /// `true` for definitions (bodies), `false` for prototypes/declarations.
     pub is_definition: bool,
+    /// Where the declared name itself is written.
+    pub name_span: Option<Span>,
 }
 
 /// How a reference target may be resolved.
@@ -43,11 +47,14 @@ pub enum Lookup {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Reference {
     /// Qualified name of the referencing symbol.
-    pub from: String,
+    /// Shared between all references made from the same symbol.
+    pub from: Arc<str>,
     /// Target name as written, possibly qualified (`a::b`).
     pub target: String,
     pub kind: EdgeKind,
     pub lookup: Lookup,
+    /// Where the target's name is written (`None` if it spans lines).
+    pub span: Option<Span>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -76,7 +83,7 @@ impl Extractor {
         let mut walker = Walker {
             src: source,
             facts: FileFacts::default(),
-            seen_refs: HashSet::new(),
+            last_from: None,
         };
         walker.visit_children(tree.root_node(), &[], false, 0);
         Some(walker.facts)
@@ -90,22 +97,36 @@ impl Extractor {
 struct Walker<'s> {
     src: &'s str,
     facts: FileFacts,
-    seen_refs: HashSet<Reference>,
+    /// The most recent referencing symbol's name, reused for its references.
+    last_from: Option<Arc<str>>,
 }
 
 impl Walker<'_> {
-    fn add_ref(&mut self, from: &str, target: String, kind: EdgeKind, lookup: Lookup) {
+    /// Records a reference written at `at` (a name node). Every occurrence
+    /// is kept: each one is a clickable location in the code view.
+    fn add_ref(&mut self, from: &str, target: String, kind: EdgeKind, lookup: Lookup, at: Node) {
         if target.is_empty() || from.is_empty() {
             return;
         }
-        let reference = Reference {
-            from: from.to_string(),
+        let from = self.shared_from(from);
+        self.facts.refs.push(Reference {
+            from,
             target,
             kind,
             lookup,
-        };
-        if self.seen_refs.insert(reference.clone()) {
-            self.facts.refs.push(reference);
+            span: name_span(at),
+        });
+    }
+
+    /// `from` as a shared string, allocating only when it changes.
+    fn shared_from(&mut self, from: &str) -> Arc<str> {
+        match &self.last_from {
+            Some(last) if **last == *from => Arc::clone(last),
+            _ => {
+                let shared: Arc<str> = Arc::from(from);
+                self.last_from = Some(Arc::clone(&shared));
+                shared
+            }
         }
     }
 
@@ -143,9 +164,8 @@ impl Walker<'_> {
         let Some(body) = node.child_by_field_name("body") else {
             return;
         };
-        let name = node
-            .child_by_field_name("name")
-            .map(|n| clean_name(text(n, self.src)));
+        let name_node = node.child_by_field_name("name");
+        let name = name_node.map(|n| clean_name(text(n, self.src)));
         let Some(name) = name.filter(|n| !n.is_empty()) else {
             // Anonymous namespace: members belong to the enclosing scope.
             return self.visit_children(body, scope, false, depth);
@@ -156,6 +176,7 @@ impl Walker<'_> {
             kind: SymbolKind::Namespace,
             line: line_of(node),
             is_definition: true,
+            name_span: name_node.and_then(name_span),
         });
         self.visit_children(body, &inner, false, depth);
     }
@@ -164,7 +185,7 @@ impl Walker<'_> {
         &mut self,
         node: Node,
         scope: &[String],
-        typedef_name: Option<String>,
+        typedef_name: Option<(String, Node)>,
         depth: usize,
     ) {
         let Some(body) = node.child_by_field_name("body") else {
@@ -172,9 +193,9 @@ impl Walker<'_> {
         };
         let name = node
             .child_by_field_name("name")
-            .and_then(|n| type_name(n, self.src))
+            .and_then(|n| Some((type_name(n, self.src)?, n)))
             .or(typedef_name);
-        let Some(name) = name else {
+        let Some((name, name_node)) = name else {
             // Anonymous struct/union: members belong to the enclosing scope.
             return self.visit_children(body, scope, true, depth);
         };
@@ -190,6 +211,7 @@ impl Walker<'_> {
             kind,
             line: line_of(node),
             is_definition: true,
+            name_span: name_span(name_node),
         });
 
         let bases = named_children(node)
@@ -202,6 +224,7 @@ impl Walker<'_> {
                     base_name,
                     EdgeKind::Inherits,
                     Lookup::ScopedOrUnique,
+                    base,
                 );
             }
         }
@@ -217,7 +240,7 @@ impl Walker<'_> {
         };
         let alias = field_children(node, "declarator")
             .into_iter()
-            .find_map(|d| declarator_name(d).map(|n| clean_name(text(n, self.src))));
+            .find_map(|d| declarator_name(d).map(|n| (clean_name(text(n, self.src)), n)));
         let typedef_name = if ty.child_by_field_name("name").is_none() {
             alias
         } else {
@@ -238,7 +261,7 @@ impl Walker<'_> {
             if let Some(func) =
                 find_function_declarator(declarator).filter(|f| !is_function_pointer(*f))
             {
-                if let Some(name) = self.function_name(func) {
+                if let Some((name, name_node)) = self.function_name(func) {
                     let kind = if in_class {
                         SymbolKind::Method
                     } else {
@@ -250,31 +273,36 @@ impl Walker<'_> {
                         kind,
                         line: line_of(node),
                         is_definition: false,
+                        name_span: name_span(name_node),
                     });
                 }
             } else if in_class {
-                let Some(name) = declarator_name(declarator).map(|n| declared_name(n, self.src))
-                else {
+                let Some(name_node) = declarator_name(declarator) else {
                     continue;
                 };
+                let name = declared_name(name_node, self.src);
                 self.facts.decls.push(Decl {
                     qualified_name: join(scope, &name),
                     kind: SymbolKind::Field,
                     line: line_of(declarator),
                     is_definition: true,
+                    name_span: name_span(name_node),
                 });
-                if let Some(type_ref) = ty.and_then(|t| type_name(t, self.src)) {
-                    self.add_ref(owner, type_ref, EdgeKind::Uses, Lookup::ScopedOrUnique);
+                let type_ref = ty.and_then(|t| Some((type_name(t, self.src)?, t)));
+                if let Some((type_ref, at)) = type_ref {
+                    self.add_ref(owner, type_ref, EdgeKind::Uses, Lookup::ScopedOrUnique, at);
                 }
             }
         }
     }
 
-    fn function_name(&self, func_declarator: Node) -> Option<String> {
+    /// The declared function name and the node it is written in.
+    fn function_name<'t>(&self, func_declarator: Node<'t>) -> Option<(String, Node<'t>)> {
         let name_node = func_declarator
             .child_by_field_name("declarator")
             .and_then(declarator_name)?;
-        Some(declared_name(name_node, self.src)).filter(|n| !n.is_empty())
+        let name = declared_name(name_node, self.src);
+        (!name.is_empty()).then_some((name, name_node))
     }
 
     fn visit_function(&mut self, node: Node, scope: &[String], in_class: bool) {
@@ -284,7 +312,7 @@ impl Walker<'_> {
         else {
             return;
         };
-        let Some(name) = self.function_name(func) else {
+        let Some((name, name_node)) = self.function_name(func) else {
             return;
         };
         let qualified = join(scope, &name);
@@ -298,6 +326,7 @@ impl Walker<'_> {
             kind,
             line: line_of(node),
             is_definition: true,
+            name_span: name_span(name_node),
         });
 
         let initializers = named_children(node)
@@ -335,8 +364,8 @@ impl BodyScanner<'_, '_> {
         self.walker.src
     }
 
-    fn add(&mut self, target: String, kind: EdgeKind, lookup: Lookup) {
-        self.walker.add_ref(self.from, target, kind, lookup);
+    fn add(&mut self, target: String, kind: EdgeKind, lookup: Lookup, at: Node) {
+        self.walker.add_ref(self.from, target, kind, lookup, at);
     }
 
     /// Iterative pre-order walk; deep expression trees can't overflow the stack.
@@ -372,6 +401,7 @@ impl BodyScanner<'_, '_> {
                         clean_name(text(field, self.src())),
                         EdgeKind::Uses,
                         Lookup::Scoped,
+                        field,
                     );
                 }
                 named_children(node)
@@ -382,13 +412,13 @@ impl BodyScanner<'_, '_> {
             "identifier" => {
                 let name = text(node, self.src()).to_string();
                 if !self.locals.contains_key(&name) {
-                    self.add(name, EdgeKind::Uses, Lookup::Scoped);
+                    self.add(name, EdgeKind::Uses, Lookup::Scoped, node);
                 }
                 Vec::new()
             }
             "type_identifier" | "qualified_identifier" | "template_type" => {
                 if let Some(name) = type_name(node, self.src()) {
-                    self.add(name, EdgeKind::Uses, Lookup::ScopedOrUnique);
+                    self.add(name, EdgeKind::Uses, Lookup::ScopedOrUnique, node);
                 }
                 Vec::new()
             }
@@ -420,11 +450,10 @@ impl BodyScanner<'_, '_> {
                     "template_function" => function.child_by_field_name("name"),
                     _ => Some(function),
                 };
-                let name = name_node
-                    .map(|n| clean_name(text(n, self.src())))
-                    .unwrap_or_default();
+                let name_node = name_node.unwrap_or(function);
+                let name = clean_name(text(name_node, self.src()));
                 if !self.locals.contains_key(&name) {
-                    self.add(name, EdgeKind::Calls, Lookup::ScopedOrUnique);
+                    self.add(name, EdgeKind::Calls, Lookup::ScopedOrUnique, name_node);
                 }
             }
             "field_expression" => {
@@ -447,16 +476,16 @@ impl BodyScanner<'_, '_> {
         let receiver_text = receiver.map(|r| text(r, self.src())).unwrap_or("");
 
         if receiver_text == "this" {
-            return self.add(member, kind, Lookup::Scoped);
+            return self.add(member, kind, Lookup::Scoped, field);
         }
         let receiver_type = receiver
             .filter(|r| r.kind() == "identifier")
             .and_then(|_| self.locals.get(receiver_text).cloned().flatten());
         match (receiver_type, kind) {
-            (Some(ty), _) => self.add(format!("{ty}::{member}"), kind, Lookup::Scoped),
+            (Some(ty), _) => self.add(format!("{ty}::{member}"), kind, Lookup::Scoped, field),
             // Unknown receiver: a call may still be linkable by unique name;
             // a plain field access is too ambiguous to guess.
-            (None, EdgeKind::Calls) => self.add(member, kind, Lookup::ScopedOrUnique),
+            (None, EdgeKind::Calls) => self.add(member, kind, Lookup::ScopedOrUnique, field),
             (None, _) => {}
         }
     }
@@ -485,7 +514,7 @@ mod tests {
         facts
             .refs
             .iter()
-            .any(|r| r.from == from && r.target == target && r.kind == kind)
+            .any(|r| &*r.from == from && r.target == target && r.kind == kind)
     }
 
     const CIRCLE: &str = "class Circle : public Shape {\n\
@@ -650,10 +679,51 @@ mod tests {
         assert_eq!(decl(&facts, "S::cb").kind, SymbolKind::Field);
     }
 
+    fn spans_of(facts: &FileFacts, target: &str) -> Vec<(u32, u32, u32)> {
+        facts
+            .refs
+            .iter()
+            .filter(|r| r.target == target)
+            .filter_map(|r| r.span)
+            .map(|s| (s.line, s.start, s.end))
+            .collect()
+    }
+
+    fn name_span(facts: &FileFacts, qualified: &str) -> (u32, u32, u32) {
+        let span = decl(facts, qualified).name_span.expect("name span");
+        (span.line, span.start, span.end)
+    }
+
     #[test]
-    fn references_are_deduplicated() {
-        let facts = extract("void f() { g(); g(); g(); }\n");
-        assert_eq!(facts.refs.iter().filter(|r| r.target == "g").count(), 1);
+    fn repeated_calls_are_separate_occurrences() {
+        let facts = extract("void f() {\n  g();\n  g();\n}\n");
+        assert_eq!(spans_of(&facts, "g"), [(2, 2, 3), (3, 2, 3)]);
+    }
+
+    #[test]
+    fn records_spans_of_member_calls_types_and_qualified_names() {
+        let facts = extract("void f(Box b) {\n  b.open();\n  geo::helper();\n}\n");
+        assert_eq!(spans_of(&facts, "Box::open"), [(2, 4, 8)]);
+        assert_eq!(spans_of(&facts, "geo::helper"), [(3, 7, 13)]);
+        assert_eq!(spans_of(&facts, "Box"), [(1, 7, 10)]);
+    }
+
+    #[test]
+    fn records_spans_of_bases_fields_and_initializers() {
+        let facts = extract(CIRCLE);
+        assert_eq!(spans_of(&facts, "Shape"), [(1, 22, 27)]);
+        assert_eq!(spans_of(&facts, "Point"), [(9, 0, 5)]);
+        let radius = spans_of(&facts, "radius");
+        assert!(radius.contains(&(3, 28, 34)), "{radius:?}");
+    }
+
+    #[test]
+    fn records_declaration_name_spans() {
+        let facts =
+            extract("class Circle {\n  int radius;\n};\nint Circle::area() { return 0; }\n");
+        assert_eq!(name_span(&facts, "Circle"), (1, 6, 12));
+        assert_eq!(name_span(&facts, "Circle::radius"), (2, 6, 12));
+        assert_eq!(name_span(&facts, "Circle::area"), (4, 12, 16));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use tree_sitter::Node;
 
 use super::extract::MAX_DECLARATOR_DEPTH;
+use crate::model::Span;
 
 pub(super) fn text<'s>(node: Node, src: &'s str) -> &'s str {
     src.get(node.byte_range()).unwrap_or("")
@@ -74,6 +75,41 @@ pub(super) fn join(scope: &[String], name: &str) -> String {
 
 pub(super) fn line_of(node: Node) -> u32 {
     u32::try_from(node.start_position().row + 1).unwrap_or(u32::MAX)
+}
+
+/// Where `node` sits, or `None` if it spans several lines.
+pub(super) fn span_of(node: Node) -> Option<Span> {
+    let (start, end) = (node.start_position(), node.end_position());
+    if start.row != end.row {
+        return None;
+    }
+    Some(Span {
+        line: u32::try_from(start.row + 1).ok()?,
+        start: u32::try_from(start.column).ok()?,
+        end: u32::try_from(end.column).ok()?,
+    })
+}
+
+/// The last name inside a qualified or templated name: `a::Box<T>::run` → `run`.
+/// That is the part made clickable in the code view.
+pub(super) fn name_leaf(node: Node) -> Node {
+    let mut current = node;
+    for _ in 0..MAX_DECLARATOR_DEPTH {
+        let is_wrapper = matches!(
+            current.kind(),
+            "qualified_identifier" | "template_function" | "template_type" | "template_method"
+        );
+        match current.child_by_field_name("name").filter(|_| is_wrapper) {
+            Some(name) => current = name,
+            None => break,
+        }
+    }
+    current
+}
+
+/// Span of the clickable part of a name node.
+pub(super) fn name_span(node: Node) -> Option<Span> {
+    span_of(name_leaf(node))
 }
 
 pub(super) fn named_children(node: Node) -> Vec<Node> {

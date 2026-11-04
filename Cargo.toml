@@ -16,4 +16,5 @@ tree-sitter-cpp = "0.23"
 opt-level = 2
 
 [dev-dependencies]
+egui_kittest = "0.37"
 tempfile = "3"

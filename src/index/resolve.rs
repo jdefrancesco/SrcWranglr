@@ -10,7 +10,16 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use super::extract::{Decl, FileFacts, Lookup, Reference};
-use crate::model::{CodeGraph, Edge, EdgeKind, Symbol, SymbolId, SymbolKind};
+use crate::model::{
+    CodeGraph, Edge, EdgeKind, Occurrence, OccurrenceRole, Symbol, SymbolId, SymbolKind,
+};
+
+/// A reference whose source and target symbols are both known.
+struct Resolved<'f> {
+    reference: &'f Reference,
+    from: SymbolId,
+    to: SymbolId,
+}
 
 /// One parsed file, ready for resolution.
 pub struct SourceFile {
@@ -30,7 +39,11 @@ pub fn build_graph(files: Vec<SourceFile>) -> CodeGraph {
 
     let refs: Vec<&Reference> = files.iter().flat_map(|f| &f.facts.refs).collect();
     let bases = resolve_bases(&refs, &symbols, &by_qname);
-    let resolver = Resolver::new(&symbols, &by_qname, &bases);
+    let mut resolver = MemoResolver::new(Resolver::new(&symbols, &by_qname, &bases));
+    let resolved: Vec<Vec<Resolved>> = files
+        .iter()
+        .map(|f| resolve_file(&f.facts, &by_qname, &mut resolver))
+        .collect();
 
     let containment = symbols.values().filter_map(|s| {
         let parent = by_qname.get(parent_of(&s.qualified_name)?)?;
@@ -40,23 +53,78 @@ pub fn build_graph(files: Vec<SourceFile>) -> CodeGraph {
             kind: EdgeKind::Contains,
         })
     });
-    let references = refs.iter().filter_map(|r| {
-        let from = *by_qname.get(r.from.as_str())?;
-        let to = resolver.resolve(r)?;
-        Some(Edge {
-            from,
-            to,
-            kind: r.kind,
-        })
+    let references = resolved.iter().flatten().map(|r| Edge {
+        from: r.from,
+        to: r.to,
+        kind: r.reference.kind,
     });
     let edges = dedupe_edges(containment.chain(references), &symbols);
+    let occurrences = files
+        .iter()
+        .zip(&resolved)
+        .filter_map(|(file, refs)| {
+            let list = file_occurrences(&file.facts, refs, &by_qname);
+            (!list.is_empty()).then(|| (file.path.clone(), list))
+        })
+        .collect();
 
     let file_contents = files.into_iter().map(|f| (f.path, f.contents)).collect();
     CodeGraph {
         symbols,
         edges,
         file_contents,
+        occurrences,
     }
+}
+
+fn resolve_file<'f>(
+    facts: &'f FileFacts,
+    by_qname: &HashMap<&str, SymbolId>,
+    resolver: &mut MemoResolver<'_, 'f>,
+) -> Vec<Resolved<'f>> {
+    facts
+        .refs
+        .iter()
+        .filter_map(|reference| {
+            let from = *by_qname.get(&*reference.from)?;
+            let to = resolver.resolve(reference)?;
+            Some(Resolved {
+                reference,
+                from,
+                to,
+            })
+        })
+        .collect()
+}
+
+/// Declared names and resolved references in one file, sorted by position.
+/// Unlike edges, self-references (recursion) and uses of an enclosing class
+/// are kept: they are still clickable names in the source.
+fn file_occurrences(
+    facts: &FileFacts,
+    refs: &[Resolved],
+    by_qname: &HashMap<&str, SymbolId>,
+) -> Vec<Occurrence> {
+    let declarations = facts.decls.iter().filter_map(|d| {
+        Some(Occurrence {
+            span: d.name_span?,
+            symbol: *by_qname.get(d.qualified_name.as_str())?,
+            role: OccurrenceRole::Declaration,
+            context: None,
+        })
+    });
+    let references = refs.iter().filter_map(|r| {
+        Some(Occurrence {
+            span: r.reference.span?,
+            symbol: r.to,
+            role: OccurrenceRole::Reference(r.reference.kind),
+            context: Some(r.from),
+        })
+    });
+    let mut list: Vec<Occurrence> = declarations.chain(references).collect();
+    list.sort_by_key(|o| (o.span, o.symbol));
+    list.dedup_by_key(|o| (o.span, o.symbol));
+    list
 }
 
 fn parent_of(qualified: &str) -> Option<&str> {
@@ -129,7 +197,7 @@ fn resolve_bases(
     let resolver = Resolver::new(symbols, by_qname, &no_bases);
     let mut bases: HashMap<SymbolId, Vec<SymbolId>> = HashMap::new();
     for r in refs.iter().filter(|r| r.kind == EdgeKind::Inherits) {
-        let (Some(from), Some(base)) = (by_qname.get(r.from.as_str()), resolver.resolve(r)) else {
+        let (Some(from), Some(base)) = (by_qname.get(&*r.from), resolver.resolve(r)) else {
             continue;
         };
         if *from != base {
@@ -159,6 +227,30 @@ fn dedupe_edges(
         .filter(|e| e.kind == EdgeKind::Contains || !is_ancestor(e.to, e.from))
         .filter(|e| seen.insert((e.from, e.to, e.kind)))
         .collect()
+}
+
+/// Caches lookups: the same name is usually referenced many times from the
+/// same symbol, and resolution only depends on `(from, target, lookup)`.
+struct MemoResolver<'a, 'f> {
+    resolver: Resolver<'a>,
+    cache: HashMap<(&'f str, &'f str, Lookup), Option<SymbolId>>,
+}
+
+impl<'a, 'f> MemoResolver<'a, 'f> {
+    fn new(resolver: Resolver<'a>) -> Self {
+        Self {
+            resolver,
+            cache: HashMap::new(),
+        }
+    }
+
+    fn resolve(&mut self, r: &'f Reference) -> Option<SymbolId> {
+        let key = (&*r.from, r.target.as_str(), r.lookup);
+        *self
+            .cache
+            .entry(key)
+            .or_insert_with(|| self.resolver.resolve(r))
+    }
 }
 
 struct Resolver<'a> {
@@ -495,9 +587,95 @@ mod tests {
         assert_eq!(a.edges.len(), b.edges.len());
     }
 
+    fn occurrence_at(graph: &CodeGraph, file: &str, line: u32, column: u32) -> Option<Occurrence> {
+        graph
+            .occurrences_on_line(file, line)
+            .iter()
+            .find(|o| o.span.contains_column(column))
+            .copied()
+    }
+
+    #[test]
+    fn records_every_call_site_as_an_occurrence() {
+        let graph = graph_of(SHAPES);
+        // "int main() { Circle c; return total(c); }" — `total` at column 30.
+        let call = occurrence_at(&graph, "main.cpp", 2, 31).expect("call to total");
+        assert_eq!(call.symbol, id(&graph, "total"));
+        assert_eq!(call.role, OccurrenceRole::Reference(EdgeKind::Calls));
+        assert_eq!(call.context, Some(id(&graph, "main")));
+    }
+
+    #[test]
+    fn records_declarations_in_every_file_for_the_merged_symbol() {
+        let graph = graph_of(&[
+            ("sq.h", "class Square {\n  int area2() const;\n};\n"),
+            ("sq.cpp", "int Square::area2() const { return 1; }\n"),
+        ]);
+        let area2 = id(&graph, "Square::area2");
+        let files: Vec<String> = graph
+            .locations_of(area2)
+            .into_iter()
+            .filter(|l| l.occurrence.role == OccurrenceRole::Declaration)
+            .map(|l| l.file)
+            .collect();
+        assert_eq!(files, ["sq.cpp", "sq.h"]);
+    }
+
+    #[test]
+    fn keeps_recursive_calls_as_occurrences_but_not_edges() {
+        let graph = graph_of(&[("a.cpp", "int fact(int n) { return fact(n - 1); }\n")]);
+        let fact = id(&graph, "fact");
+        let recursive = occurrence_at(&graph, "a.cpp", 1, 26).expect("recursive call");
+        assert_eq!((recursive.symbol, recursive.context), (fact, Some(fact)));
+        assert!(!graph.edges.iter().any(|e| e.from == fact && e.to == fact));
+    }
+
+    #[test]
+    fn unresolved_names_have_no_occurrence() {
+        let graph = graph_of(&[("a.cpp", "void f() { unknown(); }\n")]);
+        assert!(occurrence_at(&graph, "a.cpp", 1, 12).is_none());
+    }
+
+    /// Every occurrence's span, cut out of its source line, is the symbol's name.
+    fn assert_spans_match_names(graph: &CodeGraph) {
+        let mut checked = 0;
+        for (file, occurrences) in &graph.occurrences {
+            let lines: Vec<&str> = graph.file_contents[file].split('\n').collect();
+            for o in occurrences {
+                let line = lines[o.span.line as usize - 1].trim_end_matches('\r');
+                let text = line.get(o.span.start as usize..o.span.end as usize);
+                assert_eq!(
+                    text,
+                    Some(graph.symbols[&o.symbol].name.as_str()),
+                    "{file}:{o:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+    }
+
+    #[test]
+    fn spans_are_byte_columns_on_non_ascii_tabbed_crlf_lines() {
+        let graph = graph_of(&[(
+            "u.cpp",
+            "// naïve → café\r\nint helper() { return 1; }\r\n\
+             \tint f() { const char* s = \"ünï → \"; return helper() + helper(); }\r\n",
+        )]);
+        assert_spans_match_names(&graph);
+        let call = occurrence_at(&graph, "u.cpp", 3, 50).expect("call after non-ASCII");
+        assert_eq!(call.symbol, id(&graph, "helper"));
+    }
+
+    #[test]
+    fn demo_spans_match_symbol_names() {
+        assert_spans_match_names(&crate::demo::demo_codebase().expect("demo"));
+    }
+
     #[test]
     fn empty_input_gives_empty_graph() {
         let graph = build_graph(Vec::new());
         assert!(graph.symbols.is_empty() && graph.edges.is_empty());
+        assert!(graph.occurrences.is_empty());
     }
 }

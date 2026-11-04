@@ -272,11 +272,12 @@ mod tests {
         let outcome = run(Path::new(&root), IndexOptions::default()).expect("index");
         let graph = &outcome.graph;
         println!(
-            "indexed {} files in {:?}: {} symbols, {} edges, {} warnings",
+            "indexed {} files in {:?}: {} symbols, {} edges, {} occurrences, {} warnings",
             outcome.indexed_files,
             start.elapsed(),
             graph.symbols.len(),
             graph.edges.len(),
+            graph.occurrences.values().map(Vec::len).sum::<usize>(),
             outcome.warnings.len()
         );
         let mut by_kind: std::collections::BTreeMap<&str, usize> = Default::default();
