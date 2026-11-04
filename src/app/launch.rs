@@ -1,9 +1,12 @@
-//! Command-line options: `slurcetrail [PROJECT_DIR] [--symbol NAME]`.
+//! Command-line options: `slurcetrail [PROJECT_DIR] [--symbol NAME] [--view trail|calls]`.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub const USAGE: &str = "usage: slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME]";
+use crate::graph::ViewMode;
+
+pub const USAGE: &str =
+    "usage: slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls]";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
@@ -11,6 +14,8 @@ pub struct LaunchOptions {
     pub project: Option<PathBuf>,
     /// Symbol to focus once the project (or the demo) is loaded.
     pub symbol: Option<String>,
+    /// Graph view to start in.
+    pub view: ViewMode,
 }
 
 /// Parses arguments (without the program name).
@@ -25,6 +30,13 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<LaunchOpti
                     .into_string()
                     .map_err(|_| "--symbol name must be valid UTF-8")?;
                 options.symbol = Some(name);
+            }
+            Some("--view") => {
+                options.view = match args.next().as_ref().and_then(|v| v.to_str()) {
+                    Some("trail") => ViewMode::Trail,
+                    Some("calls") => ViewMode::CallHierarchy,
+                    _ => return Err("--view needs `trail` or `calls`".into()),
+                };
             }
             Some("-h" | "--help") => return Err(USAGE.into()),
             Some(flag) if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
@@ -53,6 +65,7 @@ mod tests {
         let expected = LaunchOptions {
             project: Some(PathBuf::from("/p")),
             symbol: Some("ns::Foo".into()),
+            view: ViewMode::Trail,
         };
         assert_eq!(parse(&["/p", "--symbol", "ns::Foo"]), Ok(expected.clone()));
         assert_eq!(parse(&["--symbol", "ns::Foo", "/p"]), Ok(expected));
@@ -64,5 +77,19 @@ mod tests {
         assert!(parse(&["--bogus"]).is_err());
         assert!(parse(&["/a", "/b"]).is_err());
         assert!(parse(&["--help"]).is_err());
+        assert!(parse(&["--view"]).is_err());
+        assert!(parse(&["--view", "sideways"]).is_err());
+    }
+
+    #[test]
+    fn parses_view_mode() {
+        assert_eq!(
+            parse(&["--view", "calls"]).map(|o| o.view),
+            Ok(ViewMode::CallHierarchy)
+        );
+        assert_eq!(
+            parse(&["--view", "trail"]).map(|o| o.view),
+            Ok(ViewMode::Trail)
+        );
     }
 }

@@ -7,7 +7,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Vec
 
 use super::camera::Camera;
 use super::scene::{
-    Group, Pill, Scene, TextRole, GROUP_FOOTER_HEIGHT, GROUP_PADDING, PILL_PADDING_X,
+    Group, Pill, Scene, TextRole, Wire, GROUP_FOOTER_HEIGHT, GROUP_PADDING, PILL_PADDING_X,
 };
 use crate::model::{EdgeKind, SymbolId, SymbolKind};
 
@@ -244,7 +244,9 @@ fn paint_pill(painter: &Painter, frame: &Frame, pill: &Pill) {
 
 fn paint_wires(painter: &Painter, frame: &Frame) {
     let scene = frame.scene;
-    for wire in &scene.wires {
+    let touches_hovered = |w: &&Wire| frame.hovered.is_some_and(|h| h == w.from || h == w.to);
+    let secondary = scene.secondary_wires.iter().filter(touches_hovered);
+    for wire in scene.wires.iter().chain(secondary) {
         let (Some(from), Some(to)) = (scene.anchor(wire.from), scene.anchor(wire.to)) else {
             continue;
         };

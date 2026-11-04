@@ -68,6 +68,8 @@ pub struct Scene {
     pub wires: Vec<Wire>,
     /// Related symbols left out because of the neighbor cap.
     pub hidden_neighbors: usize,
+    /// Wires drawn only while one of their ends is hovered.
+    pub secondary_wires: Vec<Wire>,
 }
 
 impl Scene {
@@ -160,7 +162,7 @@ pub fn block_size(block: &Block, measure: Measure) -> Vec2 {
     }
 }
 
-fn pill_width(label: &str, measure: Measure) -> f32 {
+pub fn pill_width(label: &str, measure: Measure) -> f32 {
     (measure(label, TextRole::Pill) + 2.0 * PILL_PADDING_X).max(MIN_PILL_WIDTH)
 }
 

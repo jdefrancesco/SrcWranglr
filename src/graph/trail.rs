@@ -66,6 +66,7 @@ pub fn build_trail(graph: &CodeGraph, active: SymbolId, measure: Measure) -> Sce
         pills,
         wires,
         hidden_neighbors,
+        ..Scene::default()
     }
 }
 

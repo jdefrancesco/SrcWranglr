@@ -13,6 +13,8 @@ pub struct Project {
     pub graph: CodeGraph,
     /// All symbol ids sorted by qualified name (computed once, not per frame).
     sorted_ids: Vec<SymbolId>,
+    /// `(id, qualified name)` in name order, for quick-open search.
+    search_names: Vec<(SymbolId, String)>,
 }
 
 impl Project {
@@ -22,11 +24,16 @@ impl Project {
             let name = |id| graph.symbols.get(id).map(|s| s.qualified_name.as_str());
             name(a).cmp(&name(b)).then(a.cmp(b))
         });
+        let search_names = sorted_ids
+            .iter()
+            .filter_map(|id| Some((*id, graph.symbols.get(id)?.qualified_name.clone())))
+            .collect();
         Self {
             name: name.into(),
             root,
             graph,
             sorted_ids,
+            search_names,
         }
     }
 
@@ -52,6 +59,11 @@ impl Project {
         let mut by_name = symbols().filter(|s| s.name == name);
         let first = by_name.next()?;
         by_name.next().is_none().then_some(first.id)
+    }
+
+    /// `(id, qualified name)` for every symbol, in name order.
+    pub fn search_candidates(&self) -> &[(SymbolId, String)] {
+        &self.search_names
     }
 
     /// Ids whose qualified name contains `query` (case-insensitive), in name order.

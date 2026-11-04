@@ -78,6 +78,40 @@ impl Camera {
         }
         .centered_on(bounds.center(), viewport_size)
     }
+
+    /// Like `fit`, but never below `min_zoom`. A scene too big to read when
+    /// fitted is shown at `min_zoom` around `focus` (or from its top-left
+    /// corner), without scrolling past the scene's edges.
+    pub fn fit_readable(
+        bounds: Rect,
+        viewport_size: Vec2,
+        focus: Option<Pos2>,
+        min_zoom: f32,
+    ) -> Self {
+        let fitted = Self::fit(bounds, viewport_size);
+        if fitted.zoom >= min_zoom {
+            return fitted;
+        }
+        let half_view = viewport_size / (2.0 * min_zoom);
+        let clamp_axis = |want: f32, lo: f32, hi: f32, half: f32| {
+            let (lo, hi) = (lo + half, hi - half);
+            if lo > hi {
+                (lo + hi) / 2.0
+            } else {
+                want.clamp(lo, hi)
+            }
+        };
+        let want = focus.unwrap_or(bounds.min);
+        let center = Pos2::new(
+            clamp_axis(want.x, bounds.min.x, bounds.max.x, half_view.x),
+            clamp_axis(want.y, bounds.min.y, bounds.max.y, half_view.y),
+        );
+        Self {
+            offset: Vec2::ZERO,
+            zoom: min_zoom,
+        }
+        .centered_on(center, viewport_size)
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +122,38 @@ mod tests {
 
     fn assert_pos_eq(a: Pos2, b: Pos2) {
         assert!((a - b).length() < EPS, "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn fit_readable_fits_small_scenes_like_fit() {
+        let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 100.0));
+        let viewport = Vec2::new(400.0, 300.0);
+        assert_eq!(
+            Camera::fit_readable(bounds, viewport, None, 0.6),
+            Camera::fit(bounds, viewport)
+        );
+    }
+
+    #[test]
+    fn fit_readable_shows_big_scenes_from_the_top_left_at_readable_zoom() {
+        let bounds = Rect::from_min_size(Pos2::new(-50.0, -20.0), Vec2::new(4000.0, 3000.0));
+        let viewport = Vec2::new(400.0, 300.0);
+        let cam = Camera::fit_readable(bounds, viewport, None, 0.6);
+        assert!((cam.zoom - 0.6).abs() < EPS);
+        assert_pos_eq(cam.world_to_local(bounds.min), Pos2::ZERO);
+    }
+
+    #[test]
+    fn fit_readable_centers_on_focus_but_not_past_the_edges() {
+        let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(4000.0, 3000.0));
+        let viewport = Vec2::new(400.0, 300.0);
+        let middle = Pos2::new(2000.0, 1500.0);
+        let cam = Camera::fit_readable(bounds, viewport, Some(middle), 0.5);
+        assert_pos_eq(cam.world_to_local(middle), (viewport / 2.0).to_pos2());
+
+        let near_left = Pos2::new(10.0, 1500.0);
+        let cam = Camera::fit_readable(bounds, viewport, Some(near_left), 0.5);
+        assert!((cam.world_to_local(bounds.min).x).abs() < EPS);
     }
 
     #[test]

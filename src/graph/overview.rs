@@ -59,8 +59,8 @@ pub fn build_overview(graph: &CodeGraph, measure: Measure) -> Scene {
         active: None,
         groups,
         pills,
-        wires: Vec::new(),
         hidden_neighbors,
+        ..Scene::default()
     }
 }
 

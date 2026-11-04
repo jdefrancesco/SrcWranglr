@@ -1,6 +1,8 @@
-//! The interactive graph widget, Sourcetrail style: the canvas always shows
-//! the selected symbol's *trail* (who uses it on the left, what it uses on
-//! the right), or a per-file overview when nothing is selected.
+//! The interactive graph widget. In *trail* mode (Sourcetrail style) the
+//! canvas shows the selected symbol's trail (who uses it on the left, what
+//! it uses on the right), or a per-file overview when nothing is selected.
+//! In *call hierarchy* mode it shows who calls whom, top-down from the
+//! selected function, or from the program's entry points.
 //!
 //! Controls:
 //! - click any symbol (pill or class title) to make it the active symbol
@@ -11,6 +13,7 @@
 use egui::{Pos2, Response, Sense, Vec2};
 
 use super::camera::Camera;
+use super::hierarchy::{build_hierarchy, CallIndex};
 use super::overview::build_overview;
 use super::render::{self, font_for, Frame, Palette, LEGEND_STRIP_HEIGHT};
 use super::scene::{Scene, TextRole};
@@ -22,6 +25,9 @@ const FIT_PADDING: f32 = 40.0;
 /// Zoom change per scrolled point: `factor = exp(scroll * ZOOM_PER_SCROLL_POINT)`.
 const ZOOM_PER_SCROLL_POINT: f32 = 0.0015;
 const BUTTON_ZOOM_STEP: f32 = 1.25;
+/// Framing a new scene never zooms out further than this; bigger scenes are
+/// shown around the selection instead, to pan from. "Fit" frames everything.
+const READABLE_ZOOM: f32 = 0.5;
 /// Back-navigation depth kept.
 const MAX_HISTORY: usize = 100;
 
@@ -31,15 +37,42 @@ enum ToolbarAction {
     ZoomIn,
     ZoomOut,
     Fit,
+    Mode(ViewMode),
 }
 
+/// What the canvas lays out for the selection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ViewMode {
+    #[default]
+    Trail,
+    CallHierarchy,
+}
+
+impl ViewMode {
+    fn label(self) -> &'static str {
+        match self {
+            ViewMode::Trail => "Trail",
+            ViewMode::CallHierarchy => "Call hierarchy",
+        }
+    }
+}
+
+/// The selection and mode a scene was laid out for.
+type SceneKey = (Option<SymbolId>, ViewMode);
+
 pub struct GraphView {
-    /// Laid-out scene and the selection it was built for.
-    scene: Option<(Option<SymbolId>, Scene)>,
+    /// Laid-out scene and what it was built for.
+    scene: Option<(SceneKey, Scene)>,
+    mode: ViewMode,
     camera: Camera,
     /// Keep the scene framed (e.g. across window resizes) until the user
     /// pans or zooms manually.
     is_auto_fit: bool,
+    /// Frame the whole scene even if that makes it hard to read ("Fit").
+    is_fit_all: bool,
+    /// Call graph of the project, built on first use of the call hierarchy.
+    /// A new project gets a new `GraphView`, so this never goes stale.
+    call_index: Option<CallIndex>,
     selected: Option<SymbolId>,
     history: Vec<SymbolId>,
     hovered: Option<SymbolId>,
@@ -54,8 +87,11 @@ impl Default for GraphView {
     fn default() -> Self {
         Self {
             scene: None,
+            mode: ViewMode::default(),
             camera: Camera::default(),
             is_auto_fit: true,
+            is_fit_all: false,
+            call_index: None,
             selected: None,
             history: Vec::new(),
             hovered: None,
@@ -68,6 +104,41 @@ impl Default for GraphView {
 impl GraphView {
     pub fn selected(&self) -> Option<SymbolId> {
         self.selected
+    }
+
+    pub fn with_mode(mode: ViewMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+
+    pub fn mode(&self) -> ViewMode {
+        self.mode
+    }
+
+    pub fn set_mode(&mut self, mode: ViewMode) {
+        self.mode = mode;
+    }
+
+    /// Returns to the previous symbol, if any.
+    pub fn back(&mut self) {
+        if !self.history.is_empty() {
+            self.selected = self.history.pop();
+        }
+    }
+
+    /// Clears the selection (overview, or entry points in call hierarchy).
+    pub fn show_overview(&mut self) {
+        if let Some(previous) = self.selected.take() {
+            self.history.push(previous);
+        }
+    }
+
+    /// Frames the whole scene again, however small that makes it.
+    pub fn fit(&mut self) {
+        self.is_auto_fit = true;
+        self.is_fit_all = true;
     }
 
     /// Make `id` the active symbol, remembering the previous one for "Back".
@@ -105,8 +176,8 @@ impl GraphView {
             palette: Palette::for_visuals(ui.visuals()),
         };
         render::paint(&painter, &frame);
-        self.notice = notice(&scene, graph);
-        self.scene = Some((scene.active, scene));
+        self.notice = notice(&scene, graph, self.mode);
+        self.scene = Some(((self.selected, self.mode), scene));
 
         self.with_hover_tooltip(response, graph)
     }
@@ -115,7 +186,7 @@ impl GraphView {
     /// selection changed since it was laid out.
     fn take_scene(&mut self, ui: &egui::Ui, graph: &CodeGraph) -> Scene {
         if let Some((built_for, scene)) = self.scene.take() {
-            if built_for == self.selected {
+            if built_for == (self.selected, self.mode) {
                 return scene;
             }
         }
@@ -126,21 +197,39 @@ impl GraphView {
             galley.size().x
         };
         self.is_auto_fit = true;
+        self.is_fit_all = false;
         self.hover_connections = None;
-        match self.selected {
-            Some(id) => build_trail(graph, id, &measure),
-            None => build_overview(graph, &measure),
+        match (self.mode, self.selected) {
+            (ViewMode::CallHierarchy, focus) => {
+                let calls = self.call_index.get_or_insert_with(|| CallIndex::new(graph));
+                build_hierarchy(graph, calls, focus, &measure)
+            }
+            (ViewMode::Trail, Some(id)) => build_trail(graph, id, &measure),
+            (ViewMode::Trail, None) => build_overview(graph, &measure),
         }
     }
 
     fn show_toolbar(&mut self, ui: &mut egui::Ui) -> Option<ToolbarAction> {
         ui.horizontal(|ui| {
             let mut action = None;
+            for mode in [ViewMode::Trail, ViewMode::CallHierarchy] {
+                if ui
+                    .selectable_label(self.mode == mode, mode.label())
+                    .clicked()
+                {
+                    action = Some(ToolbarAction::Mode(mode));
+                }
+            }
+            ui.separator();
             let back = egui::Button::new("◀ Back");
             if ui.add_enabled(!self.history.is_empty(), back).clicked() {
                 action = Some(ToolbarAction::Back);
             }
-            let overview = egui::Button::new("Overview");
+            let overview_label = match self.mode {
+                ViewMode::Trail => "Overview",
+                ViewMode::CallHierarchy => "Entry points",
+            };
+            let overview = egui::Button::new(overview_label);
             if ui.add_enabled(self.selected.is_some(), overview).clicked() {
                 action = Some(ToolbarAction::Overview);
             }
@@ -169,20 +258,10 @@ impl GraphView {
     fn apply_toolbar_action(&mut self, action: Option<ToolbarAction>, canvas_size: Vec2) {
         let center = (canvas_size * 0.5).to_pos2();
         let zoom_factor = match action {
-            Some(ToolbarAction::Back) => {
-                self.selected = self.history.pop();
-                return;
-            }
-            Some(ToolbarAction::Overview) => {
-                if let Some(previous) = self.selected.take() {
-                    self.history.push(previous);
-                }
-                return;
-            }
-            Some(ToolbarAction::Fit) => {
-                self.is_auto_fit = true;
-                return;
-            }
+            Some(ToolbarAction::Back) => return self.back(),
+            Some(ToolbarAction::Overview) => return self.show_overview(),
+            Some(ToolbarAction::Fit) => return self.fit(),
+            Some(ToolbarAction::Mode(mode)) => return self.set_mode(mode),
             Some(ToolbarAction::ZoomIn) => BUTTON_ZOOM_STEP,
             Some(ToolbarAction::ZoomOut) => 1.0 / BUTTON_ZOOM_STEP,
             None => return,
@@ -202,7 +281,7 @@ impl GraphView {
             self.is_auto_fit = false;
         }
         if response.double_clicked() && self.hovered.is_none() {
-            self.is_auto_fit = true;
+            self.fit();
         } else if response.clicked() {
             if let Some(id) = self.hovered {
                 self.select(id);
@@ -215,7 +294,16 @@ impl GraphView {
             return;
         }
         if let Some(bounds) = scene.bounds() {
-            self.camera = Camera::fit(bounds.expand(FIT_PADDING), canvas_size);
+            let focus = scene
+                .active
+                .and_then(|id| scene.anchor(id))
+                .map(|r| r.center());
+            let padded = bounds.expand(FIT_PADDING);
+            self.camera = if self.is_fit_all {
+                Camera::fit(padded, canvas_size)
+            } else {
+                Camera::fit_readable(padded, canvas_size, focus, READABLE_ZOOM)
+            };
         }
     }
 
@@ -262,9 +350,12 @@ impl GraphView {
 }
 
 /// Text overlaid on the canvas when the view needs explaining.
-fn notice(scene: &Scene, graph: &CodeGraph) -> Option<String> {
+fn notice(scene: &Scene, graph: &CodeGraph, mode: ViewMode) -> Option<String> {
     if graph.symbols.is_empty() {
         return Some("No symbols — open a project with File → Open Project…".into());
+    }
+    if mode == ViewMode::CallHierarchy {
+        return hierarchy_notice(scene);
     }
     match (scene.active, scene.hidden_neighbors) {
         (Some(_), 0) => None,
@@ -273,5 +364,105 @@ fn notice(scene: &Scene, graph: &CodeGraph) -> Option<String> {
         (None, hidden) => Some(format!(
             "Click a symbol to explore · {hidden} symbols in more files not shown"
         )),
+    }
+}
+
+fn hierarchy_notice(scene: &Scene) -> Option<String> {
+    let hidden = match scene.hidden_neighbors {
+        0 => String::new(),
+        n => format!(" · {n} more not shown"),
+    };
+    match (scene.active, scene.pills.is_empty()) {
+        (Some(_), true) => Some("No calls from here — select a function or class".into()),
+        (None, true) => Some("No calls found in this project".into()),
+        (Some(_), false) => (!hidden.is_empty()).then(|| format!("Calls made from here{hidden}")),
+        (None, false) => Some(format!("Calls from the program's entry points{hidden}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Rect, Vec2};
+
+    use super::*;
+    use crate::graph::scene::Pill;
+    use crate::model::SymbolKind;
+
+    /// Two pills 4000 × 3000 apart: far too big to read when fitted.
+    fn big_scene() -> Scene {
+        let pill = |id, x, y| Pill {
+            id,
+            label: format!("f{id}"),
+            kind: SymbolKind::Function,
+            rect: Rect::from_min_size(Pos2::new(x, y), Vec2::new(80.0, 22.0)),
+        };
+        Scene {
+            pills: vec![pill(1, 0.0, 0.0), pill(2, 4000.0, 3000.0)],
+            ..Scene::default()
+        }
+    }
+
+    const CANVAS: Vec2 = Vec2::new(400.0, 300.0);
+
+    #[test]
+    fn new_scenes_open_at_a_readable_zoom_but_fit_frames_everything() {
+        let mut view = GraphView::default();
+        view.update_camera(&big_scene(), CANVAS);
+        assert!((view.camera.zoom - READABLE_ZOOM).abs() < 1e-3);
+
+        view.fit();
+        view.update_camera(&big_scene(), CANVAS);
+        assert!(view.camera.zoom < READABLE_ZOOM);
+    }
+
+    #[test]
+    fn manual_zoom_stops_auto_fit() {
+        let mut view = GraphView::default();
+        view.apply_toolbar_action(Some(ToolbarAction::ZoomIn), CANVAS);
+        let zoomed = view.camera;
+        view.update_camera(&big_scene(), CANVAS);
+        assert_eq!(view.camera, zoomed);
+    }
+
+    #[test]
+    fn back_and_overview_walk_the_history() {
+        let mut view = GraphView::default();
+        view.select(1);
+        view.select(2);
+        view.back();
+        assert_eq!(view.selected(), Some(1));
+        view.show_overview();
+        assert_eq!(view.selected(), None);
+        view.back();
+        assert_eq!(view.selected(), Some(1));
+        view.back(); // nothing left: stays put
+        assert_eq!(view.selected(), Some(1));
+    }
+
+    #[test]
+    fn mode_is_kept_by_with_mode_and_switchable() {
+        let mut view = GraphView::with_mode(ViewMode::CallHierarchy);
+        assert_eq!(view.mode(), ViewMode::CallHierarchy);
+        view.apply_toolbar_action(Some(ToolbarAction::Mode(ViewMode::Trail)), CANVAS);
+        assert_eq!(view.mode(), ViewMode::Trail);
+    }
+
+    #[test]
+    fn hierarchy_notice_explains_empty_and_truncated_views() {
+        let empty = Scene::default();
+        assert_eq!(
+            hierarchy_notice(&Scene {
+                active: Some(1),
+                ..empty.clone()
+            })
+            .as_deref(),
+            Some("No calls from here — select a function or class")
+        );
+        let truncated = Scene {
+            hidden_neighbors: 4,
+            ..big_scene()
+        };
+        let notice = hierarchy_notice(&truncated).expect("notice");
+        assert!(notice.contains("entry points") && notice.contains("4 more"));
     }
 }

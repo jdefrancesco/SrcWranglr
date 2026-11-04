@@ -29,6 +29,16 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 - Pan, zoom (scroll or pinch), and auto-fit. Large hubs are capped with a "+N more" count instead of turning into a hairball.
 - A **per-file overview** shows when nothing is selected, and the canvas follows the light/dark theme.
 
+### Call hierarchy
+- **See how control flows through the program:** switch the graph to **Call hierarchy** and it draws who-calls-whom as a tree, from the program's entry points (`main`, and other functions nothing calls) or from any function you pick.
+- **Callees are listed in the order they are called**, top to bottom, so a function reads like its body.
+- **Stays readable:** each function appears once, so tree wires never cross. Extra calls (a second caller, a call back up the tree) appear when you hover a function. Recursion is marked **↺**, and **+N** shows how many callees are left out.
+- **Click any function** to re-root the tree there; **Entry points** goes back to the overview.
+
+### Quick open
+- **⌘P / Ctrl+P:** jump to any symbol by fuzzy name (`dbimplwr` finds `DBImpl::Write`).
+- **⌘⇧P / Ctrl+Shift+P**, or type `>`: run a command (open, re-index, switch views, back, fit…).
+
 ### Source and navigation
 - **Clickable source:** every name the indexer resolved is underlined in the code view. Click it to explore that symbol, or hover it to see what it is.
 - **Every location, one click apart:** the code panel lists every place the selected symbol is declared or used (**◀ 3 / 11 ▶**) and names the function each use is in (*call in `DBImpl::Write`*). Click that name to explore it.
@@ -62,18 +72,22 @@ cargo run --release -- ~/code/myproject    # index a project on startup
 ### Command line
 
 ```
-slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME]
+slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls]
 ```
 
 | Option | Meaning |
 |---|---|
 | `PROJECT_DIR` | Folder to index on startup. |
 | `--symbol NAME` | Focus a symbol once indexing finishes, either by qualified name (`leveldb::DBImpl::Write`) or by a short name if only one symbol has it. |
+| `--view calls` | Start in the call hierarchy instead of the trail view. |
 
 ### Controls
 
 | Action | How |
 |---|---|
+| Jump to a symbol | **⌘P / Ctrl+P**, type part of its name, Enter |
+| Run a command | **⌘⇧P / Ctrl+Shift+P** (or type `>` in the palette) |
+| Switch graph view | **Trail** / **Call hierarchy** in the graph toolbar |
 | Explore a symbol | Click it in the graph, the symbol list, or the source |
 | Step through a symbol's locations | **◀ / ▶** above the code |
 | Go back | **◀ Back** |
@@ -100,6 +114,8 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/index/job.rs` | Background indexing thread with progress, cancellation, and crash containment |
 | `src/graph/trail.rs` | Three-column, Sourcetrail-style layout around the active symbol |
 | `src/graph/overview.rs` | Per-file overview grid |
+| `src/graph/hierarchy/` | Call hierarchy: call order, entry points, spanning tree, tree layout |
+| `src/app/palette/` | Quick-open palette (fuzzy search via `nucleo-matcher`) |
 | `src/graph/render.rs` | Pills, class boxes, bezier wires, legend, theming |
 | `src/code_view/` | Virtualized source view with clickable, highlighted names |
 | `src/app/code_panel.rs` | Location stepping (◀ i / N ▶) for the selected symbol |
@@ -133,7 +149,7 @@ SLURCETRAIL_INDEX_PATH=~/code/myproject \
 
 - Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. slurcetrail is an independent implementation and shares no code with it.
 - Screenshots show [LevelDB](https://github.com/google/leveldb) (BSD-3-Clause, © The LevelDB Authors).
-- Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), and [rfd](https://github.com/PolyMeilleur/rfd).
+- Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), [rfd](https://github.com/PolyMeilleur/rfd), and [nucleo-matcher](https://github.com/helix-editor/nucleo).
 
 ## License
 

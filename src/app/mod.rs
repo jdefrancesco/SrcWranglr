@@ -4,6 +4,7 @@
 mod code_panel;
 pub mod launch;
 mod locations;
+mod palette;
 mod project;
 
 use std::path::PathBuf;
@@ -12,11 +13,12 @@ use launch::LaunchOptions;
 
 use egui::{Color32, Key, KeyboardShortcut, Modifiers, RichText};
 
-use crate::graph::GraphView;
+use crate::graph::{GraphView, ViewMode};
 use crate::index::job::IndexJob;
 use crate::index::{IndexError, IndexOptions, IndexOutcome};
 use crate::model::SymbolId;
 use code_panel::CodePanel;
+use palette::{Command, Entry, Palette, OPEN_COMMAND_SHORTCUT, OPEN_SYMBOL_SHORTCUT};
 use project::Project;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
@@ -29,16 +31,11 @@ enum Status {
     Error(String),
 }
 
-enum MenuAction {
-    OpenProject,
-    Reindex,
-    Quit,
-}
-
 pub struct SlurcetrailApp {
     project: Project,
     graph_view: GraphView,
     code_panel: CodePanel,
+    palette: Palette,
     search_query: String,
     /// Symbol-list rows for `filtered_for`; `None` means stale.
     filtered: Vec<SymbolId>,
@@ -70,6 +67,7 @@ impl SlurcetrailApp {
             project,
             graph_view: GraphView::default(),
             code_panel: CodePanel::default(),
+            palette: Palette::default(),
             search_query: String::new(),
             filtered: Vec::new(),
             filtered_for: None,
@@ -79,6 +77,7 @@ impl SlurcetrailApp {
             is_warnings_open: false,
             pending_symbol: options.symbol,
         };
+        app.graph_view.set_mode(options.view);
         match options.project {
             Some(root) => app.start_indexing(root, ctx),
             None => app.apply_pending_symbol(),
@@ -136,8 +135,11 @@ impl SlurcetrailApp {
             outcome.graph.edges.len()
         ));
         self.project = Project::new(name.clone(), Some(root), outcome.graph);
-        self.graph_view = GraphView::default();
+        // A new project starts with a fresh selection, in the same view mode.
+        self.graph_view = GraphView::with_mode(self.graph_view.mode());
         self.code_panel = CodePanel::default();
+        // Palette results hold ids from the old project.
+        self.palette = Palette::default();
         self.filtered_for = None;
         self.warnings = outcome.warnings;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{APP_NAME} — {name}")));
@@ -169,11 +171,13 @@ impl eframe::App for SlurcetrailApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
-        if ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT)) {
+        // Global shortcuts pause while the palette is open.
+        if !self.palette.is_open() && ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT)) {
             self.open_project_dialog(&ctx);
         }
-        if let Some(action) = self.show_menu_bar(ui) {
-            self.run_menu_action(action, &ctx);
+        self.palette.handle_shortcuts(&ctx);
+        if let Some(command) = self.show_menu_bar(ui) {
+            self.run_command(command, &ctx);
         }
         self.show_status_bar(ui);
         self.show_symbol_list(ui);
@@ -182,19 +186,28 @@ impl eframe::App for SlurcetrailApp {
             self.graph_view.show(ui, &self.project.graph);
         });
         self.show_warnings_window(&ctx);
+        let picked = self.palette.show(&ctx, &self.project);
+        match picked {
+            Some(Entry::Symbol(id)) => self.graph_view.select(id),
+            Some(Entry::Command(command)) => self.run_command(command, &ctx),
+            None => {}
+        }
+        if picked.is_some() {
+            // The graph was drawn before the pick; show its effect now.
+            ctx.request_repaint();
+        }
     }
 }
 
 impl SlurcetrailApp {
-    fn show_menu_bar(&mut self, ui: &mut egui::Ui) -> Option<MenuAction> {
+    fn show_menu_bar(&mut self, ui: &mut egui::Ui) -> Option<Command> {
         egui::Panel::top("menu_bar")
             .show(ui, |ui| {
                 egui::MenuBar::new()
                     .ui(ui, |ui| {
-                        let action = ui
-                            .menu_button("File", |ui| self.file_menu(ui))
-                            .inner
-                            .flatten();
+                        let file = ui.menu_button("File", |ui| self.file_menu(ui));
+                        let go = ui.menu_button("Go", |ui| self.go_menu(ui));
+                        let action = file.inner.flatten().or(go.inner.flatten());
                         ui.separator();
                         ui.label(RichText::new(&self.project.name).strong());
                         ui.separator();
@@ -207,32 +220,62 @@ impl SlurcetrailApp {
             .inner
     }
 
-    fn file_menu(&self, ui: &mut egui::Ui) -> Option<MenuAction> {
+    fn file_menu(&self, ui: &mut egui::Ui) -> Option<Command> {
         let open = egui::Button::new("Open Project…")
             .shortcut_text(ui.ctx().format_shortcut(&OPEN_SHORTCUT));
         if ui.add(open).clicked() {
-            return Some(MenuAction::OpenProject);
+            return Some(Command::OpenProject);
         }
         let can_reindex = self.project.root.is_some() && self.job.is_none();
         if ui
             .add_enabled(can_reindex, egui::Button::new("Re-index"))
             .clicked()
         {
-            return Some(MenuAction::Reindex);
+            return Some(Command::Reindex);
         }
         ui.separator();
-        ui.button("Quit").clicked().then_some(MenuAction::Quit)
+        ui.button("Quit").clicked().then_some(Command::Quit)
     }
 
-    fn run_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
-        match action {
-            MenuAction::OpenProject => self.open_project_dialog(ctx),
-            MenuAction::Reindex => {
-                if let Some(root) = self.project.root.clone() {
-                    self.start_indexing(root, ctx);
+    /// The Go menu: opens the palette itself, returns other commands.
+    fn go_menu(&mut self, ui: &mut egui::Ui) -> Option<Command> {
+        let symbol_keys = ui.ctx().format_shortcut(&OPEN_SYMBOL_SHORTCUT);
+        let command_keys = ui.ctx().format_shortcut(&OPEN_COMMAND_SHORTCUT);
+        let go_to = egui::Button::new("Go to Symbol…").shortcut_text(symbol_keys);
+        if ui.add(go_to).clicked() {
+            self.palette.open_with(String::new());
+        }
+        let palette = egui::Button::new("Command Palette…").shortcut_text(command_keys);
+        if ui.add(palette).clicked() {
+            self.palette.open_with(palette::COMMAND_PREFIX.to_string());
+        }
+        ui.separator();
+        [
+            Command::TrailView,
+            Command::CallHierarchy,
+            Command::Overview,
+            Command::Back,
+        ]
+        .into_iter()
+        .find(|command| ui.button(command.label()).clicked())
+    }
+
+    fn run_command(&mut self, command: Command, ctx: &egui::Context) {
+        match command {
+            Command::OpenProject => self.open_project_dialog(ctx),
+            Command::Reindex => match self.project.root.clone() {
+                Some(root) => self.start_indexing(root, ctx),
+                None => {
+                    self.status =
+                        Status::Info("Nothing to re-index: open a project first (⌘O).".into())
                 }
-            }
-            MenuAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            },
+            Command::Overview => self.graph_view.show_overview(),
+            Command::Back => self.graph_view.back(),
+            Command::Fit => self.graph_view.fit(),
+            Command::TrailView => self.graph_view.set_mode(ViewMode::Trail),
+            Command::CallHierarchy => self.graph_view.set_mode(ViewMode::CallHierarchy),
+            Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }
 
