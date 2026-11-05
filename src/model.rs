@@ -129,6 +129,37 @@ pub struct FunctionMetrics {
     pub lines: u32,
     /// McCabe cyclomatic complexity: 1 plus one per branch point.
     pub complexity: u32,
+    pub signature: Signature,
+}
+
+/// Parameter types longer than this are left empty (unknown).
+pub const MAX_TYPE_CHARS: usize = 256;
+
+/// How a function definition is declared, as written in the source.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Signature {
+    /// Everything before the body, comments removed and whitespace
+    /// collapsed, e.g. `static int parse(const uint8_t *buf, size_t len)`.
+    /// Empty if it was too long to keep.
+    pub prototype: String,
+    pub params: Vec<Param>,
+    /// Declared `static`: only callable from its own file (or, for a
+    /// member function, callable without an object).
+    pub is_static: bool,
+    /// Takes `...` (or a C++ parameter pack).
+    pub is_variadic: bool,
+    /// Defined inside `template <…>`.
+    pub is_template: bool,
+}
+
+/// One parameter of a function definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    /// The type as written without the name or default value, comments
+    /// removed and whitespace collapsed: `const uint8_t *`, `size_t`.
+    pub type_text: String,
+    /// The parameter's name, if it has one.
+    pub name: Option<String>,
 }
 
 /// An occurrence together with the file it is in.

@@ -11,13 +11,14 @@ use std::sync::Arc;
 use tree_sitter::{Node, Parser};
 
 use super::complexity;
+use super::signature;
 use super::syntax::{
     clean_name, declarator_name, declared_name, field_children, find_function_declarator,
     is_class_like, is_function_pointer, join, line_of, name_span, named_children, segments,
     span_of, text, type_name,
 };
 
-use crate::model::{EdgeKind, Span, SymbolKind};
+use crate::model::{EdgeKind, Signature, Span, SymbolKind};
 
 /// Guards recursion through nested namespaces/classes on pathological input.
 const MAX_DECL_DEPTH: usize = 256;
@@ -83,6 +84,7 @@ pub struct FunctionFacts {
     pub line: u32,
     pub lines: u32,
     pub complexity: u32,
+    pub signature: Signature,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -383,6 +385,7 @@ impl Walker<'_> {
             line: line_of(node),
             lines: complexity::line_count(node),
             complexity: complexity::cyclomatic(node),
+            signature: signature::of(node, func, self.src),
         });
 
         let initializers = named_children(node)

@@ -4,6 +4,7 @@
 
 pub mod capabilities;
 pub mod dangerous;
+pub mod fuzz;
 pub mod heuristics;
 pub mod risky;
 pub mod tools;

@@ -5,6 +5,10 @@
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Tells apart the temporary files of writes made by this process.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Whether `dir` exists as a directory (not a symlink to one). Something
 /// else at that path is an error.
@@ -25,6 +29,11 @@ pub fn write_new_file(path: &Path, contents: &str) -> std::io::Result<()> {
         Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
         _ => {}
     }
+    create_file(path, contents)
+}
+
+/// Creates `path`, failing if anything (even a symlink) is there.
+fn create_file(path: &Path, contents: &str) -> std::io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -72,9 +81,29 @@ pub fn write_atomically(dir: &Path, name: &str, contents: &str) -> std::io::Resu
             "not a regular file (symlinks are not followed)",
         ));
     }
-    let temp = dir.join(format!("{name}.tmp"));
-    write_new_file(&temp, contents)?;
-    fs::rename(&temp, &path)
+    // A name of our own, so nothing already in `dir` is touched.
+    let temp = dir.join(format!(
+        ".{name}.{}-{}.tmp",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    // Fails, touching nothing, if something is already there.
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let written = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all());
+    drop(file);
+    let replaced = written.and_then(|()| fs::rename(&temp, &path));
+    if replaced.is_err() {
+        // The temp file is ours. The write's own error is the one worth
+        // reporting; if the temp can't be removed either, it is left for
+        // the user to see.
+        let _ = fs::remove_file(&temp);
+    }
+    replaced
 }
 
 #[cfg(test)]
@@ -105,6 +134,23 @@ mod tests {
             "two"
         );
         assert!(!sub.join("a.toml.tmp").exists());
+    }
+
+    #[test]
+    fn atomic_writes_leave_other_files_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.toml.tmp"), "mine").expect("write");
+        write_atomically(dir.path(), "a.toml", "x").expect("write");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.toml.tmp")).expect("read"),
+            "mine"
+        );
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("list")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a.toml", "a.toml.tmp"]);
     }
 
     #[cfg(unix)]

@@ -39,7 +39,7 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 
 ### Project triage
 
-A first look at an unfamiliar codebase. Open it with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has six tabs:
+A first look at an unfamiliar codebase. Open it with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has seven tabs:
 
 - **Overview:** size, lines of code, language mix, target platforms (from platform headers and `#if` checks), build systems, docs, license, CI, git branch, and repository links.
 - **Languages & Size:** files plus code, comment and blank lines for each language.
@@ -50,6 +50,18 @@ A first look at an unfamiliar codebase. Open it with **Triage → Project Triage
   - linked libraries, and the IPC its imports point to.
 - **IPC & Capabilities:** library calls grouped by mechanism: pipes, Unix, netlink and network sockets (told apart by `socket()`'s arguments), shared memory, message queues, signals, D-Bus, Mach/XPC, COM, RPC/ALPC and ioctl. Process creation and dynamic loading are grouped too. Click a call to jump to it.
 - **Function Complexity:** the cyclomatic complexity of every function, most complex first, with a filter. Click a function to open it.
+- **Fuzz Targets:** functions worth fuzzing, best first, each with an ease rating (easy, moderate, hard). Hover a row to see what every point is for.
+  - Worth comes from:
+    - a name that says it takes input apart (`parse`, `decode`, `inflate`, …);
+    - risky calls and tool findings inside it;
+    - high complexity;
+    - a caller that reads input (`recv`, `read`, `fread`, …).
+  - Ease favors a buffer and its length (or a string). These cost ease: values built by hand, needing an object, being `static`, and taking a file name instead of content.
+  - Code under `examples/` or `tests/` counts for less, and error and logging helpers are left out.
+  - **Harness…** drafts a libFuzzer harness (`LLVMFuzzerTestOneInput` with `FuzzedDataProvider`; AFL++ builds it too) in a window where you can edit it, copy it, or save it somewhere you choose. Nothing is written unless you pick a path.
+    - Lengths are set from their buffer's size, even in/out lengths passed by pointer, as in zlib's `uncompress`.
+    - Anything it can't work out becomes a `TODO`.
+    - Names, types and paths from the source are checked before they go into the code.
 
 ### Quick open
 
@@ -143,6 +155,8 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/index/discover.rs` | Walks the project (gitignore-aware), keeps C/C++ extensions, enforces limits |
 | `src/index/extract.rs` | tree-sitter pass: declarations and unresolved references, per file |
 | `src/index/resolve.rs` | Merges declarations across files and resolves names to typed edges |
+| `src/index/signature.rs` | Each function definition's prototype and parameters, for fuzz harnesses |
+| `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`) and libFuzzer harness drafting (`harness/`) |
 | `src/index/job.rs` | Background indexing thread with progress, cancellation, and crash containment |
 | `src/graph/trail.rs` | Three-column, Sourcetrail-style layout around the active symbol |
 | `src/graph/overview.rs` | Per-file overview grid |
@@ -161,6 +175,7 @@ SrcWranglr uses **tree-sitter, which is syntax-only**, so name resolution relies
 - Global variables, enums, and `typedef`/`using` aliases aren't indexed yet.
 - `using namespace` isn't followed, and macros aren't expanded.
 - An ambiguous name (for example, `x.size()` with an unknown `x` and several `size` methods) is left unlinked rather than guessed.
+- Fuzz harness drafts can't see through macros. For example, zlib's `#define local static` hides that a function is static, and a header that needs another one included first still does. Such a draft needs a fix before it compiles.
 
 ## Development
 
@@ -172,8 +187,12 @@ cargo fmt
 # Print the tree-sitter syntax tree of a file
 cargo run --example dump_tree -- path/to/file.cpp
 
-# Index any project headlessly and print timing and stats
+# Index any project headlessly and print timing, stats and the best fuzz targets
 SRCWRANGLR_INDEX_PATH=~/code/myproject \
+  cargo test --release index_real_project -- --ignored --nocapture
+
+# ...and also write those targets' harnesses to a folder
+SRCWRANGLR_INDEX_PATH=~/code/myproject SRCWRANGLR_HARNESS_OUT=/tmp/harnesses \
   cargo test --release index_real_project -- --ignored --nocapture
 ```
 
@@ -183,7 +202,7 @@ Namely they are **Security Code Auditing** capabilities:
 
 1. Taint flow analysis. 
 2. Semantic code indexing and searches
-3. Find functions that will make great fuzz targets. Autogenerate the fuzzing harnesses and collect a solid corpus
+3. Collect a solid corpus for fuzz targets (finding the targets and drafting their harnesses is done: see **Fuzz Targets** above)
 4. Lightweight LM agency to help make sense of a large codebase.
 
 Until v0.2.0 this project was called *slurcetrail*, a working title that sat too close to *Sourcetrail*. It is now **SrcWranglr**.

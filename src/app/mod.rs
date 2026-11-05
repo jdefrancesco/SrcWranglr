@@ -9,6 +9,7 @@ mod finding_view;
 mod findings;
 mod findings_actions;
 mod findings_panel;
+mod harness_view;
 pub mod launch;
 mod locations;
 mod menus;
@@ -19,6 +20,7 @@ mod notes_panel;
 mod palette;
 mod project;
 mod survey_code;
+mod survey_fuzz;
 mod survey_tabs;
 mod survey_view;
 mod symbol_list;
@@ -103,6 +105,8 @@ pub struct SrcWranglrApp {
     dangerous_editor: Option<dangerous_editor::DangerousEditor>,
     /// The Project Triage window.
     survey_view: SurveyView,
+    /// The drafted fuzz harness, if its window is open.
+    harness_view: Option<harness_view::HarnessView>,
     job: Option<IndexJob>,
     status: Status,
     warnings: Vec<String>,
@@ -139,6 +143,7 @@ impl SrcWranglrApp {
             finding_view: None,
             dangerous_editor: None,
             survey_view: SurveyView::default(),
+            harness_view: None,
             triage: Default::default(),
             triage_error: None,
             are_project_files_trusted: true,
@@ -225,6 +230,7 @@ impl SrcWranglrApp {
         self.tool_jobs.clear();
         self.finding_view = None;
         self.survey_view.reset();
+        self.harness_view = None;
         self.report_findings();
         let root_for_triage = root.clone();
         self.project = Project::new(name.clone(), Some(root), outcome.graph);
@@ -429,9 +435,16 @@ impl eframe::App for SrcWranglrApp {
         let survey = self
             .survey_view
             .show(&ctx, &self.project.name, &self.project.graph);
-        if let Some(SurveyAction::GoTo { symbol, file, line }) = survey {
-            self.go_to_place(symbol, &file, line);
+        match survey {
+            Some(SurveyAction::GoTo { symbol, file, line }) => {
+                self.go_to_place(symbol, &file, line);
+            }
+            Some(SurveyAction::Harness { symbol, file, line }) => {
+                self.open_harness(symbol, &file, line);
+            }
+            None => {}
         }
+        self.show_harness_view(&ctx);
         let notes = if self.palette.is_open() {
             self.note_candidates()
         } else {
@@ -487,8 +500,13 @@ impl SrcWranglrApp {
             Command::CallHierarchy => self.graph_view.set_mode(ViewMode::CallHierarchy),
             Command::Triage(tab) => {
                 let root = self.project.root.clone();
-                self.survey_view
-                    .open(tab, &self.project.graph, root.as_deref(), ctx);
+                self.survey_view.open(
+                    tab,
+                    &self.project.graph,
+                    self.findings.all(),
+                    root.as_deref(),
+                    ctx,
+                );
             }
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }

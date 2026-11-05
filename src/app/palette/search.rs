@@ -40,7 +40,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 24] = [
+    pub const ALL: [Command; 25] = [
         Command::OpenProject,
         Command::Reindex,
         Command::Overview,
@@ -64,6 +64,7 @@ impl Command {
         Command::Triage(SurveyTab::Binaries),
         Command::Triage(SurveyTab::Ipc),
         Command::Triage(SurveyTab::Complexity),
+        Command::Triage(SurveyTab::Fuzz),
         Command::Quit,
     ];
 

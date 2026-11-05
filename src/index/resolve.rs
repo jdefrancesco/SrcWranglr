@@ -104,6 +104,7 @@ fn function_metrics(
                     line: f.line,
                     lines: f.lines,
                     complexity: f.complexity,
+                    signature: f.signature.clone(),
                 })
             })
         })

@@ -1,6 +1,7 @@
 //! The Project Triage window: a first look at the project. Folder facts
 //! (languages, size, links, binaries) come from a background scan; code
-//! facts (IPC in use, function complexity) come from the index.
+//! facts (IPC in use, function complexity, fuzz targets) come from the
+//! index.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +11,10 @@ use std::sync::Arc;
 use egui::{Color32, RichText};
 
 use super::survey_code::{self, FunctionRow};
+use super::survey_fuzz;
 use crate::analysis::capabilities::{capabilities_in, CapabilityUse};
+use crate::analysis::fuzz::{fuzz_targets, FuzzTarget};
+use crate::analysis::Finding;
 use crate::model::{CodeGraph, SymbolId};
 use crate::survey::{self, format_bytes, Kind, Survey};
 
@@ -25,16 +29,18 @@ pub enum SurveyTab {
     Binaries,
     Ipc,
     Complexity,
+    Fuzz,
 }
 
 impl SurveyTab {
-    pub const ALL: [SurveyTab; 6] = [
+    pub const ALL: [SurveyTab; 7] = [
         SurveyTab::Overview,
         SurveyTab::Languages,
         SurveyTab::Links,
         SurveyTab::Binaries,
         SurveyTab::Ipc,
         SurveyTab::Complexity,
+        SurveyTab::Fuzz,
     ];
 
     pub fn label(self) -> &'static str {
@@ -45,6 +51,7 @@ impl SurveyTab {
             SurveyTab::Binaries => "Binaries & Hardening",
             SurveyTab::Ipc => "IPC & Capabilities",
             SurveyTab::Complexity => "Function Complexity",
+            SurveyTab::Fuzz => "Fuzz Targets",
         }
     }
 
@@ -57,6 +64,7 @@ impl SurveyTab {
             SurveyTab::Binaries => "Triage: Binaries & Hardening",
             SurveyTab::Ipc => "Triage: IPC & Capabilities",
             SurveyTab::Complexity => "Triage: Function Complexity",
+            SurveyTab::Fuzz => "Triage: Fuzz Targets",
         }
     }
 }
@@ -66,6 +74,12 @@ pub enum SurveyAction {
     /// Show this place in the code.
     GoTo {
         symbol: Option<SymbolId>,
+        file: String,
+        line: u32,
+    },
+    /// Draft a fuzz harness for the function defined here.
+    Harness {
+        symbol: SymbolId,
         file: String,
         line: u32,
     },
@@ -115,8 +129,11 @@ pub struct SurveyView {
     scan: Scan,
     capabilities: Vec<CapabilityUse>,
     functions: Vec<FunctionRow>,
+    fuzz_targets: Vec<FuzzTarget>,
     /// Filters the complexity list by function or file name.
     query: String,
+    /// Filters the fuzz targets the same way.
+    fuzz_query: String,
 }
 
 impl Default for SurveyView {
@@ -128,7 +145,9 @@ impl Default for SurveyView {
             scan: Scan::NoFolder,
             capabilities: Vec::new(),
             functions: Vec::new(),
+            fuzz_targets: Vec::new(),
             query: String::new(),
+            fuzz_query: String::new(),
         }
     }
 }
@@ -139,12 +158,14 @@ impl SurveyView {
         self.is_open
     }
 
-    /// Opens the window on `tab`, reading the code facts from `graph` and
-    /// scanning `root` unless it was already scanned.
+    /// Opens the window on `tab`, reading the code facts from `graph` (and
+    /// `findings`, which count toward fuzz targets) and scanning `root`
+    /// unless it was already scanned.
     pub fn open(
         &mut self,
         tab: SurveyTab,
         graph: &CodeGraph,
+        findings: &[Finding],
         root: Option<&Path>,
         ctx: &egui::Context,
     ) {
@@ -152,6 +173,7 @@ impl SurveyView {
         self.tab = tab;
         self.capabilities = capabilities_in(graph);
         self.functions = survey_code::function_rows(graph);
+        self.fuzz_targets = fuzz_targets(graph, findings);
         if self.root.as_deref() != root || matches!(self.scan, Scan::NoFolder | Scan::Failed(_)) {
             self.root = root.map(Path::to_path_buf);
             self.rescan(ctx);
@@ -195,6 +217,7 @@ impl SurveyView {
             scan: Scan::Done(Box::new(survey)),
             capabilities: capabilities_in(graph),
             functions: survey_code::function_rows(graph),
+            fuzz_targets: fuzz_targets(graph, &[]),
             ..Self::default()
         }
     }
@@ -249,6 +272,7 @@ impl SurveyView {
             SurveyTab::Complexity => {
                 survey_code::complexity_tab(ui, &self.functions, &mut self.query)
             }
+            SurveyTab::Fuzz => survey_fuzz::fuzz_tab(ui, &self.fuzz_targets, &mut self.fuzz_query),
             folder_tab => {
                 let survey = self.folder_survey(ui)?;
                 egui::ScrollArea::vertical()
@@ -309,6 +333,11 @@ impl SurveyView {
             ui,
             "Functions",
             survey_code::complexity_summary(&self.functions),
+        );
+        row(
+            ui,
+            "Fuzz targets",
+            survey_fuzz::fuzz_summary(&self.fuzz_targets),
         );
         let (ipc, other): (Vec<_>, Vec<_>) =
             self.capabilities.iter().partition(|c| c.category.is_ipc());

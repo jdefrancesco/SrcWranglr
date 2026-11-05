@@ -9,6 +9,7 @@ mod discover;
 mod extract;
 pub mod job;
 mod resolve;
+mod signature;
 mod syntax;
 
 use std::fmt;
@@ -19,6 +20,21 @@ use crate::model::CodeGraph;
 
 pub use extract::Extractor;
 pub use resolve::{build_graph, SourceFile};
+
+/// The graph of `(path, contents)` sources, for tests.
+#[cfg(test)]
+pub fn graph_of_files(sources: &[(&str, &str)]) -> CodeGraph {
+    let mut extractor = Extractor::new().expect("grammar");
+    let files = sources
+        .iter()
+        .map(|(path, contents)| SourceFile {
+            path: (*path).to_string(),
+            contents: (*contents).to_string(),
+            facts: extractor.extract(contents).expect("parse"),
+        })
+        .collect();
+    build_graph(files)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndexOptions {
@@ -263,6 +279,7 @@ mod tests {
 
     /// Manual smoke test against a real project:
     /// `SRCWRANGLR_INDEX_PATH=/path/to/project cargo test --release index_real_project -- --ignored --nocapture`
+    /// (add `SRCWRANGLR_HARNESS_OUT=/some/dir` to write the best fuzz targets' harnesses there)
     #[test]
     #[ignore = "needs SRCWRANGLR_INDEX_PATH"]
     fn index_real_project() {
@@ -304,6 +321,38 @@ mod tests {
                 .map(|f| (f.name.as_str(), f.calls.len()))
                 .collect();
             println!("capability {}: {functions:?}", found.category.label());
+        }
+        let findings = crate::analysis::risky::risky_calls(graph, &Default::default());
+        let scoring = std::time::Instant::now();
+        let targets = crate::analysis::fuzz::fuzz_targets(graph, &findings);
+        println!(
+            "{} fuzz targets in {:?}; the best:",
+            targets.len(),
+            scoring.elapsed()
+        );
+        let harness_dir = std::env::var_os("SRCWRANGLR_HARNESS_OUT").map(std::path::PathBuf::from);
+        for target in targets.iter().take(25) {
+            let definition = graph.functions.iter().find(|f| {
+                f.symbol == target.symbol && f.file == target.file && f.line == target.line
+            });
+            let drafted = definition.and_then(|f| crate::analysis::fuzz::harness::draft(graph, f));
+            if let (Some(dir), Some(harness)) = (&harness_dir, drafted) {
+                std::fs::write(dir.join(&harness.file_name), &harness.code).expect("write harness");
+            }
+            let reasons: Vec<String> = target
+                .reasons
+                .iter()
+                .map(|r| format!("{:+} {}", r.points, r.text))
+                .collect();
+            println!(
+                "  {:>3} {:<8} {} ({}:{}): {}",
+                target.score,
+                target.ease.label(),
+                target.name,
+                target.file,
+                target.line,
+                reasons.join("; ")
+            );
         }
         let name = |id| {
             graph

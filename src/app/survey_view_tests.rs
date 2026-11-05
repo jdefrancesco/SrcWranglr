@@ -186,6 +186,66 @@ fn ipc_calls_are_grouped_and_lead_to_their_call_site() {
     );
 }
 
+const FUZZ_SOURCE: &str = "#include <stdint.h>\n\
+    int parse_chunk(const uint8_t *buf, size_t len) { return buf[0]; }\n\
+    int add(int a, int b) { return a + b; }\n";
+
+fn fuzz_graph() -> CodeGraph {
+    crate::index::graph_of_files(&[("png.c", FUZZ_SOURCE)])
+}
+
+#[test]
+fn the_fuzz_tab_ranks_targets_with_their_reasons() {
+    let graph = fuzz_graph();
+    let mut harness = harness(SurveyView::with_survey(survey(), &graph), graph);
+    open_tab(&mut harness, SurveyTab::Fuzz);
+    assert!(harness
+        .query_by_label_contains("1 function worth fuzzing (1 easy to harness)")
+        .is_some());
+    assert!(harness.query_by_label("parse_chunk").is_some());
+    assert!(harness.query_by_label("add").is_none());
+    assert!(harness
+        .query_by_label_contains("takes a buffer and its length (buf, len)")
+        .is_some());
+}
+
+#[test]
+fn the_fuzz_tab_goes_to_a_target_or_drafts_its_harness() {
+    let graph = fuzz_graph();
+    let parse = graph.functions[0].symbol;
+    let mut harness = harness(SurveyView::with_survey(survey(), &graph), graph);
+    open_tab(&mut harness, SurveyTab::Fuzz);
+    harness.get_by_label("parse_chunk").click();
+    harness.run();
+    assert_eq!(
+        harness.state().action,
+        Some(SurveyAction::GoTo {
+            symbol: Some(parse),
+            file: "png.c".into(),
+            line: 2,
+        })
+    );
+    harness.get_by_label("Harness…").click();
+    harness.run();
+    assert_eq!(
+        harness.state().action,
+        Some(SurveyAction::Harness {
+            symbol: parse,
+            file: "png.c".into(),
+            line: 2,
+        })
+    );
+}
+
+#[test]
+fn the_overview_names_the_best_fuzz_target() {
+    let graph = fuzz_graph();
+    let harness = harness(SurveyView::with_survey(survey(), &graph), graph);
+    assert!(harness
+        .query_by_label_contains("1 function worth fuzzing (1 easy to harness); best: parse_chunk")
+        .is_some());
+}
+
 #[test]
 fn the_binaries_tab_shows_failed_mitigations() {
     let graph = graph();
@@ -233,6 +293,7 @@ fn opening_on_a_folder_scans_it_in_the_background() {
     view.open(
         SurveyTab::Overview,
         &CodeGraph::default(),
+        &[],
         Some(dir.path()),
         &ctx,
     );
