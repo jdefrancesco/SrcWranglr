@@ -37,6 +37,20 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 - **Stays readable:** each function appears once, so tree wires never cross. Extra calls (a second caller, a call back up the tree) appear when you hover a function. Recursion is marked **↺**, and **+N** shows how many callees are left out.
 - **Click any function** to re-root the tree there; **Entry points** goes back to the overview.
 
+### Project triage
+
+A first look at an unfamiliar codebase. Open it with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has six tabs:
+
+- **Overview:** size, lines of code, language mix, target platforms (from platform headers and `#if` checks), build systems, docs, license, CI, git branch, and repository links.
+- **Languages & Size:** files plus code, comment and blank lines for each language.
+- **Repository Links:** git remotes and submodules, plus GitHub/GitLab links found in the README and build files. Nothing is fetched.
+- **Binaries & Hardening:** every ELF, PE and Mach-O file in the folder, including git-ignored build directories. For each one:
+  - format, architecture, size, and whether it's stripped;
+  - exploit mitigations: ASLR/PIE, NX/DEP, RELRO, stack canary, FORTIFY, CFG, SafeSEH, /GS and code signing;
+  - linked libraries, and the IPC its imports point to.
+- **IPC & Capabilities:** library calls grouped by mechanism: pipes, Unix, netlink and network sockets (told apart by `socket()`'s arguments), shared memory, message queues, signals, D-Bus, Mach/XPC, COM, RPC/ALPC and ioctl. Process creation and dynamic loading are grouped too. Click a call to jump to it.
+- **Function Complexity:** the cyclomatic complexity of every function, most complex first, with a filter. Click a function to open it.
+
 ### Quick open
 
 - **⌘P / Ctrl+P:** jump to any symbol by fuzzy name (`dbimplwr` finds `DBImpl::Write`).
@@ -88,7 +102,7 @@ Other targets: `make app` (only the macOS bundle), `make check` (format, clippy,
 ### Command line
 
 ```
-slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls]
+slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]
 ```
 
 | Option | Meaning |
@@ -96,6 +110,7 @@ slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls]
 | `PROJECT_DIR` | Folder to index on startup. |
 | `--symbol NAME` | Focus a symbol once indexing finishes, either by qualified name (`leveldb::DBImpl::Write`) or by a short name if only one symbol has it. |
 | `--view calls` | Start in the call hierarchy instead of the trail view. |
+| `--triage` | Open the Project Triage window once the project is loaded. |
 
 ### Controls
 
@@ -112,6 +127,7 @@ slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls]
 | Pan | Drag the background |
 | Frame everything | **Fit**, or double-click the background |
 | Filter symbols | Type in **Search** |
+| Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
 
 ---
 
