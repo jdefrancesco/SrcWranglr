@@ -1,4 +1,4 @@
-# slurcetrail
+# slurcetrail - *name is wip*
 
 A fast, native **C/C++ source explorer** in the spirit of [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail), written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](https://tree-sitter.github.io/).
 
@@ -72,6 +72,18 @@ cd slurcetrail
 cargo run --release                        # starts with a small built-in demo
 cargo run --release -- ~/code/myproject    # index a project on startup
 ```
+
+### Building a package
+
+`make package` builds the release binary and packages it for the platform you run it on. The result lands in `dist/`:
+
+| Platform | You get | Install |
+|---|---|---|
+| macOS | `slurcetrail.app` (with its icon, ad-hoc signed) and `slurcetrail-<version>-macos-<arch>.dmg` | `make install` copies the app to `/Applications` |
+| Linux | `slurcetrail-<version>-linux-<arch>.tar.gz` with the binary, a `.desktop` file and icons | `make install` (`PREFIX=/usr/local` by default; honors `DESTDIR`) |
+| Windows | `slurcetrail-<version>-windows-<arch>.zip`; run `make` from Git Bash or MSYS2 | Unzip anywhere |
+
+Other targets: `make app` (only the macOS bundle), `make check` (format, clippy, tests), `make uninstall`, and `make clean`. To sign the app with your Developer ID, run `make app SIGN_IDENTITY="Developer ID Application: …"`. The icon's source is `assets/icon.svg`. `make icons` re-renders the PNGs from it and needs `rsvg-convert`.
 
 ### Command line
 
@@ -148,6 +160,17 @@ cargo run --example dump_tree -- path/to/file.cpp
 SLURCETRAIL_INDEX_PATH=~/code/myproject \
   cargo test --release index_real_project -- --ignored --nocapture
 ```
+
+## New Features Coming 
+
+Namely they are **Security Code Auditing** capabilities:
+
+1. Taint flow analysis. 
+2. Semantic code indexing and searches
+3. Find functions that will make great fuzz targets. Autogenerate the fuzzing harnesses and collect a solid corpus
+4. Lightweight LM agency to help make sense of a large codebase.
+
+Well actually one more major change is coming up with a new name for the project. *SlurceTrail* was a random pick too close to *SourceTrail*.
 
 ## Acknowledgements
 
