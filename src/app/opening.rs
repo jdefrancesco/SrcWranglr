@@ -114,7 +114,7 @@ impl SrcWranglrApp {
             job.cancel();
         }
         self.status = Status::Info(
-            "Showing the built-in demo. File → Open Project… to index your own code.".into(),
+            "Showing the built-in demo. File > Open Project… to index your own code.".into(),
         );
         self.are_project_files_trusted = true;
         self.dangerous = DangerousLists::load(None, true);
@@ -150,6 +150,7 @@ impl SrcWranglrApp {
         ctx: &egui::Context,
     ) {
         self.findings = Findings::for_graph(&project.graph, self.dangerous.merged());
+        self.reach = Reach::of(&project.graph);
         // Their results belong to the old project.
         self.tool_jobs.clear();
         self.finding_view = None;

@@ -323,6 +323,29 @@ mod tests {
             println!("capability {}: {functions:?}", found.category.label());
         }
         let findings = crate::analysis::risky::risky_calls(graph, &Default::default());
+        let reach = crate::analysis::reach::Reach::of(graph);
+        let reached: Vec<_> = findings
+            .iter()
+            .filter(|f| reach.reaches_finding(f))
+            .collect();
+        println!(
+            "input reaches {} functions from {:?}; {} of {} risky calls are in them",
+            reach.len(),
+            reach.sources(),
+            reached.len(),
+            findings.len()
+        );
+        for finding in reached.iter().take(5) {
+            if let Some(path) = reach.finding_path(finding) {
+                println!(
+                    "  {} {}:{} <- {}",
+                    finding.rule,
+                    finding.file,
+                    finding.line,
+                    crate::analysis::reach::describe(&path, graph)
+                );
+            }
+        }
         let scoring = std::time::Instant::now();
         let targets = crate::analysis::fuzz::fuzz_targets(graph, &findings);
         println!(

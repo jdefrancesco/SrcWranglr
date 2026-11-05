@@ -1,13 +1,14 @@
 //! What makes a function worth fuzzing: a name that says it handles input,
-//! risky calls inside it, many paths through it, and a caller that reads
-//! input and hands it over.
+//! risky calls inside it, many paths through it, and outside input that
+//! reaches it down the call graph.
 
 use std::collections::HashMap;
 
 use super::params::words;
 use super::{reason, Reason};
+use crate::analysis::reach::{describe, Reach};
 use crate::analysis::{Finding, Severity};
-use crate::model::{CodeGraph, EdgeKind, FunctionMetrics, SymbolId};
+use crate::model::{CodeGraph, FunctionMetrics, SymbolId};
 
 /// Name words that say a function takes input apart.
 const PARSER_WORDS: &[&str] = &[
@@ -40,25 +41,6 @@ const WORD_ENDINGS: &[&str] = &[
 ];
 const PARSER_POINTS: i32 = 3;
 const INPUT_POINTS: i32 = 1;
-/// Library calls that bring outside input into the program.
-const INPUT_SOURCES: &[&str] = &[
-    "recv",
-    "recvfrom",
-    "recvmsg",
-    "read",
-    "pread",
-    "readv",
-    "fread",
-    "fgets",
-    "getline",
-    "getdelim",
-    "ReadFile",
-    "WSARecv",
-    "WSARecvFrom",
-    "SSL_read",
-    "BIO_read",
-    "gzread",
-];
 const FED_BY_INPUT_POINTS: i32 = 2;
 /// Complexity above each bound, and the points it adds.
 const COMPLEXITY_POINTS: [(u32, i32); 3] = [(50, 3), (20, 2), (10, 1)];
@@ -85,14 +67,11 @@ const MAX_FINDING_POINTS: i32 = 6;
 
 /// What the whole graph says about each function's worth, gathered once.
 pub(super) struct Worth<'g> {
+    graph: &'g CodeGraph,
     /// Findings per file.
     findings: HashMap<&'g str, Vec<&'g Finding>>,
-    /// Project functions that read input, and the first (by name) of the
-    /// library functions they read it with.
-    readers: HashMap<SymbolId, &'g str>,
-    /// Functions called by a reader: the first such caller by name, and
-    /// what it reads input with.
-    fed: HashMap<SymbolId, (&'g str, &'g str)>,
+    /// Which functions outside input reaches, and how.
+    reach: Reach,
 }
 
 impl<'g> Worth<'g> {
@@ -104,20 +83,10 @@ impl<'g> Worth<'g> {
                 .or_default()
                 .push(finding);
         }
-        let mut readers: HashMap<SymbolId, &str> = HashMap::new();
-        let calls = graph.external_calls.values().flatten();
-        for call in calls {
-            let name = call.name.rsplit("::").next().unwrap_or(&call.name);
-            if INPUT_SOURCES.contains(&name) {
-                let first = readers.entry(call.caller).or_insert(name);
-                *first = (*first).min(name);
-            }
-        }
-        let fed = fed_by_readers(graph, &readers);
         Self {
+            graph,
             findings: by_file,
-            readers,
-            fed,
+            reach: Reach::of(graph),
         }
     }
 
@@ -176,39 +145,18 @@ impl<'g> Worth<'g> {
         ))
     }
 
-    /// A caller that reads input (and so probably passes it on).
+    /// Input that reaches it from a function further up (one that reads
+    /// input itself is the I/O loop, not what to fuzz).
     fn fed_reason(&self, symbol: SymbolId) -> Option<Reason> {
-        if self.readers.contains_key(&symbol) {
+        let path = self.reach.path_to(symbol)?;
+        if path.functions.len() < 2 {
             return None;
         }
-        let (caller, source) = self.fed.get(&symbol)?;
         Some(reason(
             FED_BY_INPUT_POINTS,
-            format!("called from {caller}, which reads input with {source}()"),
+            format!("input reaches it: {}", describe(&path, self.graph)),
         ))
     }
-}
-
-/// For each function a reader calls, its first reader by name.
-fn fed_by_readers<'g>(
-    graph: &'g CodeGraph,
-    readers: &HashMap<SymbolId, &'g str>,
-) -> HashMap<SymbolId, (&'g str, &'g str)> {
-    let mut fed: HashMap<SymbolId, (&str, &str)> = HashMap::new();
-    let calls = graph
-        .edges
-        .iter()
-        .filter(|e| e.kind == EdgeKind::Calls && e.from != e.to);
-    for edge in calls {
-        let (Some(source), Some(caller)) = (readers.get(&edge.from), graph.symbols.get(&edge.from))
-        else {
-            continue;
-        };
-        let candidate = (caller.qualified_name.as_str(), *source);
-        let best = fed.entry(edge.to).or_insert(candidate);
-        *best = (*best).min(candidate);
-    }
-    fed
 }
 
 /// What the function's (and its class's) name says it does.

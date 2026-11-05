@@ -41,7 +41,7 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 
 A first look at an unfamiliar codebase. Open it with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has seven tabs:
 
-- **Overview:** size, lines of code, language mix, target platforms (from platform headers and `#if` checks), build systems, docs, license, CI, git branch, and repository links.
+- **Overview:** size, lines of code, language mix, target platforms (from platform headers and `#if` checks), build systems, docs, license, CI, git branch, repository links, the best fuzz targets, and how many functions and risky calls outside input reaches.
 - **Languages & Size:** files plus code, comment and blank lines for each language.
 - **Repository Links:** git remotes and submodules, plus GitHub/GitLab links found in the README and build files. Nothing is fetched.
 - **Binaries & Hardening:** every ELF, PE and Mach-O file in the folder, including git-ignored build directories. For each one:
@@ -55,13 +55,32 @@ A first look at an unfamiliar codebase. Open it with **Triage → Project Triage
     - a name that says it takes input apart (`parse`, `decode`, `inflate`, …);
     - risky calls and tool findings inside it;
     - high complexity;
-    - a caller that reads input (`recv`, `read`, `fread`, …).
+    - outside input reaching it (see **Findings** below).
   - Ease favors a buffer and its length (or a string). These cost ease: values built by hand, needing an object, being `static`, and taking a file name instead of content.
   - Code under `examples/` or `tests/` counts for less, and error and logging helpers are left out.
   - **Harness…** drafts a libFuzzer harness (`LLVMFuzzerTestOneInput` with `FuzzedDataProvider`; AFL++ builds it too) in a window where you can edit it, copy it, or save it somewhere you choose. Nothing is written unless you pick a path.
     - Lengths are set from their buffer's size, even in/out lengths passed by pointer, as in zlib's `uncompress`.
     - Anything it can't work out becomes a `TODO`.
     - Names, types and paths from the source are checked before they go into the code.
+
+### Findings
+
+**Analyze → Findings** (⌘⇧R / Ctrl+Shift+R) lists risky calls, most severe first. The calls are judged by their arguments, so a constant-size `memcpy` isn't flagged but `sprintf` with a non-literal format is. The list also includes results from semgrep and cppcheck, and the functions on your dangerous-functions list. Filter by severity or text, and record a verdict on each one.
+
+**Input reachability** marks the findings that outside input may get to:
+- Input comes in at calls such as `recv`, `read`, `fread`, `fgets`, `getline`, `getenv`, `scanf`, `ReadFile` and `SSL_read`, and through `main`'s command line.
+- From the function that reads it, only the calls passed what was read count: the buffer filled, the variable assigned, `argv`. Below that, every call counts.
+- A risky call in the reading function itself counts only if the flagged call (with its arguments, even across lines) uses what was read.
+- Names inside strings and comments don't count.
+
+Reachable findings get an **input** tag; hover it for the path, such as `recv() in serve » handle_packet » parse_header`. **Only what input can reach** filters the list to them. A finding's explanation window shows the path too, and Project Triage's Overview sums it up.
+
+This is a prioritizer, not proof:
+- Only direct calls are followed, not function pointers, callbacks or virtual calls the indexer can't resolve.
+- Below the first call, everything a function calls counts, whether or not it is passed the input.
+- The "passed what was read" check matches names, so input copied into another variable or a global first isn't followed.
+- Same-named functions in different files are one symbol to the indexer (see **Limitations**), so one can lend reach to another.
+- A finding without the tag isn't proven unreachable.
 
 ### Quick open
 
@@ -163,6 +182,7 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/index/resolve.rs` | Merges declarations across files and resolves names to typed edges |
 | `src/index/signature.rs` | Each function definition's prototype and parameters, for fuzz harnesses |
 | `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`) and libFuzzer harness drafting (`harness/`) |
+| `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
 | `src/index/job.rs` | Background indexing thread with progress, cancellation, and crash containment |
 | `src/graph/trail.rs` | Three-column, Sourcetrail-style layout around the active symbol |
 | `src/graph/overview.rs` | Per-file overview grid |
@@ -206,7 +226,7 @@ SRCWRANGLR_INDEX_PATH=~/code/myproject SRCWRANGLR_HARNESS_OUT=/tmp/harnesses \
 
 Namely they are **Security Code Auditing** capabilities:
 
-1. Taint flow analysis. 
+1. Taint flow analysis. Input reachability (see **Findings**) is a first step: call paths, not data flow through variables.
 2. Semantic code indexing and searches
 3. Collect a solid corpus for fuzz targets (finding the targets and drafting their harnesses is done: see **Fuzz Targets** above)
 4. Lightweight LM agency to help make sense of a large codebase.

@@ -1,25 +1,36 @@
 //! The Findings panel: risky calls (and imported tool results), most
-//! severe first, filterable by severity and text; click one to go there.
+//! severe first, filterable by severity, text, and whether outside input
+//! reaches them; click one to go there.
 
-use super::layout::Layout;
 use egui::RichText;
 
 use super::findings::Findings;
+use super::layout::Layout;
+use crate::analysis::reach::{describe, Reach};
 use crate::analysis::{Finding, Severity};
 use crate::model::CodeGraph;
 use crate::notes::triage::TriageStatus;
-use crate::style::severity_color;
+use crate::style::{severity_color, INPUT_COLOR};
 
 const DEFAULT_WIDTH: f32 = 340.0;
 
 #[derive(Default)]
 pub struct FindingsPanel {
     is_open: bool,
+    filter: Filter,
+}
+
+/// Which findings the panel lists.
+#[derive(Debug, Clone, Default)]
+pub struct Filter {
     /// Only this severity; `None` shows all.
-    severity: Option<Severity>,
-    query: String,
+    pub severity: Option<Severity>,
+    /// Matched against rule, file and function, ignoring case.
+    pub query: String,
     /// Also list findings you marked reviewed or false positive.
-    show_dismissed: bool,
+    pub show_dismissed: bool,
+    /// Only findings in functions outside input reaches.
+    pub only_reachable: bool,
 }
 
 impl FindingsPanel {
@@ -33,6 +44,7 @@ impl FindingsPanel {
         ui: &mut egui::Ui,
         findings: &'f Findings,
         graph: &CodeGraph,
+        reach: &Reach,
         layout: Layout,
     ) -> Option<&'f Finding> {
         if !self.is_open {
@@ -41,7 +53,7 @@ impl FindingsPanel {
         egui::Panel::right(layout.pane_id("findings_panel"))
             .resizable(true)
             .default_size(DEFAULT_WIDTH)
-            .show(ui, |ui| self.contents(ui, findings, graph))
+            .show(ui, |ui| self.contents(ui, findings, graph, reach))
             .inner
     }
 
@@ -50,31 +62,37 @@ impl FindingsPanel {
         ui: &mut egui::Ui,
         findings: &'f Findings,
         graph: &CodeGraph,
+        reach: &Reach,
     ) -> Option<&'f Finding> {
         ui.heading(format!("Findings ({})", findings.all().len()));
+        let filter = &mut self.filter;
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.severity, None, "All");
+            ui.selectable_value(&mut filter.severity, None, "All");
             for severity in Severity::ALL {
                 let label = format!("{} ({})", severity.label(), findings.count(severity));
-                ui.selectable_value(&mut self.severity, Some(severity), label);
+                ui.selectable_value(&mut filter.severity, Some(severity), label);
             }
         });
-        let search = egui::TextEdit::singleline(&mut self.query)
+        let search = egui::TextEdit::singleline(&mut filter.query)
             .hint_text("Filter by function, file, or rule…")
             .desired_width(f32::INFINITY);
         ui.add(search);
         ui.checkbox(
-            &mut self.show_dismissed,
+            &mut filter.show_dismissed,
             "Show reviewed and false positives",
         );
+        let reachable = findings
+            .all()
+            .iter()
+            .filter(|f| reach.reaches_finding(f))
+            .count();
+        ui.checkbox(
+            &mut filter.only_reachable,
+            format!("Only what input can reach ({reachable})"),
+        )
+        .on_hover_text(REACH_HINT);
         ui.separator();
-        let rows = listed(
-            findings,
-            self.severity,
-            &self.query,
-            graph,
-            self.show_dismissed,
-        );
+        let rows = listed(findings, filter, graph, reach);
         if rows.is_empty() {
             ui.weak(if findings.all().is_empty() {
                 "No risky calls found."
@@ -90,7 +108,7 @@ impl FindingsPanel {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 rows[range]
                     .iter()
-                    .filter(|(i, f)| finding_row(ui, f, findings.verdict(*i), graph))
+                    .filter(|(i, f)| finding_row(ui, f, findings.verdict(*i), graph, reach))
                     .last()
                     .map(|(_, f)| *f)
             })
@@ -105,8 +123,17 @@ fn finding_row(
     finding: &Finding,
     verdict: Option<TriageStatus>,
     graph: &CodeGraph,
+    reach: &Reach,
 ) -> bool {
     ui.horizontal(|ui| {
+        if reach.reaches_finding(finding) {
+            ui.label(RichText::new("input").color(INPUT_COLOR).small())
+                .on_hover_ui(|ui| {
+                    if let Some(path) = reach.finding_path(finding) {
+                        ui.label(format!("Input may reach this: {}", describe(&path, graph)));
+                    }
+                });
+        }
         if let Some(verdict) = verdict {
             ui.label(RichText::new(format!("[{}]", verdict.label().to_lowercase())).strong());
         }
@@ -140,16 +167,20 @@ fn symbol_name<'g>(finding: &Finding, graph: &'g CodeGraph) -> &'g str {
         .map_or("", |s| s.qualified_name.as_str())
 }
 
-/// The findings of `severity` (all if `None`) whose rule, file, or
-/// function contains `query` (ignoring case), in severity order.
+/// What "reachable" can and can't promise.
+const REACH_HINT: &str = "Findings in functions that a call path leads to from code reading \
+    outside input (recv, read, fread, getenv, the command line, ...). Only direct calls are \
+    followed: calls through function pointers and callbacks aren't, so a finding left out \
+    isn't proven unreachable.";
+
+/// The findings `filter` lets through, in severity order.
 pub fn listed<'f>(
     findings: &'f Findings,
-    severity: Option<Severity>,
-    query: &str,
+    filter: &Filter,
     graph: &CodeGraph,
-    show_dismissed: bool,
+    reach: &Reach,
 ) -> Vec<(usize, &'f Finding)> {
-    let needle = query.trim().to_lowercase();
+    let needle = filter.query.trim().to_lowercase();
     let matches = |f: &Finding| {
         needle.is_empty()
             || [f.rule.as_str(), f.file.as_str(), symbol_name(f, graph)]
@@ -161,15 +192,17 @@ pub fn listed<'f>(
         .iter()
         .enumerate()
         .filter(|(i, _)| {
-            show_dismissed || !findings.verdict(*i).is_some_and(TriageStatus::is_dismissed)
+            filter.show_dismissed || !findings.verdict(*i).is_some_and(TriageStatus::is_dismissed)
         })
-        .filter(|(_, f)| severity.is_none_or(|s| f.severity == s) && matches(f))
+        .filter(|(_, f)| filter.severity.is_none_or(|s| f.severity == s) && matches(f))
+        .filter(|(_, f)| !filter.only_reachable || reach.reaches_finding(f))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::reach::Reach;
     use crate::index::{build_graph, Extractor, SourceFile};
 
     fn graph() -> CodeGraph {
@@ -187,6 +220,55 @@ mod tests {
         }])
     }
 
+    fn filter(query: &str) -> Filter {
+        Filter {
+            query: query.into(),
+            ..Filter::default()
+        }
+    }
+
+    #[test]
+    fn findings_input_reaches_are_tagged() {
+        use egui_kittest::kittest::Queryable;
+
+        let source = "void copy(char *d, const char *s) { strcpy(d, s); }\n\
+                      void run(char *c) { system(c); }\n\
+                      void serve(int fd) { char b[64]; read(fd, b, 64); run(b); }\n";
+        let graph = crate::index::graph_of_files(&[("x.c", source)]);
+        let findings = Findings::for_graph(&graph, &Default::default());
+        let reach = Reach::of(&graph);
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let mut panel = FindingsPanel {
+                is_open: true,
+                filter: Filter::default(),
+            };
+            panel.show(ui, &findings, &graph, &reach, Layout::default());
+        });
+        assert_eq!(harness.query_all_by_label("input").count(), 1);
+        assert!(harness
+            .query_by_label("Only what input can reach (1)")
+            .is_some());
+    }
+
+    #[test]
+    fn can_list_only_what_input_reaches() {
+        let source = "void copy(char *d, const char *s) { strcpy(d, s); }\n\
+                      void run(char *c) { system(c); }\n\
+                      void serve(int fd) { char b[64]; read(fd, b, 64); run(b); }\n";
+        let graph = crate::index::graph_of_files(&[("x.c", source)]);
+        let findings = Findings::for_graph(&graph, &Default::default());
+        let reach = Reach::of(&graph);
+        let only = Filter {
+            only_reachable: true,
+            ..Filter::default()
+        };
+        assert_eq!(rules(&listed(&findings, &only, &graph, &reach)), ["system"]);
+        assert_eq!(
+            rules(&listed(&findings, &Filter::default(), &graph, &reach)),
+            ["strcpy", "system"]
+        );
+    }
+
     fn rules(listed: &[(usize, &Finding)]) -> Vec<String> {
         listed.iter().map(|(_, f)| f.rule.clone()).collect()
     }
@@ -196,20 +278,43 @@ mod tests {
         let graph = graph();
         let findings = Findings::for_graph(&graph, &Default::default());
         assert_eq!(
-            rules(&listed(&findings, None, "", &graph, false)),
+            rules(&listed(
+                &findings,
+                &Filter::default(),
+                &graph,
+                &Reach::default()
+            )),
             ["strcpy", "system", "memcpy"]
         );
         assert_eq!(
-            rules(&listed(&findings, Some(Severity::Low), "", &graph, false)),
+            rules(&listed(
+                &findings,
+                &Filter {
+                    severity: Some(Severity::Low),
+                    ..Filter::default()
+                },
+                &graph,
+                &Reach::default()
+            )),
             ["memcpy"]
         );
         // By function name, and by rule, ignoring case.
         assert_eq!(
-            rules(&listed(&findings, None, "RUN", &graph, false)),
+            rules(&listed(
+                &findings,
+                &filter("RUN"),
+                &graph,
+                &Reach::default()
+            )),
             ["system"]
         );
         assert_eq!(
-            rules(&listed(&findings, None, "cpy", &graph, false)),
+            rules(&listed(
+                &findings,
+                &filter("cpy"),
+                &graph,
+                &Reach::default()
+            )),
             ["strcpy", "memcpy"]
         );
     }
@@ -234,11 +339,24 @@ mod tests {
         let findings =
             Findings::for_graph(&graph, &Default::default()).with_triage(&triage, &graph, true);
         assert_eq!(
-            rules(&listed(&findings, None, "", &graph, false)),
+            rules(&listed(
+                &findings,
+                &Filter::default(),
+                &graph,
+                &Reach::default()
+            )),
             ["strcpy", "memcpy"]
         );
         assert_eq!(
-            rules(&listed(&findings, None, "", &graph, true)),
+            rules(&listed(
+                &findings,
+                &Filter {
+                    show_dismissed: true,
+                    ..Filter::default()
+                },
+                &graph,
+                &Reach::default()
+            )),
             ["strcpy", "system", "memcpy"]
         );
     }
@@ -265,9 +383,13 @@ mod tests {
         };
         let mut harness = Harness::new_ui_state(
             |ui, state: &mut State| {
-                let picked = state
-                    .panel
-                    .show(ui, &state.findings, &state.graph, Layout::default());
+                let picked = state.panel.show(
+                    ui,
+                    &state.findings,
+                    &state.graph,
+                    &Reach::default(),
+                    Layout::default(),
+                );
                 if let Some(f) = picked {
                     state.picked = Some((f.rule.clone(), f.line));
                 }

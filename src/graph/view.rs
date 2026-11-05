@@ -396,7 +396,7 @@ impl GraphView {
 /// Text overlaid on the canvas when the view needs explaining.
 fn notice(scene: &Scene, graph: &CodeGraph, mode: ViewMode) -> Option<String> {
     if graph.symbols.is_empty() {
-        return Some("No symbols — open a project with File → Open Project…".into());
+        return Some("No symbols — open a project with File > Open Project…".into());
     }
     if mode == ViewMode::CallHierarchy {
         return hierarchy_notice(scene);

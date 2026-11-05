@@ -247,6 +247,27 @@ fn the_overview_names_the_best_fuzz_target() {
 }
 
 #[test]
+fn the_overview_says_what_input_reaches() {
+    let source = "void copy(char *d, const char *s) { strcpy(d, s); }\n\
+                  void run(char *c) { system(c); }\n\
+                  void serve(int fd) { char b[64]; read(fd, b, 64); run(b); }\n";
+    let graph = crate::index::graph_of_files(&[("x.c", source)]);
+    let harness = harness(SurveyView::with_survey(survey(), &graph), graph);
+    assert!(harness
+        .query_by_label_contains("2 of 3 functions, from read(); 1 risky call in them")
+        .is_some());
+}
+
+#[test]
+fn the_overview_says_when_no_input_was_found() {
+    let graph = fuzz_graph();
+    let harness = harness(SurveyView::with_survey(survey(), &graph), graph);
+    assert!(harness
+        .query_by_label_contains("no code that reads outside input was found")
+        .is_some());
+}
+
+#[test]
 fn the_binaries_tab_shows_failed_mitigations() {
     let graph = graph();
     let mut harness = harness(SurveyView::with_survey(survey(), &graph), graph);

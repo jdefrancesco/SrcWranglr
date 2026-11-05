@@ -450,8 +450,23 @@ mod tests {
         )]);
         let handle = target(&targets, "handle_packet");
         assert!(
-            has_reason(handle, "serve, which reads input with recv()"),
+            has_reason(handle, "input reaches it: recv() in serve » handle_packet"),
             "{handle:#?}"
+        );
+    }
+
+    #[test]
+    fn input_from_further_up_the_call_graph_adds_worth() {
+        let targets = targets_of(&[(
+            "deep.c",
+            "int parse_record(const char *p, int n) { return n; }\n\
+             int dispatch(const char *p, int n) { return parse_record(p, n); }\n\
+             void serve(int fd) { char b[64]; int n = recv(fd, b, 64, 0); dispatch(b, n); }",
+        )]);
+        let parse = target(&targets, "parse_record");
+        assert!(
+            has_reason(parse, "recv() in serve » dispatch » parse_record"),
+            "{parse:#?}"
         );
     }
 

@@ -39,6 +39,7 @@ use launch::LaunchOptions;
 use egui::{Color32, Key, KeyboardShortcut, Modifiers, RichText};
 
 use crate::analysis;
+use crate::analysis::reach::Reach;
 use crate::graph::{Badge, GraphView, ViewMode};
 use crate::index::job::IndexJob;
 use crate::index::{IndexError, IndexOptions, IndexOutcome};
@@ -117,6 +118,8 @@ pub struct SrcWranglrApp {
     harness_view: Option<harness_view::HarnessView>,
     /// Where the source pane sits; kept between launches.
     layout: Layout,
+    /// Which functions outside input reaches, for the open project.
+    reach: Reach,
     /// The Open Project folder dialog, while it is open.
     open_dialog: Option<dialogs::PendingDialog<PathBuf>>,
     /// Project folders opened before; kept between launches.
@@ -156,6 +159,7 @@ impl SrcWranglrApp {
             survey_view: SurveyView::default(),
             harness_view: None,
             layout: Layout::load(storage),
+            reach: Reach::default(),
             open_dialog: None,
             recent: RecentProjects::load(storage),
             is_project_open: false,
@@ -363,7 +367,13 @@ impl SrcWranglrApp {
         }
         let finding = self
             .findings_panel
-            .show(ui, &self.findings, &self.project.graph, self.layout)
+            .show(
+                ui,
+                &self.findings,
+                &self.project.graph,
+                &self.reach,
+                self.layout,
+            )
             .map(|f| (f.symbol, f.file.clone(), f.line));
         if let Some((symbol, file, line)) = finding {
             self.go_to_place(symbol, &file, line);

@@ -5,6 +5,8 @@ use egui::{Color32, RichText};
 
 use super::survey_view::{plural, thousands, SurveyAction};
 use crate::analysis::capabilities::CapabilityUse;
+use crate::analysis::reach::Reach;
+use crate::analysis::{Finding, Severity};
 use crate::model::{CodeGraph, SymbolId};
 
 /// McCabe's usual bands: upper bound, name, color.
@@ -70,6 +72,35 @@ fn band(complexity: u32) -> (&'static str, Color32) {
         .map_or(("very complex", Color32::RED), |(_, name, color)| {
             (*name, *color)
         })
+}
+
+/// `37 of 412 functions, from fread(), recv(); 12 risky calls in them (3 high)`.
+pub fn reach_summary(reach: &Reach, graph: &CodeGraph, findings: &[Finding]) -> String {
+    if reach.len() == 0 {
+        return "no code that reads outside input was found (only direct calls are followed)"
+            .into();
+    }
+    let mut defined: Vec<SymbolId> = graph.functions.iter().map(|f| f.symbol).collect();
+    defined.sort_unstable();
+    defined.dedup();
+    let reached = defined.iter().filter(|id| reach.reaches(**id)).count();
+    let inside: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| reach.reaches_finding(f))
+        .collect();
+    let high = inside
+        .iter()
+        .filter(|f| f.severity == Severity::High)
+        .count();
+    format!(
+        "{} of {} {}, from {}; {} {} in them ({high} high)",
+        thousands(reached as u64),
+        thousands(defined.len() as u64),
+        plural(defined.len(), "function"),
+        reach.sources().join(", "),
+        inside.len(),
+        plural(inside.len(), "risky call"),
+    )
 }
 
 /// `412 functions; average complexity 3.1, highest 37 (db::Open); …`.

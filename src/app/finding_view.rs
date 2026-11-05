@@ -6,7 +6,7 @@ use egui::{Id, RichText};
 use crate::analysis::{risky, Finding};
 use crate::model::SymbolId;
 use crate::notes::triage::TriageStatus;
-use crate::style::severity_color;
+use crate::style::{severity_color, INPUT_COLOR};
 
 const WIDTH: f32 = 460.0;
 
@@ -26,22 +26,27 @@ pub struct FindingView {
     finding: Finding,
     /// Qualified name of the enclosing function, if known.
     function: Option<String>,
+    /// How outside input reaches that function, if it does.
+    input: Option<String>,
     /// Your verdict as being edited.
     verdict: Option<TriageStatus>,
     note: String,
 }
 
 impl FindingView {
+    /// `input` says how outside input reaches the enclosing function;
     /// `verdict` is the one already recorded, with its note.
     pub fn new(
         finding: Finding,
         function: Option<String>,
+        input: Option<String>,
         verdict: Option<(TriageStatus, String)>,
     ) -> Self {
         let (verdict, note) = verdict.map_or((None, String::new()), |(s, n)| (Some(s), n));
         Self {
             finding,
             function,
+            input,
             verdict,
             note,
         }
@@ -80,6 +85,18 @@ impl FindingView {
             None => format!("{}:{}", f.file, f.line),
         };
         ui.monospace(place);
+        match (&self.input, &self.function) {
+            (Some(path), _) => {
+                ui.label(RichText::new(format!("Input may reach this: {path}")).color(INPUT_COLOR));
+            }
+            (None, Some(_)) => {
+                ui.weak(
+                    "No direct call path from input was found (calls through function \
+                     pointers and callbacks aren't followed).",
+                );
+            }
+            (None, None) => {}
+        }
         ui.separator();
         ui.strong("Why it can be a bug");
         ui.label(&f.message);
@@ -187,8 +204,17 @@ mod tests {
     }
 
     fn harness(function: Option<&str>) -> Harness<'static, State> {
+        harness_with_input(function, None)
+    }
+
+    fn harness_with_input(function: Option<&str>, input: Option<&str>) -> Harness<'static, State> {
         let state = State {
-            view: FindingView::new(finding(), function.map(String::from), None),
+            view: FindingView::new(
+                finding(),
+                function.map(String::from),
+                input.map(String::from),
+                None,
+            ),
             action: None,
         };
         let mut harness = Harness::new_ui_state(
@@ -202,6 +228,27 @@ mod tests {
         );
         harness.run();
         harness
+    }
+
+    #[test]
+    fn says_how_input_reaches_the_call() {
+        let harness = harness_with_input(
+            Some("net::read_packet"),
+            Some("recv() in net::serve » net::read_packet"),
+        );
+        assert!(harness
+            .query_by_label_contains(
+                "Input may reach this: recv() in net::serve » net::read_packet"
+            )
+            .is_some());
+    }
+
+    #[test]
+    fn says_plainly_when_no_path_from_input_was_found() {
+        let harness = harness(Some("net::read_packet"));
+        assert!(harness
+            .query_by_label_contains("No direct call path from input was found")
+            .is_some());
     }
 
     #[test]

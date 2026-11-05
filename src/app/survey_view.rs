@@ -14,6 +14,7 @@ use super::survey_code::{self, FunctionRow};
 use super::survey_fuzz;
 use crate::analysis::capabilities::{capabilities_in, CapabilityUse};
 use crate::analysis::fuzz::{fuzz_targets, FuzzTarget};
+use crate::analysis::reach::Reach;
 use crate::analysis::Finding;
 use crate::model::{CodeGraph, SymbolId};
 use crate::survey::{self, format_bytes, Kind, Survey};
@@ -130,6 +131,8 @@ pub struct SurveyView {
     capabilities: Vec<CapabilityUse>,
     functions: Vec<FunctionRow>,
     fuzz_targets: Vec<FuzzTarget>,
+    /// What outside input reaches, for the overview.
+    input_summary: String,
     /// Filters the complexity list by function or file name.
     query: String,
     /// Filters the fuzz targets the same way.
@@ -146,6 +149,7 @@ impl Default for SurveyView {
             capabilities: Vec::new(),
             functions: Vec::new(),
             fuzz_targets: Vec::new(),
+            input_summary: String::new(),
             query: String::new(),
             fuzz_query: String::new(),
         }
@@ -174,6 +178,7 @@ impl SurveyView {
         self.capabilities = capabilities_in(graph);
         self.functions = survey_code::function_rows(graph);
         self.fuzz_targets = fuzz_targets(graph, findings);
+        self.input_summary = survey_code::reach_summary(&Reach::of(graph), graph, findings);
         if self.root.as_deref() != root || matches!(self.scan, Scan::NoFolder | Scan::Failed(_)) {
             self.root = root.map(Path::to_path_buf);
             self.rescan(ctx);
@@ -218,6 +223,11 @@ impl SurveyView {
             capabilities: capabilities_in(graph),
             functions: survey_code::function_rows(graph),
             fuzz_targets: fuzz_targets(graph, &[]),
+            input_summary: survey_code::reach_summary(
+                &Reach::of(graph),
+                graph,
+                &crate::analysis::risky::risky_calls(graph, &Default::default()),
+            ),
             ..Self::default()
         }
     }
@@ -339,6 +349,7 @@ impl SurveyView {
             "Fuzz targets",
             survey_fuzz::fuzz_summary(&self.fuzz_targets),
         );
+        row(ui, "Reached by input", self.input_summary.clone());
         let (ipc, other): (Vec<_>, Vec<_>) =
             self.capabilities.iter().partition(|c| c.category.is_ipc());
         let names = |uses: &[&CapabilityUse]| {

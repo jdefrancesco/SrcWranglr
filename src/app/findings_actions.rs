@@ -8,6 +8,7 @@ use super::tool_job::{self, ToolJob};
 use super::trust;
 use super::{SrcWranglrApp, Status};
 use crate::analysis;
+use crate::analysis::reach::describe;
 
 impl SrcWranglrApp {
     /// Opens the editor for `name`'s dangerous-list entry.
@@ -124,7 +125,7 @@ impl SrcWranglrApp {
             };
             self.status = Status::Info(format!(
                 "This project ships its own verdicts or dangerous list{ignored}: shown, \
-                 not applied. Analyze → Trust This Project's Verdicts and List to apply them."
+                 not applied. Analyze > Trust This Project's Verdicts and List to apply them."
             ));
             return;
         }
@@ -147,7 +148,11 @@ impl SrcWranglrApp {
             .and_then(|s| self.project.graph.symbols.get(&s))
             .map(|s| s.qualified_name.clone());
         let verdict = self.findings.verdict_and_note(id);
-        self.finding_view = Some(FindingView::new(finding, function, verdict));
+        let input = self
+            .reach
+            .finding_path(&finding)
+            .map(|path| describe(&path, &self.project.graph));
+        self.finding_view = Some(FindingView::new(finding, function, input, verdict));
     }
 
     pub(super) fn show_finding_view(&mut self, ctx: &egui::Context) {
