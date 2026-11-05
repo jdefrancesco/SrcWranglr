@@ -242,3 +242,14 @@ Until v0.2.0 this project was called *slurcetrail*, a working title that sat too
 ## License
 
 [MIT](LICENSE) © 2026 Joseph DeFrancesco
+
+## AI Augmentation
+
+Been working on this code for a long time in order to learn Rust. 
+Clankers were utilized nostky for help with the GUI and tests or ither yak-shaving
+tasks that suck the soul out of me. The core is all hand
+cradted code. What fun or feeling of accomplishment
+would exist if I watchd an agent write the tool. I am an engineer
+not a CEO; so I dont claim credit for work I didnt do.
+AI sucked the magic out of coding sadly ubless we actively choose to
+not utilize it!
