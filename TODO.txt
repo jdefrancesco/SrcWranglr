@@ -1,4 +1,11 @@
-TODO:
+# URGENT
+
+1. Fix default window sizes and layout on launch. It is too small
+2. Make source bar navigator a bit larger.. We need to add a mode to swap panes
+so it can be on the side etc..
+
+
+# TODO:
 
 1. Computer cyclomatic complexity of a function
 2. Allow generation of a  fuzz harness.
