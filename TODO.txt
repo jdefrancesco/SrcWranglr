@@ -1,0 +1,5 @@
+TODO:
+
+1. Computer cyclomatic complexity of a function
+2. Allow generation of a  fuzz harness.
+

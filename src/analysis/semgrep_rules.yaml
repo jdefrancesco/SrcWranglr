@@ -1,0 +1,155 @@
+# slurcetrail's bundled semgrep rules: bug patterns that span statements,
+# which slurcetrail's own per-call checks can't see. Rewritten on every
+# run; put your own rules in other .yaml files in this folder.
+rules:
+  - id: slurcetrail.use-after-free
+    languages: [c, cpp]
+    severity: ERROR
+    message: >-
+      $P is used after free($P). Freed memory may already hold other data,
+      so reading or writing through $P corrupts or leaks it.
+      Fix: set $P = NULL after freeing, or move the use before the free.
+    metadata:
+      cwe: ["CWE-416: Use After Free"]
+    patterns:
+      - pattern-inside: |
+          free($P);
+          ...
+      - pattern-not-inside: |
+          free($P);
+          ...
+          $P = $X;
+          ...
+      - pattern-either:
+          - pattern: $P->$F
+          - pattern: $P[$I]
+          - pattern: "*$P"
+  - id: slurcetrail.double-free
+    languages: [c, cpp]
+    severity: ERROR
+    message: >-
+      $P is freed twice. A double free corrupts the allocator and is often
+      exploitable. Fix: set $P = NULL after the first free.
+    metadata:
+      cwe: ["CWE-415: Double Free"]
+    patterns:
+      - pattern: |
+          free($P);
+          ...
+          free($P);
+      - pattern-not: |
+          free($P);
+          ...
+          $P = $X;
+          ...
+          free($P);
+
+  - id: slurcetrail.unchecked-malloc
+    languages: [c, cpp]
+    severity: WARNING
+    message: >-
+      The result of $ALLOC is used without checking it for NULL. When the
+      allocation fails, this dereferences a null pointer.
+      Fix: check `if ($P == NULL)` before using it.
+    metadata:
+      cwe: ["CWE-690: Unchecked Return Value to NULL Pointer Dereference"]
+    patterns:
+      - pattern-inside: |
+          $P = $ALLOC(...);
+          ...
+      - metavariable-regex:
+          metavariable: $ALLOC
+          regex: ^(malloc|calloc|realloc|strdup)$
+      - pattern-not-inside: |
+          $P = $ALLOC(...);
+          ...
+          if (<... $P ...>) { ... }
+          ...
+      - pattern-not-inside: |
+          $P = $ALLOC(...);
+          ...
+          if (<... $P ...>) $STMT;
+          ...
+      - pattern-not-inside: |
+          if (<... $P ...>) { ... }
+      - pattern-either:
+          - pattern: $P->$F
+          - pattern: $P[$I]
+  - id: slurcetrail.realloc-leak
+    languages: [c, cpp]
+    severity: WARNING
+    message: >-
+      `$P = realloc($P, ...)` loses the only pointer to the old block when
+      realloc fails and returns NULL: the memory leaks and $P becomes NULL.
+      Fix: assign to a temporary, check it, then assign to $P.
+    metadata:
+      cwe: ["CWE-401: Missing Release of Memory after Effective Lifetime"]
+    pattern: $P = realloc($P, $N);
+
+  - id: slurcetrail.return-stack-buffer
+    languages: [c, cpp]
+    severity: ERROR
+    message: >-
+      Returns the local array $B, which no longer exists once the function
+      returns: the caller reads freed stack memory.
+      Fix: return heap memory, a static buffer, or fill a caller's buffer.
+    metadata:
+      cwe: ["CWE-562: Return of Stack Variable Address"]
+    patterns:
+      - pattern-inside: |
+          $T $FN(...) {
+            ...
+            $E $B[$N];
+            ...
+          }
+      - pattern-not-inside: |
+          $T $FN(...) {
+            ...
+            static $E $B[$N];
+            ...
+          }
+      - pattern: return $B;
+
+  - id: slurcetrail.snprintf-return-as-length
+    languages: [c, cpp]
+    severity: WARNING
+    message: >-
+      snprintf returns the length it *would* have written, which is larger
+      than the buffer when the output was truncated. Using $N as an offset
+      or length then reads or writes past the buffer.
+      Fix: clamp $N to the buffer size (and check for a negative result).
+    metadata:
+      cwe: ["CWE-787: Out-of-bounds Write"]
+    patterns:
+      - pattern-inside: |
+          $N = snprintf($B, $S, ...);
+          ...
+      - pattern-not-inside: |
+          $N = snprintf($B, $S, ...);
+          ...
+          if (<... $N ...>) $STMT;
+          ...
+      - pattern-not-inside: |
+          $N = snprintf($B, $S, ...);
+          ...
+          if (<... $N ...>) { ... }
+          ...
+      - pattern-either:
+          - pattern: $B + $N
+          - pattern: $B[$N]
+          - pattern: $S - $N
+  - id: slurcetrail.strncpy-not-terminated
+    languages: [c, cpp]
+    severity: WARNING
+    message: >-
+      strncpy into $D with the full size of $D leaves it without a NUL
+      terminator when the source is that long or longer.
+      Fix: copy sizeof($D) - 1 and set $D[sizeof($D) - 1] = '\0'.
+    metadata:
+      cwe: ["CWE-170: Improper Null Termination"]
+    patterns:
+      - pattern: strncpy($D, $S, sizeof($D));
+      - pattern-not-inside: |
+          strncpy($D, $S, sizeof($D));
+          ...
+          $D[...] = $Z;

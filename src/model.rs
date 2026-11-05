@@ -109,7 +109,13 @@ pub struct ExternalCall {
     pub caller: SymbolId,
     /// The called name as written, e.g. `strcpy` or `std::memcpy`.
     pub name: String,
+    /// Where the name is written.
     pub span: Span,
+    /// The call from its name to its closing parenthesis if on one line,
+    /// else the name.
+    pub extent: Span,
+    /// Each argument's source text, cut short if long.
+    pub args: Vec<String>,
 }
 
 /// An occurrence together with the file it is in.
@@ -145,6 +151,16 @@ impl CodeGraph {
         };
         let first = all.partition_point(|o| o.span.line < line);
         let past = all.partition_point(|o| o.span.line <= line);
+        &all[first..past]
+    }
+
+    /// Calls out of the project on one line of `file`, in column order.
+    pub fn external_calls_on_line(&self, file: &str, line: u32) -> &[ExternalCall] {
+        let Some(all) = self.external_calls.get(file) else {
+            return &[];
+        };
+        let first = all.partition_point(|c| c.span.line < line);
+        let past = all.partition_point(|c| c.span.line <= line);
         &all[first..past]
     }
 

@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
-use crate::analysis::tools::Tool;
+use super::dangerous_lists::semgrep_rules_dir;
+use crate::analysis::tools::{prepare_semgrep_rules, Tool};
 use crate::analysis::Finding;
 use crate::model::{CodeGraph, SymbolId, SymbolKind};
 
@@ -22,8 +23,14 @@ impl ToolJob {
     pub fn spawn(tool: Tool, root: PathBuf, ctx: egui::Context) -> Self {
         let (tx, results) = channel();
         std::thread::spawn(move || {
-            let (program, args) = tool.command(&root);
-            let result = run(&program, &args, |out, err| tool.parse(out, err, &root));
+            let rules = match tool {
+                Tool::Semgrep => prepare_semgrep_rules(semgrep_rules_dir().as_deref()),
+                Tool::Cppcheck => Ok(String::new()),
+            };
+            let result = rules.and_then(|rules| {
+                let (program, args) = tool.command(&root, &rules);
+                run(&program, &args, |out, err| tool.parse(out, err, &root))
+            });
             // The app may be gone (closed) by now; nothing to report to then.
             let _ = tx.send(result);
             ctx.request_repaint();
@@ -74,7 +81,8 @@ fn run(
 }
 
 /// `findings` with each one's enclosing function (the last one declared
-/// at or above its line) filled in.
+/// at or above its line) filled in. (Byte columns that don't fall on a
+/// character boundary are ignored when drawn.)
 pub fn with_symbols(findings: Vec<Finding>, graph: &CodeGraph) -> Vec<Finding> {
     findings
         .into_iter()
@@ -123,9 +131,11 @@ mod tests {
             rule: "r".into(),
             severity: Severity::Low,
             message: String::new(),
+            fix: None,
             cwe: None,
             file: "main.cpp".into(),
             line: 10,
+            columns: None,
             symbol: None,
         };
         let found = with_symbols(vec![finding], &graph);
@@ -133,6 +143,26 @@ mod tests {
             .symbol
             .map(|id| graph.symbols[&id].qualified_name.as_str());
         assert_eq!(name, Some("main"));
+    }
+
+    #[test]
+    fn tool_byte_columns_are_kept() {
+        let graph = crate::demo::demo_codebase().expect("demo");
+        let finding = Finding {
+            tool: "semgrep".into(),
+            rule: "r".into(),
+            severity: Severity::Low,
+            message: String::new(),
+            fix: None,
+            cwe: None,
+            file: "u.c".into(),
+            line: 1,
+            columns: Some((8, 15)),
+            symbol: None,
+        };
+        let converted = with_symbols(vec![finding], &graph);
+        // semgrep reports byte columns, which the code view uses as they are.
+        assert_eq!(converted[0].columns, Some((8, 15)));
     }
 
     #[test]

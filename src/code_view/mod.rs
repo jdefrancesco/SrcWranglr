@@ -12,12 +12,14 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use std::sync::Arc;
+
 use egui::text::{CCursor, Galley, LayoutJob, TextFormat};
 use egui::{Color32, CursorIcon, Response, RichText, Sense, Stroke};
 
-use crate::model::{CodeGraph, Occurrence, Span, SymbolId};
+use crate::model::{CodeGraph, EdgeKind, Occurrence, OccurrenceRole, Span, SymbolId};
 use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR};
-use segments::{merge, Mark, Segment};
+use segments::{merge, overlay_risks, Mark, Segment};
 use tokenize::colored_ranges;
 
 const CODE_BACKGROUND: Color32 = Color32::from_gray(18);
@@ -25,6 +27,9 @@ const ACTIVE_LINE_BACKGROUND: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x14);
 const ACTIVE_NAME_BACKGROUND: Color32 = Color32::from_rgb(0x8A, 0x6D, 0x1C);
 const SELECTED_NAME_BACKGROUND: Color32 = Color32::from_rgb(0x2E, 0x45, 0x63);
 const LINK_UNDERLINE_ALPHA: f32 = 0.35;
+/// Risky snippets: a tint of their severity color, underlined.
+const RISK_BACKGROUND_ALPHA: f32 = 0.22;
+const RISK_UNDERLINE_WIDTH: f32 = 1.5;
 const LINE_NUMBER_COLOR: Color32 = Color32::from_gray(90);
 const GUTTER_WIDTH: f32 = 52.0;
 /// Gutter marker for a line with a note or bookmark.
@@ -53,6 +58,20 @@ pub struct Focus<'a> {
     pub should_scroll: bool,
     /// Lines of `file` with a note or bookmark.
     pub line_marks: &'a BTreeMap<u32, LineMark<'a>>,
+    /// Risky snippets (findings) of `file`, by line.
+    pub risks: &'a BTreeMap<u32, Vec<RiskSpan<'a>>>,
+}
+
+/// A finding's snippet on one line: byte columns `start..end`, drawn in
+/// `color`; hovering explains it, clicking reports `id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RiskSpan<'a> {
+    pub start: u32,
+    pub end: u32,
+    pub color: Color32,
+    pub title: &'a str,
+    pub why: &'a str,
+    pub id: usize,
 }
 
 /// What the gutter shows for a line: its note (possibly empty), whether
@@ -73,19 +92,23 @@ pub struct LineWarning<'a> {
 }
 
 /// What the user asked for on one line, from its right-click menu.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LineAction {
     EditNote,
     ToggleBookmark,
+    /// Add this called function to the dangerous-functions list.
+    MarkDangerous(String),
 }
 
 /// Something the user did in the code view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeEvent {
     /// Clicked a resolved name.
     Clicked(Occurrence),
     /// Chose a line action for this 1-based line.
     Line(u32, LineAction),
+    /// Clicked a risky snippet: the `RiskSpan::id`.
+    Risk(usize),
 }
 
 /// Source viewer. Keeps the line index of the file it last showed, so
@@ -182,7 +205,20 @@ impl Rows<'_> {
             .iter()
             .map(|o| (byte_range(o.span, visible_len), self.mark_for(o)))
             .collect();
-        let segments = merge(&shown, &colored_ranges(&shown), &marks);
+        let risks = self
+            .focus
+            .risks
+            .get(&line_no)
+            .map_or(&[][..], Vec::as_slice);
+        let risk_ranges: Vec<(Range<usize>, Color32)> = risks
+            .iter()
+            .map(|r| (risk_range(r, line_no, visible_len), r.color))
+            .collect();
+        let segments = overlay_risks(
+            &shown,
+            merge(&shown, &colored_ranges(&shown), &marks),
+            &risk_ranges,
+        );
         let galley = ui
             .painter()
             .layout_job(layout(&shown, &segments, &self.font));
@@ -209,77 +245,76 @@ impl Rows<'_> {
                 None => gutter,
             };
             let is_focus_line = line_no == self.focus.line;
-            let (clicked, code) =
-                self.show_code(ui, galley, &shown, occurrences, visible_len, is_focus_line);
-            let action = line_menu(&gutter, &shown, mark).or(line_menu(&code, &shown, mark));
-            action
-                .map(|a| CodeEvent::Line(line_no, a))
-                .or(clicked.map(CodeEvent::Clicked))
+            let line = DrawnLine {
+                rect: egui::Rect::NOTHING,
+                galley: &galley,
+                shown: &shown,
+                occurrences,
+                risks,
+                line_no,
+                visible_len,
+                is_focus_line,
+            };
+            let (event, code) = self.show_code(ui, &line);
+            let calls = self.calls_on_line(line_no);
+            let action = line_menu(&gutter, &shown, mark, &calls)
+                .or_else(|| line_menu(&code, &shown, mark, &calls));
+            action.map(|a| CodeEvent::Line(line_no, a)).or(event)
         })
         .inner
     }
 
-    /// Paints one line of code and handles hovering/clicking its names.
-    /// Returns the clicked occurrence and the line's response.
-    fn show_code(
-        &self,
-        ui: &mut egui::Ui,
-        galley: std::sync::Arc<Galley>,
-        shown: &str,
-        occurrences: &[Occurrence],
-        visible_len: usize,
-        is_focus_line: bool,
-    ) -> (Option<Occurrence>, Response) {
-        let size = egui::vec2(galley.size().x, self.row_height);
+    /// Paints one line of code and handles hovering/clicking its names and
+    /// risky snippets. Returns what was clicked and the line's response.
+    fn show_code(&self, ui: &mut egui::Ui, line: &DrawnLine) -> (Option<CodeEvent>, Response) {
+        let size = egui::vec2(line.galley.size().x, self.row_height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, shown));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, line.shown));
         ui.painter()
-            .galley(rect.min, galley.clone(), Color32::from_gray(210));
-        let line = DrawnLine {
-            rect,
-            galley: &galley,
-            shown,
-            occurrences,
-            visible_len,
-            is_focus_line,
-        };
-        (self.clicked_name(ui, &response, &line), response)
+            .galley(rect.min, Arc::clone(line.galley), Color32::from_gray(210));
+        let line = DrawnLine { rect, ..*line };
+        (self.hit(ui, &response, &line), response)
     }
 
-    /// Scrolls the focused name into view, and shows/returns the name under
-    /// the pointer when hovered/clicked.
-    fn clicked_name(
-        &self,
-        ui: &egui::Ui,
-        response: &Response,
-        line: &DrawnLine,
-    ) -> Option<Occurrence> {
-        let DrawnLine {
-            rect,
-            galley,
-            shown,
-            occurrences,
-            visible_len,
-            is_focus_line,
-        } = *line;
-
+    /// Scrolls the focused name into view, and explains / reports the risky
+    /// snippet or name under the pointer.
+    fn hit(&self, ui: &egui::Ui, response: &Response, line: &DrawnLine) -> Option<CodeEvent> {
         let x_of = |byte: usize| {
-            let chars = shown.get(..byte).map_or(0, |s| s.chars().count());
-            rect.min.x + galley.pos_from_cursor(CCursor::new(chars)).min.x
+            let chars = line.shown.get(..byte).map_or(0, |s| s.chars().count());
+            line.rect.min.x + line.galley.pos_from_cursor(CCursor::new(chars)).min.x
         };
         let focus_span = self
             .focus
             .span
-            .filter(|_| is_focus_line && self.focus.should_scroll);
+            .filter(|_| line.is_focus_line && self.focus.should_scroll);
         if let Some(span) = focus_span {
             // Bring the focused name into view sideways as well.
-            let range = byte_range(span, visible_len);
+            let range = byte_range(span, line.visible_len);
             let x = x_of(range.start)..=x_of(range.end);
-            ui.scroll_to_rect(egui::Rect::from_x_y_ranges(x, rect.y_range()), None);
+            ui.scroll_to_rect(egui::Rect::from_x_y_ranges(x, line.rect.y_range()), None);
         }
 
         let pointer_x = response.hover_pos()?.x;
-        let hit = *occurrence_at_x(occurrences, visible_len, pointer_x, x_of)?;
+        let name = occurrence_at_x(line.occurrences, line.visible_len, pointer_x, x_of);
+        let risk = line.risks.iter().find(|r| {
+            let range = risk_range(r, line.line_no, line.visible_len);
+            !range.is_empty() && (x_of(range.start)..x_of(range.end)).contains(&pointer_x)
+        });
+        // A name inside a risky call (an argument, a nested call) explores
+        // it; the risk itself is explained from the rest of the call.
+        let risk = risk.filter(|r| name.is_none_or(|o| o.span.start == r.start));
+        if let Some(risk) = risk {
+            let response = response
+                .clone()
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .on_hover_ui_at_pointer(|ui| {
+                    ui.strong(risk.title);
+                    ui.label(risk.why);
+                    ui.weak("click for details");
+                });
+            return response.clicked().then_some(CodeEvent::Risk(risk.id));
+        }
+        let hit = *occurrence_at_x(line.occurrences, line.visible_len, pointer_x, x_of)?;
         let symbol = self.graph.symbols.get(&hit.symbol)?;
         let response = response
             .clone()
@@ -294,7 +329,26 @@ impl Rows<'_> {
                 ));
                 ui.weak("click to explore");
             });
-        response.clicked().then_some(hit)
+        response.clicked().then_some(CodeEvent::Clicked(hit))
+    }
+
+    /// Names of the functions called on `line`: the project's and others.
+    fn calls_on_line(&self, line: u32) -> Vec<&str> {
+        let graph = self.graph;
+        let project = graph
+            .occurrences_on_line(self.focus.file, line)
+            .iter()
+            .filter(|o| o.role == OccurrenceRole::Reference(EdgeKind::Calls))
+            .filter_map(|o| graph.symbols.get(&o.symbol))
+            .map(|s| s.qualified_name.as_str());
+        let external = graph
+            .external_calls_on_line(self.focus.file, line)
+            .iter()
+            .map(|c| c.name.as_str());
+        let mut names: Vec<&str> = project.chain(external).collect();
+        names.sort_unstable();
+        names.dedup();
+        names
     }
 
     fn mark_for(&self, occurrence: &Occurrence) -> Mark {
@@ -308,15 +362,27 @@ impl Rows<'_> {
     }
 }
 
-/// One painted line of code, for hit-testing its names.
+/// One painted line of code, for hit-testing its names and risks.
 #[derive(Clone, Copy)]
 struct DrawnLine<'a> {
     rect: egui::Rect,
-    galley: &'a Galley,
+    galley: &'a Arc<Galley>,
     shown: &'a str,
     occurrences: &'a [Occurrence],
+    risks: &'a [RiskSpan<'a>],
+    line_no: u32,
     visible_len: usize,
     is_focus_line: bool,
+}
+
+/// Byte range of `risk` within the shown part of line `line_no`.
+fn risk_range(risk: &RiskSpan, line_no: u32, visible_len: usize) -> Range<usize> {
+    let span = Span {
+        line: line_no,
+        start: risk.start,
+        end: risk.end,
+    };
+    byte_range(span, visible_len)
 }
 
 /// Draws a line's warning bar and note/bookmark dot in the gutter;
@@ -349,7 +415,12 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
 }
 
 /// The right-click menu of a line (on its number or its code).
-fn line_menu(response: &Response, shown: &str, mark: Option<&LineMark>) -> Option<LineAction> {
+fn line_menu(
+    response: &Response,
+    shown: &str,
+    mark: Option<&LineMark>,
+    calls: &[&str],
+) -> Option<LineAction> {
     let has_note = mark.is_some_and(|m| !m.note.is_empty());
     let is_starred = mark.is_some_and(|m| m.is_starred);
     let mut action = None;
@@ -374,6 +445,16 @@ fn line_menu(response: &Response, shown: &str, mark: Option<&LineMark>) -> Optio
         }
         if ui.button(star).clicked() {
             action = Some(LineAction::ToggleBookmark);
+        }
+        if !calls.is_empty() {
+            ui.separator();
+            ui.menu_button("Mark as Dangerous", |ui| {
+                for name in calls {
+                    if ui.button(*name).clicked() {
+                        action = Some(LineAction::MarkDangerous(name.to_string()));
+                    }
+                }
+            });
         }
         if action.is_some() {
             ui.close();
@@ -412,6 +493,18 @@ fn layout(line: &str, segments: &[Segment], font: &egui::FontId) -> LayoutJob {
             ),
             Some(Mark::Selected) => (SELECTED_NAME_BACKGROUND, Stroke::NONE),
             Some(Mark::Active) => (ACTIVE_NAME_BACKGROUND, Stroke::NONE),
+        };
+        // A risky snippet is underlined in its color, and tinted unless the
+        // selection already colors it.
+        let (background, underline) = match segment.risk {
+            Some(risk) => (
+                match background {
+                    Color32::TRANSPARENT => risk.gamma_multiply(RISK_BACKGROUND_ALPHA),
+                    selected => selected,
+                },
+                Stroke::new(RISK_UNDERLINE_WIDTH, risk),
+            ),
+            None => (background, underline),
         };
         let format = TextFormat {
             font_id: font.clone(),

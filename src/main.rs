@@ -6,6 +6,7 @@ mod graph;
 mod index;
 mod model;
 mod notes;
+mod safe_fs;
 mod style;
 
 use app::launch::parse_args;

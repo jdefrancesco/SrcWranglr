@@ -117,14 +117,16 @@ fn external_calls_in<'f>(
     let mut calls: Vec<ExternalCall> = facts
         .refs
         .iter()
-        .filter(|r| r.is_free_call)
         .filter_map(|r| {
+            let site = r.free_call.as_ref()?;
             let caller = *by_qname.get(&*r.from)?;
             let span = r.span?;
             resolver.resolve(r).is_none().then(|| ExternalCall {
                 caller,
                 name: r.target.clone(),
                 span,
+                extent: site.extent.unwrap_or(span),
+                args: site.args.clone(),
             })
         })
         .collect();
@@ -680,6 +682,25 @@ mod tests {
             .collect();
         // helper() resolves; obj.write() is a member call, never external.
         assert_eq!(calls, [("strcpy", f, 4, 2), ("std::memcpy", f, 4, 45)]);
+    }
+
+    #[test]
+    fn external_calls_keep_their_arguments_and_extent() {
+        let source =
+            "void f(char *d, char *fmt) {\n  sprintf(d, fmt,\n    1);\n  puts(\"a, b\");\n}\n";
+        let graph = graph_of(&[("a.c", source)]);
+        let calls = &graph.external_calls["a.c"];
+        let sprintf = &calls[0];
+        assert_eq!(sprintf.args, ["d", "fmt", "1"]);
+        // Spans lines: the extent is just the name.
+        assert_eq!((sprintf.extent.start, sprintf.extent.end), (2, 9));
+        let puts = &calls[1];
+        assert_eq!(puts.args, ["\"a, b\""]);
+        // On one line: the extent covers the whole call.
+        assert_eq!(
+            (puts.extent.line, puts.extent.start, puts.extent.end),
+            (4, 2, 14)
+        );
     }
 
     #[test]

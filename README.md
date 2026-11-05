@@ -22,6 +22,7 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 - **Finds** *calls*, *inheritance*, *uses* (types and members), and *containment*, and records the exact line and column of each one. Name resolution follows enclosing scopes, base classes, and local variable types, so `Circle c; c.area()` links to `Circle::area`.
 
 ### Graph
+
 - **Sourcetrail-style trail:** callers left, active symbol center, callees and used symbols right.
 - **Members live inside their class box.** Only the members involved in the relationship are shown, so the picture stays small.
 - **Colored pills by kind** (function, field, class, namespace) and **curved wires by relationship** (calls, uses, inherits).
@@ -30,16 +31,19 @@ Point it at a project folder and it indexes every C/C++ file, then lets you expl
 - A **per-file overview** shows when nothing is selected, and the canvas follows the light/dark theme.
 
 ### Call hierarchy
-- **See how control flows through the program:** switch the graph to **Call hierarchy** and it draws who-calls-whom as a tree, from the program's entry points (`main`, and other functions nothing calls) or from any function you pick.
+
+- **See how control flowOs through the program:** switch the graph to **Call hierarchy** and it draws who-calls-whom as a tree, from the program's entry points (`main`, and other functions nothing calls) or from any function you pick.
 - **Callees are listed in the order they are called**, top to bottom, so a function reads like its body.
 - **Stays readable:** each function appears once, so tree wires never cross. Extra calls (a second caller, a call back up the tree) appear when you hover a function. Recursion is marked **↺**, and **+N** shows how many callees are left out.
 - **Click any function** to re-root the tree there; **Entry points** goes back to the overview.
 
 ### Quick open
+
 - **⌘P / Ctrl+P:** jump to any symbol by fuzzy name (`dbimplwr` finds `DBImpl::Write`).
 - **⌘⇧P / Ctrl+Shift+P**, or type `>`: run a command (open, re-index, switch views, back, fit…).
 
 ### Source and navigation
+
 - **Clickable source:** every name the indexer resolved is underlined in the code view. Click it to explore that symbol, or hover it to see what it is.
 - **Every location, one click apart:** the code panel lists every place the selected symbol is declared or used (**◀ 3 / 11 ▶**) and names the function each use is in (*call in `DBImpl::Write`*). Click that name to explore it.
 - **Code view** with syntax highlighting that highlights the selected symbol everywhere it appears in the file, and stays smooth on large files.

@@ -292,7 +292,7 @@ mod tests {
         println!("edges by kind: {edges_by_kind:?}");
         let external: usize = graph.external_calls.values().map(Vec::len).sum();
         let mut risky_by_rule: std::collections::BTreeMap<String, usize> = Default::default();
-        for finding in crate::analysis::risky::risky_calls(graph) {
+        for finding in crate::analysis::risky::risky_calls(graph, &Default::default()) {
             *risky_by_rule.entry(finding.rule).or_default() += 1;
         }
         println!("external calls: {external}; risky calls by rule: {risky_by_rule:?}");

@@ -5,12 +5,13 @@
 
 use std::fmt;
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::{Note, NoteTarget, Notes};
+use crate::safe_fs::{is_real_dir, write_new_file};
 
 pub const NOTES_DIR: &str = ".slurcetrail";
 pub const NOTES_FILE: &str = "notes.json";
@@ -152,33 +153,6 @@ pub fn save(root: &Path, notes: &Notes) -> Result<(), NotesError> {
     let temp = dir.join(TEMP_FILE);
     write_new_file(&temp, &format!("{json}\n")).map_err(|e| io_error(&temp, &e))?;
     fs::rename(&temp, &path).map_err(|e| io_error(&path, &e))
-}
-
-/// Whether `dir` exists as a directory (not a symlink to one). Something
-/// else at that path is an error.
-fn is_real_dir(dir: &Path) -> std::io::Result<bool> {
-    match fs::symlink_metadata(dir) {
-        Ok(metadata) if metadata.file_type().is_dir() => Ok(true),
-        Ok(_) => Err(std::io::Error::other(
-            "exists but is not a folder (symlinks are not followed)",
-        )),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e),
-    }
-}
-
-/// Creates `path` fresh (never writing through a symlink left there).
-fn write_new_file(path: &Path, contents: &str) -> std::io::Result<()> {
-    match fs::remove_file(path) {
-        Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
-        _ => {}
-    }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    file.write_all(contents.as_bytes())?;
-    file.sync_all()
 }
 
 fn io_error(path: &Path, error: &std::io::Error) -> NotesError {

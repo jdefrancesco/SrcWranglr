@@ -2,11 +2,16 @@
 //! the lifecycle of background indexing jobs.
 
 mod code_panel;
+mod dangerous_editor;
+mod dangerous_lists;
 mod editor;
+mod finding_view;
 mod findings;
+mod findings_actions;
 mod findings_panel;
 pub mod launch;
 mod locations;
+mod menus;
 mod note_editor;
 mod notebook;
 mod notes_actions;
@@ -15,6 +20,8 @@ mod palette;
 mod project;
 mod symbol_list;
 mod tool_job;
+mod triage_actions;
+mod trust;
 
 use std::path::PathBuf;
 
@@ -27,13 +34,15 @@ use crate::graph::{Badge, GraphView, ViewMode};
 use crate::index::job::IndexJob;
 use crate::index::{IndexError, IndexOptions, IndexOutcome};
 use code_panel::{CodePanel, PanelAction};
+use dangerous_lists::DangerousLists;
 use editor::SourcePosition;
+use finding_view::FindingView;
 use findings::Findings;
 use findings_panel::FindingsPanel;
 use note_editor::NoteEditor;
 use notebook::Notebook;
 use notes_panel::{NotesPanel, NotesPanelAction};
-use palette::{Command, Entry, Palette, OPEN_COMMAND_SHORTCUT, OPEN_SYMBOL_SHORTCUT};
+use palette::{Command, Entry, Palette};
 use project::Project;
 use symbol_list::SymbolList;
 use tool_job::ToolJob;
@@ -69,10 +78,23 @@ pub struct SlurcetrailApp {
     /// The note being edited, if the editor is open.
     note_editor: Option<NoteEditor>,
     notes_panel: NotesPanel,
+    /// Your dangerous-functions lists (global, and the project's).
+    dangerous: DangerousLists,
     findings: Findings,
     findings_panel: FindingsPanel,
     /// External analyzers still running.
     tool_jobs: Vec<ToolJob>,
+    /// The finding being explained, if its view is open.
+    finding_view: Option<FindingView>,
+    /// Your verdicts on findings.
+    triage: crate::notes::triage::Triage,
+    /// Why the verdicts file couldn't be read; verdicts are read-only then.
+    triage_error: Option<String>,
+    /// Whether the project's own verdicts and dangerous list are applied
+    /// (yours, or ones you trusted), or only shown.
+    are_project_files_trusted: bool,
+    /// The dangerous-list entry being edited, if its editor is open.
+    dangerous_editor: Option<dangerous_editor::DangerousEditor>,
     job: Option<IndexJob>,
     status: Status,
     warnings: Vec<String>,
@@ -97,11 +119,18 @@ impl SlurcetrailApp {
             ),
         };
         let notebook = Notebook::open(&project);
-        let findings = Findings::for_graph(&project.graph);
+        let dangerous = DangerousLists::load(None, true);
+        let findings = Findings::for_graph(&project.graph, dangerous.merged());
         let mut app = Self {
+            dangerous,
             findings,
             findings_panel: FindingsPanel::default(),
             tool_jobs: Vec::new(),
+            finding_view: None,
+            dangerous_editor: None,
+            triage: Default::default(),
+            triage_error: None,
+            are_project_files_trusted: true,
             project,
             notebook,
             note_editor: None,
@@ -173,13 +202,25 @@ impl SlurcetrailApp {
             outcome.graph.symbols.len(),
             outcome.graph.edges.len()
         ));
-        self.findings = Findings::for_graph(&outcome.graph);
+        self.are_project_files_trusted =
+            !trust::has_project_files(&root) || trust::is_trusted(&root);
+        self.dangerous = DangerousLists::load(Some(&root), self.are_project_files_trusted);
+        self.findings = Findings::for_graph(&outcome.graph, self.dangerous.merged());
         // Their results belong to the old project.
         self.tool_jobs.clear();
+        self.finding_view = None;
         self.report_findings();
+        let root_for_triage = root.clone();
         self.project = Project::new(name.clone(), Some(root), outcome.graph);
         self.notebook = Notebook::open(&self.project);
         self.note_editor = None;
+        let (triage, triage_error) = match crate::notes::triage::load(&root_for_triage) {
+            Ok(triage) => (triage, None),
+            Err(error) => (Default::default(), Some(error)),
+        };
+        self.triage = triage;
+        self.triage_error = triage_error;
+        self.refresh_verdicts();
         self.report_notes_on_open();
         // A new project starts with a fresh selection, in the same view mode.
         self.graph_view = GraphView::with_mode(self.graph_view.mode());
@@ -190,17 +231,6 @@ impl SlurcetrailApp {
         self.warnings = outcome.warnings;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{APP_NAME} — {name}")));
         self.apply_pending_symbol();
-    }
-
-    /// Adds the number of risky calls to the status.
-    fn report_findings(&mut self) {
-        let total = self.findings.all().len();
-        if let (Status::Info(text), true) = (&mut self.status, total > 0) {
-            let high = self.findings.count(analysis::Severity::High);
-            text.push_str(&format!(
-                " {total} risky call(s), {high} high: Findings (⇧⌘R)."
-            ));
-        }
     }
 
     /// Adds what's worth knowing about the project's notes to the status.
@@ -328,11 +358,14 @@ impl eframe::App for SlurcetrailApp {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
         self.poll_tool_jobs();
-        // Global shortcuts pause while the palette or note editor is open.
-        if !self.palette.is_open() && self.note_editor.is_none() {
+        // Global shortcuts pause while the palette or a dialog is open.
+        let is_dialog_open = self.note_editor.is_some()
+            || self.finding_view.is_some()
+            || self.dangerous_editor.is_some();
+        if !self.palette.is_open() && !is_dialog_open {
             self.handle_global_shortcuts(&ctx);
         }
-        if self.note_editor.is_none() {
+        if !is_dialog_open {
             self.palette.handle_shortcuts(&ctx);
         }
         if let Some(command) = self.show_menu_bar(ui) {
@@ -365,6 +398,8 @@ impl eframe::App for SlurcetrailApp {
         });
         self.show_warnings_window(&ctx);
         self.show_note_editor(&ctx);
+        self.show_finding_view(&ctx);
+        self.show_dangerous_editor(&ctx);
         let notes = if self.palette.is_open() {
             self.note_candidates()
         } else {
@@ -385,187 +420,6 @@ impl eframe::App for SlurcetrailApp {
 }
 
 impl SlurcetrailApp {
-    fn show_menu_bar(&mut self, ui: &mut egui::Ui) -> Option<Command> {
-        egui::Panel::top("menu_bar")
-            .show(ui, |ui| {
-                egui::MenuBar::new()
-                    .ui(ui, |ui| {
-                        let file = ui.menu_button("File", |ui| self.file_menu(ui));
-                        let go = ui.menu_button("Go", |ui| self.go_menu(ui));
-                        let analyze = ui.menu_button("Analyze", |ui| self.analyze_menu(ui));
-                        let action = file
-                            .inner
-                            .flatten()
-                            .or(go.inner.flatten())
-                            .or(analyze.inner.flatten());
-                        ui.separator();
-                        ui.label(RichText::new(&self.project.name).strong());
-                        action
-                    })
-                    .inner
-            })
-            .inner
-    }
-
-    fn file_menu(&self, ui: &mut egui::Ui) -> Option<Command> {
-        let open = egui::Button::new("Open Project…")
-            .shortcut_text(ui.ctx().format_shortcut(&OPEN_SHORTCUT));
-        if ui.add(open).clicked() {
-            return Some(Command::OpenProject);
-        }
-        let can_reindex = self.project.root.is_some() && self.job.is_none();
-        if ui
-            .add_enabled(can_reindex, egui::Button::new("Re-index"))
-            .clicked()
-        {
-            return Some(Command::Reindex);
-        }
-        ui.separator();
-        ui.button("Quit").clicked().then_some(Command::Quit)
-    }
-
-    /// The Go menu: opens the palette itself, returns other commands.
-    fn go_menu(&mut self, ui: &mut egui::Ui) -> Option<Command> {
-        let symbol_keys = ui.ctx().format_shortcut(&OPEN_SYMBOL_SHORTCUT);
-        let command_keys = ui.ctx().format_shortcut(&OPEN_COMMAND_SHORTCUT);
-        let go_to = egui::Button::new("Go to Symbol…").shortcut_text(symbol_keys);
-        if ui.add(go_to).clicked() {
-            self.palette.open_with(String::new());
-        }
-        let palette = egui::Button::new("Command Palette…").shortcut_text(command_keys);
-        if ui.add(palette).clicked() {
-            self.palette.open_with(palette::COMMAND_PREFIX.to_string());
-        }
-        if ui.button("Search Notes…").clicked() {
-            self.palette.open_with(palette::NOTE_PREFIX.to_string());
-        }
-        ui.separator();
-        let entry = egui::Button::new(Command::GoToEntryPoint.label())
-            .shortcut_text(ui.ctx().format_shortcut(&ENTRY_POINT_SHORTCUT));
-        if ui.add(entry).clicked() {
-            return Some(Command::GoToEntryPoint);
-        }
-        ui.menu_button("Entry Points", |ui| self.entry_points_menu(ui));
-        let editor = egui::Button::new(Command::OpenInEditor.label())
-            .shortcut_text(ui.ctx().format_shortcut(&EDITOR_SHORTCUT));
-        if ui.add(editor).clicked() {
-            return Some(Command::OpenInEditor);
-        }
-        ui.separator();
-        let bookmark = egui::Button::new(Command::ToggleBookmark.label())
-            .shortcut_text(ui.ctx().format_shortcut(&BOOKMARK_SHORTCUT));
-        if ui.add(bookmark).clicked() {
-            return Some(Command::ToggleBookmark);
-        }
-        let note = egui::Button::new(Command::EditNote.label())
-            .shortcut_text(ui.ctx().format_shortcut(&NOTE_SHORTCUT));
-        if ui.add(note).clicked() {
-            return Some(Command::EditNote);
-        }
-        let panel = egui::Button::new(Command::ShowNotes.label())
-            .shortcut_text(ui.ctx().format_shortcut(&NOTES_PANEL_SHORTCUT));
-        if ui.add(panel).clicked() {
-            return Some(Command::ShowNotes);
-        }
-
-        ui.separator();
-        [
-            Command::TrailView,
-            Command::CallHierarchy,
-            Command::Overview,
-            Command::Back,
-        ]
-        .into_iter()
-        .find(|command| ui.button(command.label()).clicked())
-    }
-
-    fn analyze_menu(&self, ui: &mut egui::Ui) -> Option<Command> {
-        let findings = egui::Button::new(Command::ShowFindings.label())
-            .shortcut_text(ui.ctx().format_shortcut(&FINDINGS_SHORTCUT));
-        if ui.add(findings).clicked() {
-            return Some(Command::ShowFindings);
-        }
-        ui.separator();
-        [Command::RunSemgrep, Command::RunCppcheck]
-            .into_iter()
-            .find(|command| ui.button(command.label()).clicked())
-    }
-
-    /// Starts `tool` on the project in the background.
-    fn run_tool(&mut self, tool: analysis::tools::Tool, ctx: &egui::Context) {
-        let Some(root) = self.project.root.clone() else {
-            self.status = Status::Info(format!(
-                "Open a project (⌘O) to run {} on it; the demo isn't on disk.",
-                tool.name()
-            ));
-            return;
-        };
-        if self.tool_jobs.iter().any(|job| job.tool() == tool) {
-            self.status = Status::Info(format!("{} is already running.", tool.name()));
-            return;
-        }
-        self.status = Status::Info(format!(
-            "Running {} on {}… results go to Findings.",
-            tool.name(),
-            self.project.name
-        ));
-        self.tool_jobs.push(ToolJob::spawn(tool, root, ctx.clone()));
-    }
-
-    /// Adds finished tools' findings.
-    fn poll_tool_jobs(&mut self) {
-        let finished: Vec<(
-            analysis::tools::Tool,
-            Result<Vec<analysis::Finding>, String>,
-        )> = self
-            .tool_jobs
-            .iter()
-            .filter_map(|job| job.poll().map(|result| (job.tool(), result)))
-            .collect();
-        for (tool, result) in finished {
-            self.tool_jobs.retain(|job| job.tool() != tool);
-            self.status = match result {
-                Ok(found) => {
-                    let count = found.len();
-                    let found = tool_job::with_symbols(found, &self.project.graph);
-                    self.findings = self.findings.with_tool_results(tool.name(), found);
-                    Status::Info(format!(
-                        "{}: {count} finding(s), in Findings (⇧⌘R).",
-                        tool.name()
-                    ))
-                }
-                Err(error) => Status::Error(error),
-            };
-        }
-    }
-
-    /// Lists the best entry points; clicking one selects it.
-    fn entry_points_menu(&mut self, ui: &mut egui::Ui) {
-        let graph = &self.project.graph;
-        let entries = self.graph_view.entry_points(graph);
-        if entries.is_empty() {
-            ui.weak("No entry points found");
-            return;
-        }
-        let picked = entries
-            .iter()
-            .take(MAX_ENTRY_MENU_ITEMS)
-            .filter_map(|id| graph.symbols.get(id))
-            .find(|s| {
-                let label = format!("{}    {}:{}", s.qualified_name, s.file, s.line);
-                ui.button(label).clicked()
-            })
-            .map(|s| s.id);
-        let more = entries.len().saturating_sub(MAX_ENTRY_MENU_ITEMS);
-        if more > 0 {
-            let keys = ui.ctx().format_shortcut(&ENTRY_POINT_SHORTCUT);
-            ui.weak(format!("…and {more} more ({keys} steps through all)"));
-        }
-        if let Some(id) = picked {
-            self.graph_view.select(id);
-        }
-    }
-
     fn run_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
             Command::OpenProject => self.open_project_dialog(ctx),
@@ -586,6 +440,8 @@ impl SlurcetrailApp {
             }
             Command::ShowNotes => self.notes_panel.toggle(),
             Command::ShowFindings => self.findings_panel.toggle(),
+            Command::MarkDangerous => self.mark_selected_dangerous(),
+            Command::TrustProject => self.trust_project_files(),
             Command::RunSemgrep => self.run_tool(analysis::tools::Tool::Semgrep, ctx),
             Command::RunCppcheck => self.run_tool(analysis::tools::Tool::Cppcheck, ctx),
             Command::EditNote => {
@@ -677,6 +533,8 @@ impl SlurcetrailApp {
                     Some(PanelAction::OpenInEditor) => self.open_in_editor(),
                     Some(PanelAction::ToggleBookmark(target)) => self.toggle_bookmark(target),
                     Some(PanelAction::EditNote(target)) => self.edit_note(target),
+                    Some(PanelAction::ShowFinding(id)) => self.explain_finding(id),
+                    Some(PanelAction::MarkDangerous(name)) => self.mark_dangerous(&name),
                     None => {}
                 }
             });

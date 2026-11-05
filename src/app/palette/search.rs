@@ -25,6 +25,8 @@ pub enum Command {
     EditNote,
     ShowNotes,
     ShowFindings,
+    MarkDangerous,
+    TrustProject,
     RunSemgrep,
     RunCppcheck,
     Back,
@@ -35,7 +37,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 16] = [
+    pub const ALL: [Command; 18] = [
         Command::OpenProject,
         Command::Reindex,
         Command::Overview,
@@ -45,6 +47,8 @@ impl Command {
         Command::EditNote,
         Command::ShowNotes,
         Command::ShowFindings,
+        Command::MarkDangerous,
+        Command::TrustProject,
         Command::RunSemgrep,
         Command::RunCppcheck,
         Command::Back,
@@ -65,6 +69,8 @@ impl Command {
             Command::EditNote => "Note on Symbol…",
             Command::ShowNotes => "Notes & Bookmarks",
             Command::ShowFindings => "Findings (risky calls)",
+            Command::MarkDangerous => "Mark Selected Function as Dangerous…",
+            Command::TrustProject => "Trust This Project's Verdicts and List",
             Command::RunSemgrep => "Run semgrep",
             Command::RunCppcheck => "Run cppcheck",
             Command::Back => "Go Back",
@@ -224,8 +230,8 @@ mod tests {
     #[test]
     fn prefix_switches_to_commands() {
         assert_eq!(
-            search(SYMBOLS, NO_NOTES, ">hier", 10),
-            [Entry::Command(Command::CallHierarchy)]
+            search(SYMBOLS, NO_NOTES, ">hier", 10).first(),
+            Some(&Entry::Command(Command::CallHierarchy))
         );
         assert_eq!(
             search(SYMBOLS, NO_NOTES, ">", 100).len(),

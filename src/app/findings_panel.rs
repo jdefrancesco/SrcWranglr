@@ -6,6 +6,7 @@ use egui::RichText;
 use super::findings::Findings;
 use crate::analysis::{Finding, Severity};
 use crate::model::CodeGraph;
+use crate::notes::triage::TriageStatus;
 use crate::style::severity_color;
 
 const DEFAULT_WIDTH: f32 = 340.0;
@@ -16,6 +17,8 @@ pub struct FindingsPanel {
     /// Only this severity; `None` shows all.
     severity: Option<Severity>,
     query: String,
+    /// Also list findings you marked reviewed or false positive.
+    show_dismissed: bool,
 }
 
 impl FindingsPanel {
@@ -58,8 +61,18 @@ impl FindingsPanel {
             .hint_text("Filter by function, file, or rule…")
             .desired_width(f32::INFINITY);
         ui.add(search);
+        ui.checkbox(
+            &mut self.show_dismissed,
+            "Show reviewed and false positives",
+        );
         ui.separator();
-        let rows = listed(findings, self.severity, &self.query, graph);
+        let rows = listed(
+            findings,
+            self.severity,
+            &self.query,
+            graph,
+            self.show_dismissed,
+        );
         if rows.is_empty() {
             ui.weak(if findings.all().is_empty() {
                 "No risky calls found."
@@ -75,9 +88,9 @@ impl FindingsPanel {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 rows[range]
                     .iter()
-                    .filter(|f| finding_row(ui, f, graph))
+                    .filter(|(i, f)| finding_row(ui, f, findings.verdict(*i), graph))
                     .last()
-                    .copied()
+                    .map(|(_, f)| *f)
             })
             .inner
     }
@@ -85,8 +98,16 @@ impl FindingsPanel {
 
 /// One finding on one line; hover for the explanation. Returns whether
 /// it was clicked.
-fn finding_row(ui: &mut egui::Ui, finding: &Finding, graph: &CodeGraph) -> bool {
+fn finding_row(
+    ui: &mut egui::Ui,
+    finding: &Finding,
+    verdict: Option<TriageStatus>,
+    graph: &CodeGraph,
+) -> bool {
     ui.horizontal(|ui| {
+        if let Some(verdict) = verdict {
+            ui.label(RichText::new(format!("[{}]", verdict.label().to_lowercase())).strong());
+        }
         let severity = RichText::new(finding.severity.label())
             .color(severity_color(finding.severity))
             .monospace();
@@ -124,18 +145,23 @@ pub fn listed<'f>(
     severity: Option<Severity>,
     query: &str,
     graph: &CodeGraph,
-) -> Vec<&'f Finding> {
+    show_dismissed: bool,
+) -> Vec<(usize, &'f Finding)> {
     let needle = query.trim().to_lowercase();
+    let matches = |f: &Finding| {
+        needle.is_empty()
+            || [f.rule.as_str(), f.file.as_str(), symbol_name(f, graph)]
+                .iter()
+                .any(|text| text.to_lowercase().contains(&needle))
+    };
     findings
         .all()
         .iter()
-        .filter(|f| severity.is_none_or(|s| f.severity == s))
-        .filter(|f| {
-            needle.is_empty()
-                || [f.rule.as_str(), f.file.as_str(), symbol_name(f, graph)]
-                    .iter()
-                    .any(|text| text.to_lowercase().contains(&needle))
+        .enumerate()
+        .filter(|(i, _)| {
+            show_dismissed || !findings.verdict(*i).is_some_and(TriageStatus::is_dismissed)
         })
+        .filter(|(_, f)| severity.is_none_or(|s| f.severity == s) && matches(f))
         .collect()
 }
 
@@ -145,7 +171,8 @@ mod tests {
     use crate::index::{build_graph, Extractor, SourceFile};
 
     fn graph() -> CodeGraph {
-        let source = "void copy(char *d, const char *s) { strcpy(d, s); memcpy(d, s, 1); }\n\
+        let source =
+            "void copy(char *d, const char *s, int n) { strcpy(d, s); memcpy(d, s, n); }\n\
                       void run(char *c) { system(c); }\n";
         let facts = Extractor::new()
             .expect("grammar")
@@ -158,27 +185,59 @@ mod tests {
         }])
     }
 
-    fn rules(listed: &[&Finding]) -> Vec<String> {
-        listed.iter().map(|f| f.rule.clone()).collect()
+    fn rules(listed: &[(usize, &Finding)]) -> Vec<String> {
+        listed.iter().map(|(_, f)| f.rule.clone()).collect()
     }
 
     #[test]
     fn filters_by_severity_and_text() {
         let graph = graph();
-        let findings = Findings::for_graph(&graph);
+        let findings = Findings::for_graph(&graph, &Default::default());
         assert_eq!(
-            rules(&listed(&findings, None, "", &graph)),
+            rules(&listed(&findings, None, "", &graph, false)),
             ["strcpy", "system", "memcpy"]
         );
         assert_eq!(
-            rules(&listed(&findings, Some(Severity::Low), "", &graph)),
+            rules(&listed(&findings, Some(Severity::Low), "", &graph, false)),
             ["memcpy"]
         );
         // By function name, and by rule, ignoring case.
-        assert_eq!(rules(&listed(&findings, None, "RUN", &graph)), ["system"]);
         assert_eq!(
-            rules(&listed(&findings, None, "cpy", &graph)),
+            rules(&listed(&findings, None, "RUN", &graph, false)),
+            ["system"]
+        );
+        assert_eq!(
+            rules(&listed(&findings, None, "cpy", &graph, false)),
             ["strcpy", "memcpy"]
+        );
+    }
+
+    #[test]
+    fn dismissed_findings_are_hidden_unless_asked_for() {
+        use crate::notes::triage::{Triage, TriageEntry};
+        let graph = graph();
+        let mut triage = Triage::default();
+        triage
+            .set(TriageEntry {
+                rule: "system".into(),
+                file: "x.c".into(),
+                line: 2,
+                column: 20,
+                anchor: String::new(),
+                status: TriageStatus::Reviewed,
+                note: String::new(),
+                updated: 1,
+            })
+            .expect("set");
+        let findings =
+            Findings::for_graph(&graph, &Default::default()).with_triage(&triage, &graph, true);
+        assert_eq!(
+            rules(&listed(&findings, None, "", &graph, false)),
+            ["strcpy", "memcpy"]
+        );
+        assert_eq!(
+            rules(&listed(&findings, None, "", &graph, true)),
+            ["strcpy", "system", "memcpy"]
         );
     }
 
@@ -198,7 +257,7 @@ mod tests {
         panel.toggle();
         let state = State {
             panel,
-            findings: Findings::for_graph(&graph),
+            findings: Findings::for_graph(&graph, &Default::default()),
             graph,
             picked: None,
         };

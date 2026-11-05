@@ -8,7 +8,7 @@ use egui::RichText;
 use super::findings::Findings;
 use super::locations::LocationCursor;
 use super::notebook::Notebook;
-use crate::code_view::{CodeEvent, CodeView, Focus, LineAction, LineMark, LineWarning};
+use crate::code_view::{CodeEvent, CodeView, Focus, LineAction, LineMark, LineWarning, RiskSpan};
 use crate::model::{CodeGraph, Location, OccurrenceRole, Symbol, SymbolId};
 use crate::notes::NoteTarget;
 use crate::style::severity_color;
@@ -35,6 +35,10 @@ pub enum PanelAction {
     ToggleBookmark(NoteTarget),
     /// Open the note editor for the symbol or a line.
     EditNote(NoteTarget),
+    /// Explain the finding at this index of the project's findings.
+    ShowFinding(usize),
+    /// Add this function to the dangerous-functions list.
+    MarkDangerous(String),
 }
 
 /// A line to show instead of the selected symbol's current location
@@ -109,8 +113,10 @@ impl CodePanel {
                 Some(match action {
                     LineAction::EditNote => PanelAction::EditNote(target),
                     LineAction::ToggleBookmark => PanelAction::ToggleBookmark(target),
+                    LineAction::MarkDangerous(name) => PanelAction::MarkDangerous(name),
                 })
             }
+            CodeEvent::Risk(id) => Some(PanelAction::ShowFinding(id)),
             CodeEvent::Clicked(clicked) if clicked.symbol != symbol.id => {
                 Some(PanelAction::Explore(clicked.symbol))
             }
@@ -152,6 +158,7 @@ impl CodePanel {
             (None, None) => symbol.file.as_str(),
         };
         let line_marks = line_marks_for(file, notebook, findings);
+        let risks = risks_for(file, findings);
         let focus = match reveal {
             Some(r) => Focus {
                 file: &r.file,
@@ -160,8 +167,9 @@ impl CodePanel {
                 selected: Some(symbol.id),
                 should_scroll: self.should_scroll,
                 line_marks: &line_marks,
+                risks: &risks,
             },
-            None => focus_for(symbol, location, self.should_scroll, &line_marks),
+            None => focus_for(symbol, location, self.should_scroll, &line_marks, &risks),
         };
         let event = self.view.show(ui, graph, &focus);
         let file = focus.file.to_string();
@@ -327,6 +335,25 @@ fn line_marks_for<'a>(
     marks
 }
 
+/// The snippets of `file`'s findings, by line, to highlight.
+fn risks_for<'a>(file: &str, findings: &'a Findings) -> BTreeMap<u32, Vec<RiskSpan<'a>>> {
+    let mut risks: BTreeMap<u32, Vec<RiskSpan>> = BTreeMap::new();
+    for (id, finding) in findings.snippets_in(file) {
+        let Some((start, end)) = finding.columns else {
+            continue;
+        };
+        risks.entry(finding.line).or_default().push(RiskSpan {
+            start,
+            end,
+            color: severity_color(finding.severity),
+            title: &finding.rule,
+            why: &finding.message,
+            id,
+        });
+    }
+    risks
+}
+
 /// The selected symbol's note, above its code.
 fn show_note(ui: &mut egui::Ui, text: &str) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -345,6 +372,7 @@ fn focus_for<'a>(
     location: Option<&'a Location>,
     should_scroll: bool,
     line_marks: &'a BTreeMap<u32, LineMark<'a>>,
+    risks: &'a BTreeMap<u32, Vec<RiskSpan<'a>>>,
 ) -> Focus<'a> {
     match location {
         Some(l) => Focus {
@@ -354,6 +382,7 @@ fn focus_for<'a>(
             selected: Some(symbol.id),
             should_scroll,
             line_marks,
+            risks,
         },
         None => Focus {
             file: &symbol.file,
@@ -362,6 +391,7 @@ fn focus_for<'a>(
             selected: Some(symbol.id),
             should_scroll,
             line_marks,
+            risks,
         },
     }
 }
@@ -424,7 +454,7 @@ mod tests {
     fn harness_for(source: &str, selected: &str) -> Harness<'static, State> {
         let graph = graph_of(source);
         let notebook = Notebook::open(&Project::new("t", None, graph.clone()));
-        let findings = Findings::for_graph(&graph);
+        let findings = Findings::for_graph(&graph, &Default::default());
         let state = State {
             panel: CodePanel::default(),
             selected: Some(id(&graph, selected)),
@@ -628,13 +658,52 @@ mod tests {
             .set(&project, line(2), "checked?", true)
             .expect("set");
         notebook.set(&project, line(3), "end", false).expect("set");
-        let findings = Findings::for_graph(&graph);
+        let findings = Findings::for_graph(&graph, &Default::default());
         let marks = line_marks_for("a.cpp", &notebook, &findings);
         let two = marks[&2];
         assert!(two.is_starred && two.note == "checked?");
         assert_eq!(two.warning.map(|w| w.title), Some("strcpy"));
         assert_eq!(marks[&3].warning, None);
         assert_eq!(marks.len(), 2);
+    }
+
+    #[test]
+    fn clicking_a_highlighted_risky_call_asks_for_its_explanation() {
+        let source = "void f(char *d, const char *s) {\nstrcpy(d, s);\n}\n";
+        let mut harness = harness_for(source, "f");
+        let row = harness.get_by_label("strcpy(d, s);").rect();
+        click_at(&mut harness, Pos2::new(row.left() + 10.0, row.center().y));
+        let strcpy = harness
+            .state()
+            .findings
+            .all()
+            .iter()
+            .position(|f| f.rule == "strcpy");
+        assert!(strcpy.is_some());
+        assert_eq!(
+            harness.state().last_action,
+            strcpy.map(PanelAction::ShowFinding)
+        );
+    }
+
+    #[test]
+    fn line_menu_offers_to_mark_each_called_function_as_dangerous() {
+        let source =
+            "int helper() { return 1; }\nvoid f(char *d, char *s) {\nstrcpy(d, s); helper();\n}\n";
+        let mut harness = harness_for(source, "f");
+        harness
+            .get_by_label("strcpy(d, s); helper();")
+            .click_secondary();
+        harness.run();
+        harness.get_by_label("Mark as Dangerous").click();
+        harness.run();
+        harness.get_by_label("helper");
+        harness.get_by_label("strcpy").click();
+        harness.run();
+        assert_eq!(
+            harness.state().last_action,
+            Some(PanelAction::MarkDangerous("strcpy".into()))
+        );
     }
 
     #[test]

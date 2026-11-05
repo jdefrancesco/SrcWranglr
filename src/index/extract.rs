@@ -12,8 +12,8 @@ use tree_sitter::{Node, Parser};
 
 use super::syntax::{
     clean_name, declarator_name, declared_name, field_children, find_function_declarator,
-    is_class_like, is_function_pointer, join, line_of, name_span, named_children, segments, text,
-    type_name,
+    is_class_like, is_function_pointer, join, line_of, name_span, named_children, segments,
+    span_of, text, type_name,
 };
 
 use crate::model::{EdgeKind, Span, SymbolKind};
@@ -55,10 +55,24 @@ pub struct Reference {
     pub lookup: Lookup,
     /// Where the target's name is written (`None` if it spans lines).
     pub span: Option<Span>,
-    /// Written as a plain function call, `f(...)` or `ns::f(...)` (not
+    /// Set for a plain function call, `f(...)` or `ns::f(...)` (not
     /// `obj.f(...)`): if it doesn't resolve, it calls outside the project.
-    pub is_free_call: bool,
+    pub free_call: Option<CallSite>,
 }
+
+/// What a plain function call passes, and where it is written.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CallSite {
+    /// Each argument's source text (long ones cut short).
+    pub args: Vec<String>,
+    /// From the name to the closing parenthesis when that is on one line,
+    /// else just the name.
+    pub extent: Option<Span>,
+}
+
+/// Arguments of a call kept for analysis, and how much of each.
+const MAX_CALL_ARGS: usize = 8;
+const MAX_ARG_CHARS: usize = 1024;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct FileFacts {
@@ -108,13 +122,15 @@ impl Walker<'_> {
     /// Records a reference written at `at` (a name node). Every occurrence
     /// is kept: each one is a clickable location in the code view.
     fn add_ref(&mut self, from: &str, target: String, kind: EdgeKind, lookup: Lookup, at: Node) {
-        self.push_ref(from, target, kind, lookup, at, false);
+        self.push_ref(from, target, kind, lookup, at, None);
     }
 
-    /// A plain function call `target(...)` made from `from`.
-    fn add_free_call(&mut self, from: &str, target: String, at: Node) {
+    /// A plain function call `target(...)` made from `from`; `at` is the
+    /// name, `call` the whole call expression.
+    fn add_free_call(&mut self, from: &str, target: String, at: Node, call: Node) {
         let (kind, lookup) = (EdgeKind::Calls, Lookup::ScopedOrUnique);
-        self.push_ref(from, target, kind, lookup, at, true);
+        let site = call_site(at, call, self.src);
+        self.push_ref(from, target, kind, lookup, at, Some(site));
     }
 
     fn push_ref(
@@ -124,7 +140,7 @@ impl Walker<'_> {
         kind: EdgeKind,
         lookup: Lookup,
         at: Node,
-        is_free_call: bool,
+        free_call: Option<CallSite>,
     ) {
         if target.is_empty() || from.is_empty() {
             return;
@@ -136,7 +152,7 @@ impl Walker<'_> {
             kind,
             lookup,
             span: name_span(at),
-            is_free_call,
+            free_call,
         });
     }
 
@@ -475,7 +491,7 @@ impl BodyScanner<'_, '_> {
                 let name_node = name_node.unwrap_or(function);
                 let name = clean_name(text(name_node, self.src()));
                 if !self.locals.contains_key(&name) {
-                    self.walker.add_free_call(self.from, name, name_node);
+                    self.walker.add_free_call(self.from, name, name_node, node);
                 }
             }
             "field_expression" => {
@@ -511,6 +527,28 @@ impl BodyScanner<'_, '_> {
             (None, _) => {}
         }
     }
+}
+
+/// The arguments and extent of the call expression `call`, whose name is
+/// at `name`.
+fn call_site(name: Node, call: Node, src: &str) -> CallSite {
+    let args = call
+        .child_by_field_name("arguments")
+        .map(|list| {
+            named_children(list)
+                .into_iter()
+                .filter(|arg| arg.kind() != "comment")
+                .take(MAX_CALL_ARGS)
+                .map(|arg| text(arg, src).chars().take(MAX_ARG_CHARS).collect())
+                .collect()
+        })
+        .unwrap_or_default();
+    let name_span = name_span(name);
+    let extent = match (name_span, span_of(call)) {
+        (Some(n), Some(c)) => Some(Span { end: c.end, ..n }),
+        (n, _) => n,
+    };
+    CallSite { args, extent }
 }
 
 #[cfg(test)]

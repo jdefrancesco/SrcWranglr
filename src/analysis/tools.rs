@@ -16,7 +16,9 @@ pub enum Tool {
 
 /// semgrep rules to use instead of the default `p/c`.
 const SEMGREP_CONFIG_VAR: &str = "SLURCETRAIL_SEMGREP_CONFIG";
-const SEMGREP_DEFAULT_CONFIG: &str = "p/c";
+/// slurcetrail's own semgrep rules, written next to yours before each run.
+const BUNDLED_RULES: &str = include_str!("semgrep_rules.yaml");
+pub const BUNDLED_RULES_FILE: &str = "slurcetrail-builtin.yaml";
 /// cppcheck ids about cppcheck itself (code it couldn't parse, macros or
 /// includes it couldn't see), not about the code's behavior.
 const CPPCHECK_SELF_REPORTS: &[&str] = &[
@@ -42,25 +44,26 @@ impl Tool {
         }
     }
 
-    /// Program and arguments that analyze `root`.
-    pub fn command(self, root: &Path) -> (String, Vec<String>) {
+    /// Program and arguments that analyze `root`; semgrep uses the rules
+    /// at `semgrep_rules` (a file or folder). Nothing is fetched online.
+    pub fn command(self, root: &Path, semgrep_rules: &str) -> (String, Vec<String>) {
         let root = root.to_string_lossy().into_owned();
         let args = match self {
-            Tool::Semgrep => {
-                let config = std::env::var(SEMGREP_CONFIG_VAR)
-                    .ok()
-                    .filter(|c| !c.trim().is_empty())
-                    .unwrap_or_else(|| SEMGREP_DEFAULT_CONFIG.into());
-                vec![
-                    "scan".into(),
-                    "--json".into(),
-                    "--quiet".into(),
-                    "--metrics=off".into(),
-                    "--config".into(),
-                    config,
-                    root,
-                ]
-            }
+            Tool::Semgrep => vec![
+                "scan".into(),
+                "--json".into(),
+                "--quiet".into(),
+                "--metrics=off".into(),
+                "--disable-version-check".into(),
+                // Scan everything: tests, ignored and large files included
+                // (untrusted code may hide in any of them).
+                "--no-git-ignore".into(),
+                "--x-ignore-semgrepignore-files".into(),
+                "--max-target-bytes=0".into(),
+                "--config".into(),
+                semgrep_rules.into(),
+                root,
+            ],
             Tool::Cppcheck => vec![
                 "--enable=warning,portability".into(),
                 "--inline-suppr".into(),
@@ -92,12 +95,37 @@ struct SemgrepResult {
     check_id: String,
     path: String,
     start: SemgrepPosition,
+    end: SemgrepPosition,
     extra: SemgrepExtra,
 }
 
 #[derive(Deserialize)]
 struct SemgrepPosition {
     line: u32,
+    /// 1-based, in bytes.
+    #[serde(default)]
+    col: u32,
+}
+
+/// The semgrep rules to run: `SLURCETRAIL_SEMGREP_CONFIG` if set, else
+/// `rules_dir` (yours plus the bundled ones, refreshed in it now).
+pub fn prepare_semgrep_rules(rules_dir: Option<&Path>) -> Result<String, String> {
+    if let Some(config) = std::env::var(SEMGREP_CONFIG_VAR)
+        .ok()
+        .filter(|c| !c.trim().is_empty())
+    {
+        return Ok(config);
+    }
+    let dir = rules_dir.ok_or("No home folder to keep semgrep rules in")?;
+    write_bundled_rules(dir)?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+/// Writes slurcetrail's rules into `dir`, leaving other files alone.
+fn write_bundled_rules(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir)
+        .and_then(|()| std::fs::write(dir.join(BUNDLED_RULES_FILE), BUNDLED_RULES))
+        .map_err(|e| format!("Could not write semgrep rules to {}: {e}", dir.display()))
 }
 
 #[derive(Deserialize)]
@@ -125,21 +153,31 @@ fn parse_semgrep(json: &str, root: &Path) -> Result<Vec<Finding>, String> {
             };
             Some(Finding {
                 tool: Tool::Semgrep.name().into(),
-                rule: r.check_id,
+                rule: rule_id(&r.check_id).to_string(),
                 severity: match r.extra.severity.as_str() {
                     "ERROR" => Severity::High,
                     "WARNING" => Severity::Medium,
                     _ => Severity::Low,
                 },
                 message: r.extra.message,
+                fix: None,
                 cwe,
                 file: project_relative(&r.path, root)?,
                 line: r.start.line.max(1),
+                columns: semgrep_columns(&r.start, &r.end),
                 symbol: None,
             })
         })
-        .collect();
-    Ok(findings)
+        .collect::<Vec<Finding>>();
+    // Overlapping patterns (`$P->$F` and `*$P`) can report one spot twice.
+    let mut seen = std::collections::HashSet::new();
+    Ok(findings
+        .into_iter()
+        .filter(|f| {
+            let start = f.columns.map(|(start, _)| start);
+            seen.insert((f.rule.clone(), f.file.clone(), f.line, start))
+        })
+        .collect())
 }
 
 fn parse_cppcheck(report: &str, root: &Path) -> Vec<Finding> {
@@ -165,13 +203,40 @@ fn parse_cppcheck(report: &str, root: &Path) -> Vec<Finding> {
                 rule: (*id).into(),
                 severity,
                 message: (*message).into(),
+                fix: None,
                 cwe: cwe.parse().ok().filter(|c| *c > 0),
                 file: project_relative(file, root)?,
                 line: line.parse().ok().filter(|l| *l > 0)?,
+                columns: None,
                 symbol: None,
             })
         })
         .collect()
+}
+
+/// 0-based byte columns of a result on its first line (to the end of the
+/// line if it spans several).
+fn semgrep_columns(start: &SemgrepPosition, end: &SemgrepPosition) -> Option<(u32, u32)> {
+    let first = start.col.checked_sub(1)?;
+    let last = match end.line == start.line {
+        true => end.col.checked_sub(1)?,
+        false => u32::MAX,
+    };
+    (first < last).then_some((first, last))
+}
+
+/// A semgrep rule id without the dotted path of the folder it was loaded
+/// from (`Users.me..config.slurcetrail.semgrep.my-rule` → `my-rule`), so
+/// ids, and verdicts keyed by them, don't depend on where rules live.
+fn rule_id(check_id: &str) -> &str {
+    const RULES_DIR: &str = "slurcetrail.semgrep.";
+    if let Some(i) = check_id.find(RULES_DIR) {
+        return &check_id[i + RULES_DIR.len()..];
+    }
+    match check_id.find("slurcetrail.") {
+        Some(i) => &check_id[i..],
+        None => check_id,
+    }
 }
 
 /// `CWE-676: …` → 676.
@@ -213,14 +278,14 @@ mod tests {
         let json = r#"{"results": [
             {"check_id": "c.lang.security.insecure-use-gets-fn",
              "path": "/src/proj/net/read.c",
-             "start": {"line": 12, "col": 5},
+             "start": {"line": 12, "col": 5}, "end": {"line": 12, "col": 9},
              "extra": {"message": "Avoid gets()", "severity": "ERROR",
                        "metadata": {"cwe": ["CWE-676: Use of Potentially Dangerous Function"]}}},
             {"check_id": "c.lang.style", "path": "util.c",
-             "start": {"line": 3, "col": 1},
+             "start": {"line": 3, "col": 1}, "end": {"line": 4, "col": 2},
              "extra": {"message": "style", "severity": "INFO"}},
             {"check_id": "elsewhere", "path": "/other/x.c",
-             "start": {"line": 1, "col": 1},
+             "start": {"line": 1, "col": 1}, "end": {"line": 1, "col": 2},
              "extra": {"message": "outside", "severity": "WARNING"}}
         ], "errors": []}"#;
         let findings = parse_semgrep(json, Path::new(ROOT)).expect("parse");
@@ -242,6 +307,123 @@ mod tests {
             ]
         );
         assert!(findings.iter().all(|f| f.tool == "semgrep"));
+        assert_eq!(findings[0].columns, Some((4, 8)));
+        let twice = format!(
+            "{{\"results\": [{0}, {0}]}}",
+            r#"{"check_id": "r", "path": "a.c",
+            "start": {"line": 1, "col": 1}, "end": {"line": 1, "col": 3},
+            "extra": {"message": "m", "severity": "INFO"}}"#
+        );
+        assert_eq!(
+            parse_semgrep(&twice, Path::new(ROOT)).expect("parse").len(),
+            1
+        );
+        // Spans lines: highlighted to the end of the first.
+        assert_eq!(findings[1].columns, Some((0, u32::MAX)));
+    }
+
+    #[test]
+    fn bundled_rules_are_written_without_touching_yours() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let rules = dir.path().join("semgrep");
+        std::fs::create_dir(&rules).expect("mkdir");
+        std::fs::write(rules.join("mine.yaml"), "rules: []\n").expect("write");
+        write_bundled_rules(&rules).expect("write");
+        let bundled = std::fs::read_to_string(rules.join(BUNDLED_RULES_FILE)).expect("read");
+        assert!(bundled.contains("slurcetrail.use-after-free"));
+        assert_eq!(
+            std::fs::read_to_string(rules.join("mine.yaml")).expect("read"),
+            "rules: []\n"
+        );
+    }
+
+    /// Runs the real semgrep on planted bugs: `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "needs semgrep installed; slow"]
+    fn bundled_rules_find_the_planted_bugs() {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(dir.path().join("bugs.c"), PLANTED_BUGS).expect("write");
+        let rules = dir.path().join("rules");
+        write_bundled_rules(&rules).expect("rules");
+        let (program, args) = Tool::Semgrep.command(dir.path(), &rules.to_string_lossy());
+        let output = std::process::Command::new(program)
+            .args(args)
+            .output()
+            .expect("semgrep");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let found = parse_semgrep(&stdout, dir.path()).expect("parse");
+        let mut hits: Vec<(String, u32)> = found
+            .iter()
+            .map(|f| (f.rule.trim_start_matches("rules.").to_string(), f.line))
+            .collect();
+        hits.sort();
+        let ids: Vec<String> = hits
+            .iter()
+            .map(|(rule, line)| format!("{}:{line}", rule.rsplit('.').next().unwrap_or(rule)))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "double-free:7",
+                "realloc-leak:16",
+                "return-stack-buffer:20",
+                "snprintf-return-as-length:24",
+                "strncpy-not-terminated:27",
+                "unchecked-malloc:11",
+                "use-after-free:4",
+            ],
+            "{stdout}"
+        );
+    }
+
+    /// One planted bug per bundled rule (plus safe twins that mustn't fire).
+    const PLANTED_BUGS: &str = "#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+struct node { int v; }; void uaf(struct node *n) { free(n); n->v = 1; }
+void uaf_ok(struct node *n) { free(n); n = NULL; }
+void dfree(char *p) {
+  free(p);
+  free(p);
+}
+int unchecked(void) { struct node *p = NULL; p = malloc(sizeof *p);
+  return p->v; }
+int checked(void) { struct node *p = NULL; p = malloc(sizeof *p);
+  if (p == NULL) return -1;
+  return p->v; }
+void grow(char *buf, size_t n) {
+  buf = realloc(buf, n); }
+char *stack(void) {
+  char name[32];
+  strcpy(name, \"x\");
+  return name; }
+void trunc_len(char *buf, size_t size, const char *s) {
+  int n;
+  n = snprintf(buf, size, \"%s\", s);
+  buf[n] = 0; }
+void noterm(const char *s) {
+  char d[16];
+  strncpy(d, s, sizeof(d)); puts(d); }
+void term(const char *s) {
+  char d[16];
+  strncpy(d, s, sizeof(d)); d[sizeof(d) - 1] = 0; puts(d); }
+";
+
+    #[test]
+    fn rule_ids_do_not_depend_on_the_rules_folder() {
+        assert_eq!(
+            rule_id("Users.me..config.slurcetrail.semgrep.slurcetrail.use-after-free"),
+            "slurcetrail.use-after-free"
+        );
+        assert_eq!(
+            rule_id("Users.me..config.slurcetrail.semgrep.my-rule"),
+            "my-rule"
+        );
+        assert_eq!(
+            rule_id("tmp.rules.slurcetrail.double-free"),
+            "slurcetrail.double-free"
+        );
+        assert_eq!(rule_id("c.lang.security.gets"), "c.lang.security.gets");
     }
 
     #[test]
@@ -286,10 +468,12 @@ mod tests {
 
     #[test]
     fn commands_pass_the_project_as_an_argument() {
-        let (program, args) = Tool::Cppcheck.command(Path::new("/p q/r"));
+        let (program, args) = Tool::Cppcheck.command(Path::new("/p q/r"), "");
         assert_eq!(program, "cppcheck");
         assert_eq!(args.last().map(String::as_str), Some("/p q/r"));
-        let (_, args) = Tool::Semgrep.command(Path::new("/p"));
-        assert!(args.contains(&"--metrics=off".to_string()));
+        let (_, args) = Tool::Semgrep.command(Path::new("/p"), "/rules");
+        for offline in ["--metrics=off", "--disable-version-check", "/rules"] {
+            assert!(args.contains(&offline.to_string()), "{args:?}");
+        }
     }
 }
