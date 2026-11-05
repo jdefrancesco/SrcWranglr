@@ -10,6 +10,7 @@ use super::scene::{
     Group, Pill, Scene, TextRole, Wire, GROUP_FOOTER_HEIGHT, GROUP_PADDING, PILL_PADDING_X,
 };
 use crate::model::{EdgeKind, SymbolId, SymbolKind};
+use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR};
 
 /// Alpha for wires not touching the hovered symbol.
 const DIMMED_WIRE: f32 = 0.3;
@@ -40,6 +41,20 @@ const LEGEND_SWATCH: f32 = 20.0;
 const LEGEND_SWATCH_GAP: f32 = 6.0;
 const LEGEND_ITEM_GAP: f32 = 16.0;
 const LEGEND_FONT_SIZE: f32 = 11.0;
+/// Note/bookmark dot on a pill or class box, at zoom 1 (and at least).
+const BADGE_RADIUS: f32 = 5.0;
+const MIN_BADGE_RADIUS: f32 = 3.5;
+const BADGE_OUTLINE_WIDTH: f32 = 1.5;
+/// A bookmark that also has a note gets a ring this wide in the note color.
+const BADGE_RING_WIDTH: f32 = 2.0;
+
+/// A symbol's notes, drawn as an outlined dot on its pill or box: a
+/// bookmark, a note, or a bookmark with a note (ringed in the note color).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Badge {
+    pub is_starred: bool,
+    pub has_text: bool,
+}
 
 /// Canvas colors; follows egui's light/dark theme.
 #[derive(Debug, Clone, Copy)]
@@ -163,6 +178,8 @@ pub struct Frame<'a> {
     pub origin: Pos2,
     pub hovered: Option<SymbolId>,
     pub palette: Palette,
+    /// Which symbols have notes or bookmarks.
+    pub badge_of: &'a dyn Fn(SymbolId) -> Option<Badge>,
 }
 
 impl Frame<'_> {
@@ -211,6 +228,9 @@ fn paint_group(painter: &Painter, frame: &Frame, group: &Group) {
         let pos = Pos2::new(title.left() + GROUP_PADDING * zoom, title.center().y);
         painter.text(pos, Align2::LEFT_CENTER, &group.title, font, palette.title);
     }
+    if let Some(badge) = group.id.and_then(|id| (frame.badge_of)(id)) {
+        paint_badge(painter, title.right_top(), zoom, badge);
+    }
     let footer_font = scaled(TextRole::Pill, zoom * 0.9);
     if group.hidden_members > 0 && footer_font.size >= MIN_READABLE_FONT {
         let pos = Pos2::new(
@@ -234,11 +254,30 @@ fn paint_pill(painter: &Painter, frame: &Frame, pill: &Pill) {
         Stroke::NONE
     };
     painter.rect(rect, PILL_CORNER * zoom, fill, stroke, StrokeKind::Outside);
+    if let Some(badge) = (frame.badge_of)(pill.id) {
+        paint_badge(painter, rect.right_top(), zoom, badge);
+    }
 
     let font = scaled(TextRole::Pill, zoom);
     if font.size >= MIN_READABLE_FONT {
         let pos = Pos2::new(rect.left() + PILL_PADDING_X * zoom, rect.center().y);
         painter.text(pos, Align2::LEFT_CENTER, &pill.label, font, text_color);
+    }
+}
+
+fn paint_badge(painter: &Painter, at: Pos2, zoom: f32, badge: Badge) {
+    let radius = (BADGE_RADIUS * zoom).max(MIN_BADGE_RADIUS);
+    let (fill, outline) = badge_colors(badge);
+    painter.circle(at, radius, fill, outline);
+}
+
+/// Fill and outline of a badge.
+fn badge_colors(badge: Badge) -> (Color32, Stroke) {
+    let outline = Stroke::new(BADGE_OUTLINE_WIDTH, MARK_OUTLINE);
+    match (badge.is_starred, badge.has_text) {
+        (true, true) => (BOOKMARK_COLOR, Stroke::new(BADGE_RING_WIDTH, NOTE_COLOR)),
+        (true, false) => (BOOKMARK_COLOR, outline),
+        (false, _) => (NOTE_COLOR, outline),
     }
 }
 
@@ -402,5 +441,88 @@ mod tests {
     fn palette_follows_theme() {
         assert!(Palette::for_visuals(&egui::Visuals::dark()).is_dark);
         assert!(!Palette::for_visuals(&egui::Visuals::light()).is_dark);
+    }
+
+    /// Every circle `paint` draws for `scene`, with `badge_of`.
+    fn painted_circles(
+        scene: &Scene,
+        badge_of: &dyn Fn(SymbolId) -> Option<Badge>,
+    ) -> Vec<egui::epaint::CircleShape> {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let frame = Frame {
+                scene,
+                camera: Camera::default(),
+                origin: Pos2::ZERO,
+                hovered: None,
+                palette: Palette::for_visuals(ui.visuals()),
+                badge_of,
+            };
+            paint(ui.painter(), &frame);
+        });
+        let mut output = output;
+        output.textures_delta.clear();
+        output
+            .shapes
+            .into_iter()
+            .filter_map(|clipped| match clipped.shape {
+                egui::Shape::Circle(circle) => Some(circle),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn badges_are_painted_on_marked_pills_only() {
+        let pill = |id, y| crate::graph::scene::Pill {
+            id,
+            label: format!("f{id}"),
+            kind: SymbolKind::Method,
+            rect: Rect::from_min_size(Pos2::new(10.0, y), Vec2::new(80.0, 22.0)),
+        };
+        let scene = Scene {
+            pills: vec![pill(1, 10.0), pill(2, 40.0), pill(3, 70.0)],
+            ..Scene::default()
+        };
+        let badge_of = |id| match id {
+            1 => Some(Badge {
+                is_starred: false,
+                has_text: true,
+            }),
+            3 => Some(Badge {
+                is_starred: true,
+                has_text: false,
+            }),
+            _ => None,
+        };
+        let fills: Vec<Color32> = painted_circles(&scene, &badge_of)
+            .iter()
+            .map(|c| c.fill)
+            .collect();
+        assert_eq!(fills, [NOTE_COLOR, BOOKMARK_COLOR]);
+    }
+
+    #[test]
+    fn badge_colors_show_bookmark_note_or_both() {
+        let badge = |is_starred, has_text| Badge {
+            is_starred,
+            has_text,
+        };
+        let fill_and_stroke = |b| {
+            let (fill, stroke) = badge_colors(b);
+            (fill, stroke.color)
+        };
+        assert_eq!(
+            fill_and_stroke(badge(true, false)),
+            (BOOKMARK_COLOR, MARK_OUTLINE)
+        );
+        assert_eq!(
+            fill_and_stroke(badge(false, true)),
+            (NOTE_COLOR, MARK_OUTLINE)
+        );
+        assert_eq!(
+            fill_and_stroke(badge(true, true)),
+            (BOOKMARK_COLOR, NOTE_COLOR)
+        );
     }
 }

@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use super::extract::{Decl, FileFacts, Lookup, Reference};
 use crate::model::{
-    CodeGraph, Edge, EdgeKind, Occurrence, OccurrenceRole, Symbol, SymbolId, SymbolKind,
+    CodeGraph, Edge, EdgeKind, ExternalCall, Occurrence, OccurrenceRole, Symbol, SymbolId,
+    SymbolKind,
 };
 
 /// A reference whose source and target symbols are both known.
@@ -68,12 +69,21 @@ pub fn build_graph(files: Vec<SourceFile>) -> CodeGraph {
         })
         .collect();
 
+    let external_calls = files
+        .iter()
+        .filter_map(|file| {
+            let calls = external_calls_in(&file.facts, &by_qname, &mut resolver);
+            (!calls.is_empty()).then(|| (file.path.clone(), calls))
+        })
+        .collect();
+
     let file_contents = files.into_iter().map(|f| (f.path, f.contents)).collect();
     CodeGraph {
         symbols,
         edges,
         file_contents,
         occurrences,
+        external_calls,
     }
 }
 
@@ -95,6 +105,31 @@ fn resolve_file<'f>(
             })
         })
         .collect()
+}
+
+/// Plain function calls in one file that resolve to no project symbol,
+/// sorted by position.
+fn external_calls_in<'f>(
+    facts: &'f FileFacts,
+    by_qname: &HashMap<&str, SymbolId>,
+    resolver: &mut MemoResolver<'_, 'f>,
+) -> Vec<ExternalCall> {
+    let mut calls: Vec<ExternalCall> = facts
+        .refs
+        .iter()
+        .filter(|r| r.is_free_call)
+        .filter_map(|r| {
+            let caller = *by_qname.get(&*r.from)?;
+            let span = r.span?;
+            resolver.resolve(r).is_none().then(|| ExternalCall {
+                caller,
+                name: r.target.clone(),
+                span,
+            })
+        })
+        .collect();
+    calls.sort_by_key(|c| c.span);
+    calls
 }
 
 /// Declared names and resolved references in one file, sorted by position.
@@ -628,6 +663,23 @@ mod tests {
         let recursive = occurrence_at(&graph, "a.cpp", 1, 26).expect("recursive call");
         assert_eq!((recursive.symbol, recursive.context), (fact, Some(fact)));
         assert!(!graph.edges.iter().any(|e| e.from == fact && e.to == fact));
+    }
+
+    #[test]
+    fn unresolved_free_calls_are_kept_as_external_calls() {
+        let source = "void helper() {}\n\
+            struct Sock { void write(int); };\n\
+            void f(char *d, const char *s, Sock obj) {\n\
+            \x20 strcpy(d, s); helper(); obj.write(1); std::memcpy(d, s, 1);\n\
+            }\n";
+        let graph = graph_of(&[("a.c", source)]);
+        let f = id(&graph, "f");
+        let calls: Vec<(&str, SymbolId, u32, u32)> = graph.external_calls["a.c"]
+            .iter()
+            .map(|c| (c.name.as_str(), c.caller, c.span.line, c.span.start))
+            .collect();
+        // helper() resolves; obj.write() is a member call, never external.
+        assert_eq!(calls, [("strcpy", f, 4, 2), ("std::memcpy", f, 4, 45)]);
     }
 
     #[test]

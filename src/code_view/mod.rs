@@ -9,12 +9,14 @@ mod segments;
 mod tokenize;
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use egui::text::{CCursor, Galley, LayoutJob, TextFormat};
-use egui::{Color32, CursorIcon, RichText, Sense, Stroke};
+use egui::{Color32, CursorIcon, Response, RichText, Sense, Stroke};
 
 use crate::model::{CodeGraph, Occurrence, Span, SymbolId};
+use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR};
 use segments::{merge, Mark, Segment};
 use tokenize::colored_ranges;
 
@@ -25,6 +27,11 @@ const SELECTED_NAME_BACKGROUND: Color32 = Color32::from_rgb(0x2E, 0x45, 0x63);
 const LINK_UNDERLINE_ALPHA: f32 = 0.35;
 const LINE_NUMBER_COLOR: Color32 = Color32::from_gray(90);
 const GUTTER_WIDTH: f32 = 52.0;
+/// Gutter marker for a line with a note or bookmark.
+const MARKER_RADIUS: f32 = 3.5;
+const MARKER_INSET: f32 = 9.0;
+/// Width of the bar at the gutter's left edge marking a warning.
+const WARNING_BAR_WIDTH: f32 = 3.0;
 /// Longer lines (minified/generated code) are clipped for display; shaping a
 /// multi-megabyte line every frame would freeze the UI.
 const MAX_DISPLAY_CHARS: usize = 2_000;
@@ -44,6 +51,41 @@ pub struct Focus<'a> {
     pub selected: Option<SymbolId>,
     /// Scroll `line` into view (set on the frame the focus changes).
     pub should_scroll: bool,
+    /// Lines of `file` with a note or bookmark.
+    pub line_marks: &'a BTreeMap<u32, LineMark<'a>>,
+}
+
+/// What the gutter shows for a line: its note (possibly empty), whether
+/// it is bookmarked, and a warning (a finding) on it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LineMark<'a> {
+    pub is_starred: bool,
+    pub note: &'a str,
+    pub warning: Option<LineWarning<'a>>,
+}
+
+/// A finding on a line: `title: text`, drawn as a bar in `color`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineWarning<'a> {
+    pub title: &'a str,
+    pub text: &'a str,
+    pub color: Color32,
+}
+
+/// What the user asked for on one line, from its right-click menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineAction {
+    EditNote,
+    ToggleBookmark,
+}
+
+/// Something the user did in the code view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeEvent {
+    /// Clicked a resolved name.
+    Clicked(Occurrence),
+    /// Chose a line action for this 1-based line.
+    Line(u32, LineAction),
 }
 
 /// Source viewer. Keeps the line index of the file it last showed, so
@@ -67,13 +109,13 @@ struct Rows<'a> {
 
 impl CodeView {
     /// Renders `focus.file`. Only visible rows are laid out, so large files
-    /// stay cheap. Returns the occurrence whose name was clicked, if any.
+    /// stay cheap. Returns what the user did, if anything.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         graph: &CodeGraph,
         focus: &Focus,
-    ) -> Option<Occurrence> {
+    ) -> Option<CodeEvent> {
         let Some(contents) = graph.file_contents.get(focus.file) else {
             ui.label(format!("Source for {} is not available.", focus.file));
             return None;
@@ -131,7 +173,7 @@ fn is_comfortably_visible(row: usize, visible: &Range<usize>) -> bool {
 }
 
 impl Rows<'_> {
-    fn show_line(&self, ui: &mut egui::Ui, idx: usize, range: Range<usize>) -> Option<Occurrence> {
+    fn show_line(&self, ui: &mut egui::Ui, idx: usize, range: Range<usize>) -> Option<CodeEvent> {
         let text = self.contents.get(range).unwrap_or("");
         let line_no = u32::try_from(idx + 1).unwrap_or(u32::MAX);
         let (shown, visible_len) = display_text(text);
@@ -152,21 +194,33 @@ impl Rows<'_> {
                 let row = egui::Rect::from_min_size(ui.cursor().min, size);
                 ui.painter().rect_filled(row, 0.0, ACTIVE_LINE_BACKGROUND);
             }
-            ui.add_sized(
+            let mark = self.focus.line_marks.get(&line_no);
+            let gutter = ui.add_sized(
                 [GUTTER_WIDTH, self.row_height],
                 egui::Label::new(
                     RichText::new(format!("{line_no:>5} "))
                         .font(self.font.clone())
                         .color(LINE_NUMBER_COLOR),
-                ),
+                )
+                .sense(Sense::click()),
             );
+            let gutter = match mark {
+                Some(mark) => paint_marker(ui, gutter, mark),
+                None => gutter,
+            };
             let is_focus_line = line_no == self.focus.line;
-            self.show_code(ui, galley, &shown, occurrences, visible_len, is_focus_line)
+            let (clicked, code) =
+                self.show_code(ui, galley, &shown, occurrences, visible_len, is_focus_line);
+            let action = line_menu(&gutter, &shown, mark).or(line_menu(&code, &shown, mark));
+            action
+                .map(|a| CodeEvent::Line(line_no, a))
+                .or(clicked.map(CodeEvent::Clicked))
         })
         .inner
     }
 
     /// Paints one line of code and handles hovering/clicking its names.
+    /// Returns the clicked occurrence and the line's response.
     fn show_code(
         &self,
         ui: &mut egui::Ui,
@@ -175,18 +229,39 @@ impl Rows<'_> {
         occurrences: &[Occurrence],
         visible_len: usize,
         is_focus_line: bool,
-    ) -> Option<Occurrence> {
+    ) -> (Option<Occurrence>, Response) {
         let size = egui::vec2(galley.size().x, self.row_height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, shown));
         ui.painter()
             .galley(rect.min, galley.clone(), Color32::from_gray(210));
-        response.context_menu(|ui| {
-            if ui.button("Copy line").clicked() {
-                ui.ctx().copy_text(shown.to_string());
-                ui.close();
-            }
-        });
+        let line = DrawnLine {
+            rect,
+            galley: &galley,
+            shown,
+            occurrences,
+            visible_len,
+            is_focus_line,
+        };
+        (self.clicked_name(ui, &response, &line), response)
+    }
+
+    /// Scrolls the focused name into view, and shows/returns the name under
+    /// the pointer when hovered/clicked.
+    fn clicked_name(
+        &self,
+        ui: &egui::Ui,
+        response: &Response,
+        line: &DrawnLine,
+    ) -> Option<Occurrence> {
+        let DrawnLine {
+            rect,
+            galley,
+            shown,
+            occurrences,
+            visible_len,
+            is_focus_line,
+        } = *line;
 
         let x_of = |byte: usize| {
             let chars = shown.get(..byte).map_or(0, |s| s.chars().count());
@@ -207,6 +282,7 @@ impl Rows<'_> {
         let hit = *occurrence_at_x(occurrences, visible_len, pointer_x, x_of)?;
         let symbol = self.graph.symbols.get(&hit.symbol)?;
         let response = response
+            .clone()
             .on_hover_cursor(CursorIcon::PointingHand)
             .on_hover_ui_at_pointer(|ui| {
                 ui.strong(&symbol.qualified_name);
@@ -230,6 +306,80 @@ impl Rows<'_> {
             Mark::Link
         }
     }
+}
+
+/// One painted line of code, for hit-testing its names.
+#[derive(Clone, Copy)]
+struct DrawnLine<'a> {
+    rect: egui::Rect,
+    galley: &'a Galley,
+    shown: &'a str,
+    occurrences: &'a [Occurrence],
+    visible_len: usize,
+    is_focus_line: bool,
+}
+
+/// Draws a line's warning bar and note/bookmark dot in the gutter;
+/// hovering the gutter explains them.
+fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
+    let mut explanations: Vec<String> = Vec::new();
+    if let Some(warning) = mark.warning {
+        let bar = egui::Rect::from_min_size(
+            gutter.rect.left_top(),
+            egui::vec2(WARNING_BAR_WIDTH, gutter.rect.height()),
+        );
+        ui.painter().rect_filled(bar, 0.0, warning.color);
+        explanations.push(format!("{}: {}", warning.title, warning.text));
+    }
+    if mark.is_starred || !mark.note.is_empty() {
+        let color = if mark.is_starred {
+            BOOKMARK_COLOR
+        } else {
+            NOTE_COLOR
+        };
+        let center = egui::pos2(gutter.rect.left() + MARKER_INSET, gutter.rect.center().y);
+        let outline = Stroke::new(1.0, MARK_OUTLINE);
+        ui.painter().circle(center, MARKER_RADIUS, color, outline);
+        explanations.push(match mark.note {
+            "" => "Bookmarked line".to_string(),
+            note => note.to_string(),
+        });
+    }
+    gutter.on_hover_text(explanations.join("\n\n"))
+}
+
+/// The right-click menu of a line (on its number or its code).
+fn line_menu(response: &Response, shown: &str, mark: Option<&LineMark>) -> Option<LineAction> {
+    let has_note = mark.is_some_and(|m| !m.note.is_empty());
+    let is_starred = mark.is_some_and(|m| m.is_starred);
+    let mut action = None;
+    response.context_menu(|ui| {
+        if ui.button("Copy Line").clicked() {
+            ui.ctx().copy_text(shown.to_string());
+            ui.close();
+        }
+        ui.separator();
+        let note = if has_note {
+            "Edit Note…"
+        } else {
+            "Add Note…"
+        };
+        let star = if is_starred {
+            "Remove Bookmark"
+        } else {
+            "Bookmark Line"
+        };
+        if ui.button(note).clicked() {
+            action = Some(LineAction::EditNote);
+        }
+        if ui.button(star).clicked() {
+            action = Some(LineAction::ToggleBookmark);
+        }
+        if action.is_some() {
+            ui.close();
+        }
+    });
+    action
 }
 
 fn byte_range(span: Span, visible_len: usize) -> Range<usize> {

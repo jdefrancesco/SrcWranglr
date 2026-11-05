@@ -1,5 +1,6 @@
 //! What the quick-open palette lists for a query: symbols by fuzzy match on
-//! their qualified name, or app commands when the query starts with `>`.
+//! their qualified name, app commands when the query starts with `>`, or
+//! notes and bookmarks when it starts with `#`.
 
 use std::cmp::Reverse;
 
@@ -10,12 +11,22 @@ use crate::model::SymbolId;
 
 /// Typing this first switches the palette from symbols to commands.
 pub const COMMAND_PREFIX: char = '>';
+/// Typing this first switches the palette to notes and bookmarks.
+pub const NOTE_PREFIX: char = '#';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     OpenProject,
     Reindex,
     Overview,
+    GoToEntryPoint,
+    OpenInEditor,
+    ToggleBookmark,
+    EditNote,
+    ShowNotes,
+    ShowFindings,
+    RunSemgrep,
+    RunCppcheck,
     Back,
     Fit,
     TrailView,
@@ -24,10 +35,18 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 8] = [
+    pub const ALL: [Command; 16] = [
         Command::OpenProject,
         Command::Reindex,
         Command::Overview,
+        Command::GoToEntryPoint,
+        Command::OpenInEditor,
+        Command::ToggleBookmark,
+        Command::EditNote,
+        Command::ShowNotes,
+        Command::ShowFindings,
+        Command::RunSemgrep,
+        Command::RunCppcheck,
         Command::Back,
         Command::Fit,
         Command::TrailView,
@@ -40,6 +59,14 @@ impl Command {
             Command::OpenProject => "Open Project…",
             Command::Reindex => "Re-index Project",
             Command::Overview => "Show Overview",
+            Command::GoToEntryPoint => "Go to Entry Point (main)",
+            Command::OpenInEditor => "Open in Editor",
+            Command::ToggleBookmark => "Toggle Bookmark on Symbol",
+            Command::EditNote => "Note on Symbol…",
+            Command::ShowNotes => "Notes & Bookmarks",
+            Command::ShowFindings => "Findings (risky calls)",
+            Command::RunSemgrep => "Run semgrep",
+            Command::RunCppcheck => "Run cppcheck",
             Command::Back => "Go Back",
             Command::Fit => "Fit Graph to Window",
             Command::TrailView => "View: Trail (callers and callees)",
@@ -53,16 +80,30 @@ impl Command {
 pub enum Entry {
     Symbol(SymbolId),
     Command(Command),
+    /// A note, by its index in the notes passed to `search`.
+    Note(usize),
 }
 
 /// Up to `limit` entries for `query`, best first. `symbols` are
-/// `(id, qualified name)` in display order, used as-is for an empty query
-/// and as the tie-breaker otherwise.
-pub fn search<S: AsRef<str>>(symbols: &[(SymbolId, S)], query: &str, limit: usize) -> Vec<Entry> {
-    match query.trim_start().strip_prefix(COMMAND_PREFIX) {
-        Some(command_query) => search_commands(command_query, limit),
-        None => search_symbols(symbols, query, limit),
+/// `(id, qualified name)` and `notes` `(index, label)`, in display order,
+/// used as-is for an empty query and as the tie-breaker otherwise.
+pub fn search<S: AsRef<str>, N: AsRef<str>>(
+    symbols: &[(SymbolId, S)],
+    notes: &[(usize, N)],
+    query: &str,
+    limit: usize,
+) -> Vec<Entry> {
+    let query = query.trim_start();
+    if let Some(command_query) = query.strip_prefix(COMMAND_PREFIX) {
+        return search_commands(command_query, limit);
     }
+    if let Some(note_query) = query.strip_prefix(NOTE_PREFIX) {
+        return ranked(notes, note_query, limit)
+            .into_iter()
+            .map(Entry::Note)
+            .collect();
+    }
+    search_symbols(symbols, query, limit)
 }
 
 fn search_commands(query: &str, limit: usize) -> Vec<Entry> {
@@ -133,6 +174,12 @@ impl AsRef<str> for Indexed<'_> {
 mod tests {
     use super::*;
 
+    const NO_NOTES: &[(usize, &str)] = &[];
+    const NOTES: &[(usize, &str)] = &[
+        (0, "★ leveldb::DBImpl::Write — takes the mutex"),
+        (1, "net.c:40 — length unchecked"),
+    ];
+
     const SYMBOLS: &[(SymbolId, &str)] = &[
         (0, "leveldb::DBImpl"),
         (1, "leveldb::DBImpl::MakeRoomForWrite"),
@@ -142,11 +189,11 @@ mod tests {
     ];
 
     fn symbols(query: &str) -> Vec<SymbolId> {
-        search(SYMBOLS, query, 10)
+        search(SYMBOLS, NO_NOTES, query, 10)
             .into_iter()
             .map(|e| match e {
                 Entry::Symbol(id) => id,
-                Entry::Command(c) => panic!("unexpected command {c:?}"),
+                other => panic!("unexpected {other:?}"),
             })
             .collect()
     }
@@ -166,7 +213,7 @@ mod tests {
     #[test]
     fn empty_query_lists_symbols_in_order_up_to_the_limit() {
         let first_three: Vec<Entry> = [0, 1, 2].map(Entry::Symbol).into();
-        assert_eq!(search(SYMBOLS, "  ", 3), first_three);
+        assert_eq!(search(SYMBOLS, NO_NOTES, "  ", 3), first_three);
     }
 
     #[test]
@@ -177,16 +224,31 @@ mod tests {
     #[test]
     fn prefix_switches_to_commands() {
         assert_eq!(
-            search(SYMBOLS, ">hier", 10),
+            search(SYMBOLS, NO_NOTES, ">hier", 10),
             [Entry::Command(Command::CallHierarchy)]
         );
-        assert_eq!(search(SYMBOLS, ">", 100).len(), Command::ALL.len());
-        assert!(search(SYMBOLS, " >quit", 10).contains(&Entry::Command(Command::Quit)));
+        assert_eq!(
+            search(SYMBOLS, NO_NOTES, ">", 100).len(),
+            Command::ALL.len()
+        );
+        assert!(search(SYMBOLS, NO_NOTES, " >quit", 10).contains(&Entry::Command(Command::Quit)));
+    }
+
+    #[test]
+    fn hash_prefix_searches_notes() {
+        assert_eq!(search(SYMBOLS, NOTES, "#unchecked", 10), [Entry::Note(1)]);
+        assert_eq!(
+            search(SYMBOLS, NOTES, "#", 10),
+            [Entry::Note(0), Entry::Note(1)]
+        );
+        assert!(search(SYMBOLS, NO_NOTES, "# write", 10).is_empty());
+        // Without the prefix, notes aren't searched.
+        assert!(!search(SYMBOLS, NOTES, "unchecked", 10).contains(&Entry::Note(1)));
     }
 
     #[test]
     fn limit_caps_results_keeping_the_best() {
-        assert_eq!(search(SYMBOLS, "l", 2).len(), 2);
-        assert_eq!(search(SYMBOLS, "write", 1), [Entry::Symbol(2)]);
+        assert_eq!(search(SYMBOLS, NO_NOTES, "l", 2).len(), 2);
+        assert_eq!(search(SYMBOLS, NO_NOTES, "write", 1), [Entry::Symbol(2)]);
     }
 }

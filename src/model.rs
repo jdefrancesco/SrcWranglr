@@ -101,6 +101,17 @@ pub struct Occurrence {
     pub context: Option<SymbolId>,
 }
 
+/// A call, written `f(...)` or `ns::f(...)`, to a function the project
+/// doesn't define: the C library, the OS, third-party APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalCall {
+    /// The project symbol making the call.
+    pub caller: SymbolId,
+    /// The called name as written, e.g. `strcpy` or `std::memcpy`.
+    pub name: String,
+    pub span: Span,
+}
+
 /// An occurrence together with the file it is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Location {
@@ -116,6 +127,8 @@ pub struct CodeGraph {
     pub file_contents: HashMap<String, String>,
     /// Occurrences per file, sorted by span.
     pub occurrences: HashMap<String, Vec<Occurrence>>,
+    /// Calls to functions outside the project, per file, sorted by span.
+    pub external_calls: HashMap<String, Vec<ExternalCall>>,
 }
 
 impl CodeGraph {

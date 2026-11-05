@@ -1,10 +1,11 @@
-//! The currently loaded project: its graph plus a name-sorted symbol index
-//! for the symbol list.
+//! The currently loaded project: its graph plus indexes computed once per
+//! load (symbols in name order, how many symbols use each one).
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::demo::demo_codebase;
-use crate::model::{CodeGraph, SymbolId};
+use crate::model::{CodeGraph, EdgeKind, Symbol, SymbolId};
 
 pub struct Project {
     pub name: String,
@@ -15,6 +16,10 @@ pub struct Project {
     sorted_ids: Vec<SymbolId>,
     /// `(id, qualified name)` in name order, for quick-open search.
     search_names: Vec<(SymbolId, String)>,
+    /// How many distinct symbols call, use, or derive from each symbol.
+    usage: HashMap<SymbolId, usize>,
+    /// Symbols by qualified name (overloads and repeated names share one).
+    by_qualified_name: HashMap<String, Vec<SymbolId>>,
 }
 
 impl Project {
@@ -28,12 +33,25 @@ impl Project {
             .iter()
             .filter_map(|id| Some((*id, graph.symbols.get(id)?.qualified_name.clone())))
             .collect();
+        let usage = usage_counts(&graph);
+        let by_qualified_name = sorted_ids
+            .iter()
+            .filter_map(|id| Some((graph.symbols.get(id)?.qualified_name.clone(), *id)))
+            .fold(
+                HashMap::new(),
+                |mut map: HashMap<String, Vec<SymbolId>>, (name, id)| {
+                    map.entry(name).or_default().push(id);
+                    map
+                },
+            );
         Self {
             name: name.into(),
             root,
             graph,
             sorted_ids,
             search_names,
+            usage,
+            by_qualified_name,
         }
     }
 
@@ -48,15 +66,10 @@ impl Project {
     /// The symbol with exactly this qualified name, else the only symbol
     /// with this short name.
     pub fn find(&self, name: &str) -> Option<SymbolId> {
-        let symbols = || {
-            self.sorted_ids
-                .iter()
-                .filter_map(|id| self.graph.symbols.get(id))
-        };
-        if let Some(exact) = symbols().find(|s| s.qualified_name == name) {
+        if let Some(exact) = self.symbols_by_name().find(|s| s.qualified_name == name) {
             return Some(exact.id);
         }
-        let mut by_name = symbols().filter(|s| s.name == name);
+        let mut by_name = self.symbols_by_name().filter(|s| s.name == name);
         let first = by_name.next()?;
         by_name.next().is_none().then_some(first.id)
     }
@@ -66,49 +79,45 @@ impl Project {
         &self.search_names
     }
 
-    /// Ids whose qualified name contains `query` (case-insensitive), in name order.
-    pub fn filter(&self, query: &str) -> Vec<SymbolId> {
-        let needle = query.trim().to_lowercase();
-        if needle.is_empty() {
-            return self.sorted_ids.clone();
-        }
+    /// Every symbol, in qualified-name order.
+    pub fn symbols_by_name(&self) -> impl Iterator<Item = &Symbol> {
         self.sorted_ids
             .iter()
-            .copied()
-            .filter(|id| {
-                self.graph
-                    .symbols
-                    .get(id)
-                    .is_some_and(|s| s.qualified_name.to_lowercase().contains(&needle))
-            })
-            .collect()
+            .filter_map(|id| self.graph.symbols.get(id))
     }
+
+    /// Every symbol with exactly this qualified name.
+    pub fn ids_named(&self, qualified_name: &str) -> &[SymbolId] {
+        self.by_qualified_name
+            .get(qualified_name)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// How many distinct symbols reference `id` (calls, uses, base
+    /// classes; being a member doesn't count).
+    pub fn usage(&self, id: SymbolId) -> usize {
+        self.usage.get(&id).copied().unwrap_or(0)
+    }
+}
+
+fn usage_counts(graph: &CodeGraph) -> HashMap<SymbolId, usize> {
+    let users: HashSet<(SymbolId, SymbolId)> = graph
+        .edges
+        .iter()
+        .filter(|e| e.kind != EdgeKind::Contains && e.from != e.to)
+        .map(|e| (e.from, e.to))
+        .collect();
+    users
+        .into_iter()
+        .fold(HashMap::new(), |mut counts, (_, to)| {
+            *counts.entry(to).or_insert(0) += 1;
+            counts
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn names(project: &Project, ids: &[SymbolId]) -> Vec<String> {
-        ids.iter()
-            .map(|id| project.graph.symbols[id].qualified_name.clone())
-            .collect()
-    }
-
-    #[test]
-    fn empty_query_lists_all_symbols_sorted_by_name() {
-        let project = Project::demo().expect("demo");
-        let all = names(&project, &project.filter(""));
-        assert_eq!(all.len(), project.graph.symbols.len());
-        assert!(all.windows(2).all(|w| w[0] <= w[1]));
-    }
-
-    #[test]
-    fn filter_is_case_insensitive_substring_match() {
-        let project = Project::demo().expect("demo");
-        let hits = names(&project, &project.filter("  cIRcle::A "));
-        assert_eq!(hits, ["Circle::area"]);
-    }
 
     #[test]
     fn find_prefers_exact_qualified_name_then_unique_short_name() {
@@ -128,15 +137,27 @@ mod tests {
     }
 
     #[test]
-    fn filter_with_no_matches_is_empty() {
+    fn usage_counts_distinct_symbols_that_reference_one() {
         let project = Project::demo().expect("demo");
-        assert!(project.filter("zzz_nothing").is_empty());
+        let usage = |name: &str| project.usage(project.find(name).expect(name));
+        // Circle and Square both derive from Shape.
+        assert_eq!(usage("Shape"), 2);
+        // main calls total_area (members don't count as uses).
+        assert_eq!(usage("total_area"), 1);
+        assert_eq!(usage("main"), 0);
+    }
+
+    #[test]
+    fn ids_named_finds_symbols_by_exact_qualified_name() {
+        let project = Project::demo().expect("demo");
+        assert_eq!(project.ids_named("Circle::area").len(), 1);
+        assert!(project.ids_named("area").is_empty());
     }
 
     #[test]
     fn empty_project_has_no_symbols() {
         let project = Project::empty();
-        assert!(project.filter("").is_empty());
+        assert_eq!(project.symbols_by_name().count(), 0);
         assert!(project.root.is_none());
     }
 }

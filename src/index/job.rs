@@ -18,7 +18,8 @@ const WORKER_STACK_BYTES: usize = 256 * 1024 * 1024;
 
 enum IndexEvent {
     Progress(Progress),
-    Finished(Result<IndexOutcome, IndexError>),
+    /// Boxed: the whole indexed graph is much bigger than a progress tick.
+    Finished(Box<Result<IndexOutcome, IndexError>>),
 }
 
 pub struct IndexJob {
@@ -59,7 +60,7 @@ impl IndexJob {
                     eprintln!("indexer panicked: {reason}");
                     Err(IndexError::WorkerCrashed)
                 });
-                let _ = tx.send(IndexEvent::Finished(result));
+                let _ = tx.send(IndexEvent::Finished(Box::new(result)));
                 ctx.request_repaint();
             });
 
@@ -80,7 +81,7 @@ impl IndexJob {
     fn with_immediate_result(mut self, result: Result<IndexOutcome, IndexError>) -> Self {
         let (tx, events) = mpsc::channel();
         // The receiver is alive right here, so this send cannot fail.
-        let _ = tx.send(IndexEvent::Finished(result));
+        let _ = tx.send(IndexEvent::Finished(Box::new(result)));
         self.events = events;
         self
     }
@@ -107,7 +108,7 @@ impl IndexJob {
                 Ok(IndexEvent::Progress(p)) => self.progress = p,
                 Ok(IndexEvent::Finished(result)) => {
                     self.is_finished = true;
-                    return Some(result);
+                    return Some(*result);
                 }
                 Err(TryRecvError::Empty) => return None,
                 Err(TryRecvError::Disconnected) => {

@@ -2,10 +2,19 @@
 //! the lifecycle of background indexing jobs.
 
 mod code_panel;
+mod editor;
+mod findings;
+mod findings_panel;
 pub mod launch;
 mod locations;
+mod note_editor;
+mod notebook;
+mod notes_actions;
+mod notes_panel;
 mod palette;
 mod project;
+mod symbol_list;
+mod tool_job;
 
 use std::path::PathBuf;
 
@@ -13,15 +22,34 @@ use launch::LaunchOptions;
 
 use egui::{Color32, Key, KeyboardShortcut, Modifiers, RichText};
 
-use crate::graph::{GraphView, ViewMode};
+use crate::analysis;
+use crate::graph::{Badge, GraphView, ViewMode};
 use crate::index::job::IndexJob;
 use crate::index::{IndexError, IndexOptions, IndexOutcome};
-use crate::model::SymbolId;
-use code_panel::CodePanel;
+use code_panel::{CodePanel, PanelAction};
+use editor::SourcePosition;
+use findings::Findings;
+use findings_panel::FindingsPanel;
+use note_editor::NoteEditor;
+use notebook::Notebook;
+use notes_panel::{NotesPanel, NotesPanelAction};
 use palette::{Command, Entry, Palette, OPEN_COMMAND_SHORTCUT, OPEN_SYMBOL_SHORTCUT};
 use project::Project;
+use symbol_list::SymbolList;
+use tool_job::ToolJob;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
+const ENTRY_POINT_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::E);
+const EDITOR_SHORTCUT: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::E);
+const BOOKMARK_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::D);
+const NOTE_SHORTCUT: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N);
+const NOTES_PANEL_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::B);
+const FINDINGS_SHORTCUT: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::R);
+/// Entry points listed in the Go menu (all of them are reachable with ⌘E).
+const MAX_ENTRY_MENU_ITEMS: usize = 25;
 const APP_NAME: &str = "slurcetrail";
 const ERROR_COLOR: Color32 = Color32::from_rgb(0xE0, 0x6C, 0x6C);
 const WARNING_COLOR: Color32 = Color32::from_rgb(0xD9, 0xA6, 0x4A);
@@ -36,10 +64,15 @@ pub struct SlurcetrailApp {
     graph_view: GraphView,
     code_panel: CodePanel,
     palette: Palette,
-    search_query: String,
-    /// Symbol-list rows for `filtered_for`; `None` means stale.
-    filtered: Vec<SymbolId>,
-    filtered_for: Option<String>,
+    symbol_list: SymbolList,
+    notebook: Notebook,
+    /// The note being edited, if the editor is open.
+    note_editor: Option<NoteEditor>,
+    notes_panel: NotesPanel,
+    findings: Findings,
+    findings_panel: FindingsPanel,
+    /// External analyzers still running.
+    tool_jobs: Vec<ToolJob>,
     job: Option<IndexJob>,
     status: Status,
     warnings: Vec<String>,
@@ -63,14 +96,20 @@ impl SlurcetrailApp {
                 Status::Error(format!("Could not load the demo: {e}")),
             ),
         };
+        let notebook = Notebook::open(&project);
+        let findings = Findings::for_graph(&project.graph);
         let mut app = Self {
+            findings,
+            findings_panel: FindingsPanel::default(),
+            tool_jobs: Vec::new(),
             project,
+            notebook,
+            note_editor: None,
+            notes_panel: NotesPanel::default(),
             graph_view: GraphView::default(),
             code_panel: CodePanel::default(),
             palette: Palette::default(),
-            search_query: String::new(),
-            filtered: Vec::new(),
-            filtered_for: None,
+            symbol_list: SymbolList::default(),
             job: None,
             status,
             warnings: Vec::new(),
@@ -134,16 +173,50 @@ impl SlurcetrailApp {
             outcome.graph.symbols.len(),
             outcome.graph.edges.len()
         ));
+        self.findings = Findings::for_graph(&outcome.graph);
+        // Their results belong to the old project.
+        self.tool_jobs.clear();
+        self.report_findings();
         self.project = Project::new(name.clone(), Some(root), outcome.graph);
+        self.notebook = Notebook::open(&self.project);
+        self.note_editor = None;
+        self.report_notes_on_open();
         // A new project starts with a fresh selection, in the same view mode.
         self.graph_view = GraphView::with_mode(self.graph_view.mode());
         self.code_panel = CodePanel::default();
         // Palette results hold ids from the old project.
         self.palette = Palette::default();
-        self.filtered_for = None;
+        self.symbol_list.invalidate();
         self.warnings = outcome.warnings;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{APP_NAME} — {name}")));
         self.apply_pending_symbol();
+    }
+
+    /// Adds the number of risky calls to the status.
+    fn report_findings(&mut self) {
+        let total = self.findings.all().len();
+        if let (Status::Info(text), true) = (&mut self.status, total > 0) {
+            let high = self.findings.count(analysis::Severity::High);
+            text.push_str(&format!(
+                " {total} risky call(s), {high} high: Findings (⇧⌘R)."
+            ));
+        }
+    }
+
+    /// Adds what's worth knowing about the project's notes to the status.
+    fn report_notes_on_open(&mut self) {
+        if let Some(error) = self.notebook.load_error() {
+            self.status = Status::Error(format!("Notes are read-only: {error}"));
+            return;
+        }
+        if let Some(error) = self.notebook.open_save_error() {
+            self.status = Status::Error(format!("Line notes moved, but {error}"));
+            return;
+        }
+        let moved = self.notebook.moved_on_open();
+        if let (Status::Info(text), true) = (&mut self.status, moved > 0) {
+            text.push_str(&format!(" {moved} line note(s) followed their code."));
+        }
     }
 
     fn apply_pending_symbol(&mut self) {
@@ -159,11 +232,94 @@ impl SlurcetrailApp {
         }
     }
 
-    fn refresh_filter(&mut self) {
-        if self.filtered_for.as_deref() != Some(self.search_query.as_str()) {
-            self.filtered = self.project.filter(&self.search_query);
-            self.filtered_for = Some(self.search_query.clone());
+    fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        // Off macOS, ⌘ is Ctrl, and Ctrl+letter edits text in text fields.
+        let can_use = cfg!(target_os = "macos") || !ctx.egui_wants_keyboard_input();
+        // ⌘⇧E before ⌘E: egui matches ⌘E even with Shift held.
+        let (open, editor, entry, bookmark, note, panel) = ctx.input_mut(|i| {
+            (
+                i.consume_shortcut(&OPEN_SHORTCUT),
+                can_use && i.consume_shortcut(&EDITOR_SHORTCUT),
+                can_use && i.consume_shortcut(&ENTRY_POINT_SHORTCUT),
+                can_use && i.consume_shortcut(&BOOKMARK_SHORTCUT),
+                can_use && i.consume_shortcut(&NOTE_SHORTCUT),
+                can_use && i.consume_shortcut(&NOTES_PANEL_SHORTCUT),
+            )
+        });
+        if can_use && ctx.input_mut(|i| i.consume_shortcut(&FINDINGS_SHORTCUT)) {
+            self.run_command(Command::ShowFindings, ctx);
         }
+        if panel {
+            self.run_command(Command::ShowNotes, ctx);
+        }
+        if bookmark {
+            self.run_command(Command::ToggleBookmark, ctx);
+        }
+        if note {
+            self.run_command(Command::EditNote, ctx);
+        }
+        if open {
+            self.open_project_dialog(ctx);
+        }
+        if editor {
+            self.open_in_editor();
+        }
+        if entry {
+            self.go_to_entry_point();
+        }
+    }
+
+    /// Opens what the code panel shows in the user's editor.
+    fn open_in_editor(&mut self) {
+        let Some(root) = self.project.root.as_ref() else {
+            self.status = Status::Info(
+                "The demo's sources aren't on disk: open a project (⌘O) to use an editor.".into(),
+            );
+            return;
+        };
+        let selected = self.graph_view.selected();
+        let Some(at) = self.code_panel.position(&self.project.graph, selected) else {
+            self.status = Status::Info("Select a symbol to open its source.".into());
+            return;
+        };
+        let joined = root.join(&at.file);
+        // Absolute, so a relative root can't make the path look like an option.
+        let path = std::path::absolute(&joined).unwrap_or(joined);
+        let position = SourcePosition {
+            path,
+            line: at.line,
+            column: at.column,
+        };
+        self.status = match editor::open_in_editor(&position) {
+            Ok(program) => Status::Info(format!("Opened {}:{} with {program}", at.file, at.line)),
+            Err(error) => Status::Error(error),
+        };
+    }
+
+    /// Selects `main` (or the next entry point, when repeated) and says
+    /// which one it is in the status bar.
+    fn go_to_entry_point(&mut self) {
+        let graph = &self.project.graph;
+        let Some(step) = self.graph_view.go_to_entry_point(graph) else {
+            self.status = Status::Info(
+                "No entry points found: no main(), and every function with calls is called.".into(),
+            );
+            return;
+        };
+        let name = graph
+            .symbols
+            .get(&step.id)
+            .map_or("?", |s| s.qualified_name.as_str());
+        let more = if step.count > 1 {
+            " (again for the next)"
+        } else {
+            ""
+        };
+        self.status = Status::Info(format!(
+            "Entry point {} of {}: {name}{more}",
+            step.position + 1,
+            step.count
+        ));
     }
 }
 
@@ -171,25 +327,54 @@ impl eframe::App for SlurcetrailApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
-        // Global shortcuts pause while the palette is open.
-        if !self.palette.is_open() && ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT)) {
-            self.open_project_dialog(&ctx);
+        self.poll_tool_jobs();
+        // Global shortcuts pause while the palette or note editor is open.
+        if !self.palette.is_open() && self.note_editor.is_none() {
+            self.handle_global_shortcuts(&ctx);
         }
-        self.palette.handle_shortcuts(&ctx);
+        if self.note_editor.is_none() {
+            self.palette.handle_shortcuts(&ctx);
+        }
         if let Some(command) = self.show_menu_bar(ui) {
             self.run_command(command, &ctx);
         }
         self.show_status_bar(ui);
         self.show_symbol_list(ui);
+        match self.notes_panel.show(ui, &self.notebook) {
+            Some(NotesPanelAction::GoTo(target)) => self.go_to_note(&target),
+            Some(NotesPanelAction::Edit(target)) => self.edit_note(target),
+            None => {}
+        }
+        let finding = self
+            .findings_panel
+            .show(ui, &self.findings, &self.project.graph)
+            .map(|f| (f.symbol, f.file.clone(), f.line));
+        if let Some((symbol, file, line)) = finding {
+            self.go_to_place(symbol, &file, line);
+        }
         self.show_code_panel(ui);
         egui::CentralPanel::default().show(ui, |ui| {
-            self.graph_view.show(ui, &self.project.graph);
+            let notebook = &self.notebook;
+            let badge_of = |id| {
+                notebook.mark(id).map(|m| Badge {
+                    is_starred: m.is_starred,
+                    has_text: m.has_text,
+                })
+            };
+            self.graph_view.show(ui, &self.project.graph, &badge_of);
         });
         self.show_warnings_window(&ctx);
-        let picked = self.palette.show(&ctx, &self.project);
+        self.show_note_editor(&ctx);
+        let notes = if self.palette.is_open() {
+            self.note_candidates()
+        } else {
+            Vec::new()
+        };
+        let picked = self.palette.show(&ctx, &self.project, &notes);
         match picked {
             Some(Entry::Symbol(id)) => self.graph_view.select(id),
             Some(Entry::Command(command)) => self.run_command(command, &ctx),
+            Some(Entry::Note(index)) => self.go_to_note_at(index),
             None => {}
         }
         if picked.is_some() {
@@ -207,12 +392,14 @@ impl SlurcetrailApp {
                     .ui(ui, |ui| {
                         let file = ui.menu_button("File", |ui| self.file_menu(ui));
                         let go = ui.menu_button("Go", |ui| self.go_menu(ui));
-                        let action = file.inner.flatten().or(go.inner.flatten());
+                        let analyze = ui.menu_button("Analyze", |ui| self.analyze_menu(ui));
+                        let action = file
+                            .inner
+                            .flatten()
+                            .or(go.inner.flatten())
+                            .or(analyze.inner.flatten());
                         ui.separator();
                         ui.label(RichText::new(&self.project.name).strong());
-                        ui.separator();
-                        ui.label("Search:");
-                        ui.text_edit_singleline(&mut self.search_query);
                         action
                     })
                     .inner
@@ -249,6 +436,38 @@ impl SlurcetrailApp {
         if ui.add(palette).clicked() {
             self.palette.open_with(palette::COMMAND_PREFIX.to_string());
         }
+        if ui.button("Search Notes…").clicked() {
+            self.palette.open_with(palette::NOTE_PREFIX.to_string());
+        }
+        ui.separator();
+        let entry = egui::Button::new(Command::GoToEntryPoint.label())
+            .shortcut_text(ui.ctx().format_shortcut(&ENTRY_POINT_SHORTCUT));
+        if ui.add(entry).clicked() {
+            return Some(Command::GoToEntryPoint);
+        }
+        ui.menu_button("Entry Points", |ui| self.entry_points_menu(ui));
+        let editor = egui::Button::new(Command::OpenInEditor.label())
+            .shortcut_text(ui.ctx().format_shortcut(&EDITOR_SHORTCUT));
+        if ui.add(editor).clicked() {
+            return Some(Command::OpenInEditor);
+        }
+        ui.separator();
+        let bookmark = egui::Button::new(Command::ToggleBookmark.label())
+            .shortcut_text(ui.ctx().format_shortcut(&BOOKMARK_SHORTCUT));
+        if ui.add(bookmark).clicked() {
+            return Some(Command::ToggleBookmark);
+        }
+        let note = egui::Button::new(Command::EditNote.label())
+            .shortcut_text(ui.ctx().format_shortcut(&NOTE_SHORTCUT));
+        if ui.add(note).clicked() {
+            return Some(Command::EditNote);
+        }
+        let panel = egui::Button::new(Command::ShowNotes.label())
+            .shortcut_text(ui.ctx().format_shortcut(&NOTES_PANEL_SHORTCUT));
+        if ui.add(panel).clicked() {
+            return Some(Command::ShowNotes);
+        }
+
         ui.separator();
         [
             Command::TrailView,
@@ -258,6 +477,93 @@ impl SlurcetrailApp {
         ]
         .into_iter()
         .find(|command| ui.button(command.label()).clicked())
+    }
+
+    fn analyze_menu(&self, ui: &mut egui::Ui) -> Option<Command> {
+        let findings = egui::Button::new(Command::ShowFindings.label())
+            .shortcut_text(ui.ctx().format_shortcut(&FINDINGS_SHORTCUT));
+        if ui.add(findings).clicked() {
+            return Some(Command::ShowFindings);
+        }
+        ui.separator();
+        [Command::RunSemgrep, Command::RunCppcheck]
+            .into_iter()
+            .find(|command| ui.button(command.label()).clicked())
+    }
+
+    /// Starts `tool` on the project in the background.
+    fn run_tool(&mut self, tool: analysis::tools::Tool, ctx: &egui::Context) {
+        let Some(root) = self.project.root.clone() else {
+            self.status = Status::Info(format!(
+                "Open a project (⌘O) to run {} on it; the demo isn't on disk.",
+                tool.name()
+            ));
+            return;
+        };
+        if self.tool_jobs.iter().any(|job| job.tool() == tool) {
+            self.status = Status::Info(format!("{} is already running.", tool.name()));
+            return;
+        }
+        self.status = Status::Info(format!(
+            "Running {} on {}… results go to Findings.",
+            tool.name(),
+            self.project.name
+        ));
+        self.tool_jobs.push(ToolJob::spawn(tool, root, ctx.clone()));
+    }
+
+    /// Adds finished tools' findings.
+    fn poll_tool_jobs(&mut self) {
+        let finished: Vec<(
+            analysis::tools::Tool,
+            Result<Vec<analysis::Finding>, String>,
+        )> = self
+            .tool_jobs
+            .iter()
+            .filter_map(|job| job.poll().map(|result| (job.tool(), result)))
+            .collect();
+        for (tool, result) in finished {
+            self.tool_jobs.retain(|job| job.tool() != tool);
+            self.status = match result {
+                Ok(found) => {
+                    let count = found.len();
+                    let found = tool_job::with_symbols(found, &self.project.graph);
+                    self.findings = self.findings.with_tool_results(tool.name(), found);
+                    Status::Info(format!(
+                        "{}: {count} finding(s), in Findings (⇧⌘R).",
+                        tool.name()
+                    ))
+                }
+                Err(error) => Status::Error(error),
+            };
+        }
+    }
+
+    /// Lists the best entry points; clicking one selects it.
+    fn entry_points_menu(&mut self, ui: &mut egui::Ui) {
+        let graph = &self.project.graph;
+        let entries = self.graph_view.entry_points(graph);
+        if entries.is_empty() {
+            ui.weak("No entry points found");
+            return;
+        }
+        let picked = entries
+            .iter()
+            .take(MAX_ENTRY_MENU_ITEMS)
+            .filter_map(|id| graph.symbols.get(id))
+            .find(|s| {
+                let label = format!("{}    {}:{}", s.qualified_name, s.file, s.line);
+                ui.button(label).clicked()
+            })
+            .map(|s| s.id);
+        let more = entries.len().saturating_sub(MAX_ENTRY_MENU_ITEMS);
+        if more > 0 {
+            let keys = ui.ctx().format_shortcut(&ENTRY_POINT_SHORTCUT);
+            ui.weak(format!("…and {more} more ({keys} steps through all)"));
+        }
+        if let Some(id) = picked {
+            self.graph_view.select(id);
+        }
     }
 
     fn run_command(&mut self, command: Command, ctx: &egui::Context) {
@@ -271,6 +577,22 @@ impl SlurcetrailApp {
                 }
             },
             Command::Overview => self.graph_view.show_overview(),
+            Command::GoToEntryPoint => self.go_to_entry_point(),
+            Command::OpenInEditor => self.open_in_editor(),
+            Command::ToggleBookmark => {
+                if let Some(target) = self.selected_target() {
+                    self.toggle_bookmark(target);
+                }
+            }
+            Command::ShowNotes => self.notes_panel.toggle(),
+            Command::ShowFindings => self.findings_panel.toggle(),
+            Command::RunSemgrep => self.run_tool(analysis::tools::Tool::Semgrep, ctx),
+            Command::RunCppcheck => self.run_tool(analysis::tools::Tool::Cppcheck, ctx),
+            Command::EditNote => {
+                if let Some(target) = self.selected_target() {
+                    self.edit_note(target);
+                }
+            }
             Command::Back => self.graph_view.back(),
             Command::Fit => self.graph_view.fit(),
             Command::TrailView => self.graph_view.set_mode(ViewMode::Trail),
@@ -301,6 +623,11 @@ impl SlurcetrailApp {
                     }
                 }
                 None => {
+                    if let Some(job) = self.tool_jobs.first() {
+                        ui.spinner();
+                        ui.label(format!("{} running", job.tool().name()));
+                        ui.separator();
+                    }
                     match &self.status {
                         Status::Info(text) => ui.label(text),
                         Status::Error(text) => ui.label(RichText::new(text).color(ERROR_COLOR)),
@@ -318,29 +645,17 @@ impl SlurcetrailApp {
     }
 
     fn show_symbol_list(&mut self, ui: &mut egui::Ui) {
-        self.refresh_filter();
         egui::Panel::left("symbol_list")
             .resizable(true)
             .default_size(260.0)
             .show(ui, |ui| {
-                ui.heading(format!("Symbols ({})", self.filtered.len()));
-                ui.separator();
-                let row_height = ui.spacing().interact_size.y;
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show_rows(ui, row_height, self.filtered.len(), |ui, rows| {
-                        for id in &self.filtered[rows] {
-                            let Some(symbol) = self.project.graph.symbols.get(id) else {
-                                continue;
-                            };
-                            let is_selected = self.graph_view.selected() == Some(*id);
-                            let label =
-                                format!("{}  [{}]", symbol.qualified_name, symbol.kind.label());
-                            if ui.selectable_label(is_selected, label).clicked() {
-                                self.graph_view.select(*id);
-                            }
-                        }
-                    });
+                let selected = self.graph_view.selected();
+                let clicked = self
+                    .symbol_list
+                    .show(ui, &self.project, selected, &self.notebook);
+                if let Some(id) = clicked {
+                    self.graph_view.select(id);
+                }
             });
     }
 
@@ -350,8 +665,19 @@ impl SlurcetrailApp {
             .default_size(260.0)
             .show(ui, |ui| {
                 let selected = self.graph_view.selected();
-                if let Some(id) = self.code_panel.show(ui, &self.project.graph, selected) {
-                    self.graph_view.select(id);
+                let action = self.code_panel.show(
+                    ui,
+                    &self.project.graph,
+                    selected,
+                    &self.notebook,
+                    &self.findings,
+                );
+                match action {
+                    Some(PanelAction::Explore(id)) => self.graph_view.select(id),
+                    Some(PanelAction::OpenInEditor) => self.open_in_editor(),
+                    Some(PanelAction::ToggleBookmark(target)) => self.toggle_bookmark(target),
+                    Some(PanelAction::EditNote(target)) => self.edit_note(target),
+                    None => {}
                 }
             });
     }
@@ -371,5 +697,57 @@ impl SlurcetrailApp {
                     });
             });
         self.is_warnings_open = is_open;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn demo_app() -> (SlurcetrailApp, egui::Context) {
+        let ctx = egui::Context::default();
+        let app = SlurcetrailApp::new(&ctx, LaunchOptions::default());
+        (app, ctx)
+    }
+
+    fn status_text(app: &SlurcetrailApp) -> &str {
+        match &app.status {
+            Status::Info(text) | Status::Error(text) => text,
+        }
+    }
+
+    #[test]
+    fn go_to_entry_point_selects_main_and_says_so() {
+        let (mut app, ctx) = demo_app();
+        app.run_command(Command::GoToEntryPoint, &ctx);
+        let main = app.project.find("main");
+        assert!(main.is_some());
+        assert_eq!(app.graph_view.selected(), main);
+        assert!(status_text(&app).contains("main"), "{}", status_text(&app));
+    }
+
+    #[test]
+    fn open_in_editor_explains_that_the_demo_is_not_on_disk() {
+        let (mut app, ctx) = demo_app();
+        app.run_command(Command::GoToEntryPoint, &ctx);
+        app.run_command(Command::OpenInEditor, &ctx);
+        assert!(status_text(&app).contains("aren't on disk"));
+    }
+
+    #[test]
+    fn open_in_editor_without_a_selection_asks_for_one() {
+        let (mut app, ctx) = demo_app();
+        app.project.root = Some(PathBuf::from("/nonexistent"));
+        app.run_command(Command::OpenInEditor, &ctx);
+        assert!(status_text(&app).contains("Select a symbol"));
+    }
+
+    #[test]
+    fn go_to_entry_point_without_entry_points_reports_it() {
+        let (mut app, ctx) = demo_app();
+        app.project = Project::empty();
+        app.run_command(Command::GoToEntryPoint, &ctx);
+        assert_eq!(app.graph_view.selected(), None);
+        assert!(status_text(&app).contains("No entry points"));
     }
 }

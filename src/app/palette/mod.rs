@@ -8,8 +8,8 @@ use egui::{Align2, Id, Key, KeyboardShortcut, Modifiers, RichText};
 
 use super::project::Project;
 use search::search;
-pub use search::COMMAND_PREFIX;
 pub use search::{Command, Entry};
+pub use search::{COMMAND_PREFIX, NOTE_PREFIX};
 
 pub const OPEN_SYMBOL_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND, Key::P);
@@ -72,18 +72,24 @@ impl Palette {
     }
 
     /// Draws the palette if open. Returns the entry the user picked.
-    pub fn show(&mut self, ctx: &egui::Context, project: &Project) -> Option<Entry> {
+    /// `notes` are `(index, label)` of the project's notes.
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        project: &Project,
+        notes: &[(usize, String)],
+    ) -> Option<Entry> {
         if !self.is_open {
             return None;
         }
         // Results must match the query before Enter can pick from them.
-        self.refresh(project);
+        self.refresh(project, notes);
         let confirmed = self.handle_keys(ctx);
         let id = Id::unique("quick_open_palette");
         let area = egui::Modal::default_area(id).anchor(Align2::CENTER_TOP, [0.0, TOP_OFFSET]);
         let response = egui::Modal::new(id)
             .area(area)
-            .show(ctx, |ui| self.contents(ui, project));
+            .show(ctx, |ui| self.contents(ui, project, notes));
         let picked = response.inner.or(confirmed);
         if picked.is_some() || response.should_close() {
             self.is_open = false;
@@ -112,13 +118,18 @@ impl Palette {
         enter.then(|| self.results.get(self.highlighted).copied())?
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, project: &Project) -> Option<Entry> {
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        notes: &[(usize, String)],
+    ) -> Option<Entry> {
         ui.set_width(WIDTH);
         let edit = egui::TextEdit::singleline(&mut self.query)
-            .hint_text("Go to symbol…   (type > for commands)")
+            .hint_text("Go to symbol…   (> commands, # notes)")
             .desired_width(f32::INFINITY);
         ui.add(edit).request_focus();
-        self.refresh(project);
+        self.refresh(project, notes);
         ui.separator();
         if self.results.is_empty() {
             ui.weak("No matches");
@@ -126,15 +137,20 @@ impl Palette {
         }
         egui::ScrollArea::vertical()
             .max_height(LIST_HEIGHT)
-            .show(ui, |ui| self.result_rows(ui, project))
+            .show(ui, |ui| self.result_rows(ui, project, notes))
             .inner
     }
 
-    fn result_rows(&mut self, ui: &mut egui::Ui, project: &Project) -> Option<Entry> {
+    fn result_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        notes: &[(usize, String)],
+    ) -> Option<Entry> {
         let mut picked = None;
         for (index, entry) in self.results.iter().enumerate() {
             let is_highlighted = index == self.highlighted;
-            let row = ui.selectable_label(is_highlighted, row_text(*entry, project));
+            let row = ui.selectable_label(is_highlighted, row_text(*entry, project, notes));
             if is_highlighted && self.should_reveal {
                 row.scroll_to_me(None);
             }
@@ -146,19 +162,24 @@ impl Palette {
         picked
     }
 
-    fn refresh(&mut self, project: &Project) {
+    fn refresh(&mut self, project: &Project, notes: &[(usize, String)]) {
         if self.results_for.as_deref() == Some(self.query.as_str()) {
             return;
         }
-        self.results = search(project.search_candidates(), &self.query, MAX_RESULTS);
+        let symbols = project.search_candidates();
+        self.results = search(symbols, notes, &self.query, MAX_RESULTS);
         self.results_for = Some(self.query.clone());
         self.highlighted = 0;
     }
 }
 
-fn row_text(entry: Entry, project: &Project) -> RichText {
+fn row_text(entry: Entry, project: &Project, notes: &[(usize, String)]) -> RichText {
     match entry {
         Entry::Command(command) => RichText::new(command.label()),
+        Entry::Note(index) => match notes.iter().find(|(i, _)| *i == index) {
+            Some((_, label)) => RichText::new(label),
+            None => RichText::new("(missing note)"),
+        },
         Entry::Symbol(id) => match project.graph.symbols.get(&id) {
             Some(s) => RichText::new(format!(
                 "{}    {} · {}",
@@ -197,7 +218,7 @@ mod tests {
             |ui, state: &mut State| {
                 let ctx = ui.ctx().clone();
                 state.palette.handle_shortcuts(&ctx);
-                if let Some(entry) = state.palette.show(&ctx, &state.project) {
+                if let Some(entry) = state.palette.show(&ctx, &state.project, &[]) {
                     state.picked = Some(entry);
                 }
             },

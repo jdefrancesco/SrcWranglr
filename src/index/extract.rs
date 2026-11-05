@@ -55,6 +55,9 @@ pub struct Reference {
     pub lookup: Lookup,
     /// Where the target's name is written (`None` if it spans lines).
     pub span: Option<Span>,
+    /// Written as a plain function call, `f(...)` or `ns::f(...)` (not
+    /// `obj.f(...)`): if it doesn't resolve, it calls outside the project.
+    pub is_free_call: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -105,6 +108,24 @@ impl Walker<'_> {
     /// Records a reference written at `at` (a name node). Every occurrence
     /// is kept: each one is a clickable location in the code view.
     fn add_ref(&mut self, from: &str, target: String, kind: EdgeKind, lookup: Lookup, at: Node) {
+        self.push_ref(from, target, kind, lookup, at, false);
+    }
+
+    /// A plain function call `target(...)` made from `from`.
+    fn add_free_call(&mut self, from: &str, target: String, at: Node) {
+        let (kind, lookup) = (EdgeKind::Calls, Lookup::ScopedOrUnique);
+        self.push_ref(from, target, kind, lookup, at, true);
+    }
+
+    fn push_ref(
+        &mut self,
+        from: &str,
+        target: String,
+        kind: EdgeKind,
+        lookup: Lookup,
+        at: Node,
+        is_free_call: bool,
+    ) {
         if target.is_empty() || from.is_empty() {
             return;
         }
@@ -115,6 +136,7 @@ impl Walker<'_> {
             kind,
             lookup,
             span: name_span(at),
+            is_free_call,
         });
     }
 
@@ -453,7 +475,7 @@ impl BodyScanner<'_, '_> {
                 let name_node = name_node.unwrap_or(function);
                 let name = clean_name(text(name_node, self.src()));
                 if !self.locals.contains_key(&name) {
-                    self.add(name, EdgeKind::Calls, Lookup::ScopedOrUnique, name_node);
+                    self.walker.add_free_call(self.from, name, name_node);
                 }
             }
             "field_expression" => {

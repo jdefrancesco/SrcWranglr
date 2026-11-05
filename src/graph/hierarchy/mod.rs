@@ -17,7 +17,7 @@
 
 mod calls;
 
-pub use calls::CallIndex;
+pub use calls::{all_entry_points, CallIndex};
 
 use std::collections::HashMap;
 

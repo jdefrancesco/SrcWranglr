@@ -125,6 +125,46 @@ pub struct Roots {
 /// most code first (`main` wins ties). If every caller is itself called
 /// (the calls only form cycles), the functions reaching the most code.
 pub fn entry_points(graph: &CodeGraph, calls: &CallIndex) -> Roots {
+    capped(uncalled_callers(graph, calls))
+}
+
+/// Every entry point, for stepping through them: program entry functions
+/// (`main`, `WinMain`, fuzz targets, …) first, even if they call nothing,
+/// then the functions `entry_points` ranks.
+pub fn all_entry_points(graph: &CodeGraph, calls: &CallIndex) -> Vec<SymbolId> {
+    let programs = graph
+        .symbols
+        .values()
+        .filter(|s| is_program_entry(s.kind, &s.qualified_name))
+        .map(|s| s.id);
+    let mut all = ranked(programs, graph, calls);
+    let others: Vec<SymbolId> = uncalled_callers(graph, calls)
+        .into_iter()
+        .filter(|id| !all.contains(id))
+        .collect();
+    all.extend(others);
+    all
+}
+
+/// Names a program, library, or fuzz target starts at.
+const PROGRAM_ENTRY_NAMES: [&str; 9] = [
+    "main",
+    "wmain",
+    "_tmain",
+    "WinMain",
+    "wWinMain",
+    "_tWinMain",
+    "DllMain",
+    "LLVMFuzzerTestOneInput",
+    "_start",
+];
+
+fn is_program_entry(kind: SymbolKind, qualified_name: &str) -> bool {
+    kind == SymbolKind::Function && PROGRAM_ENTRY_NAMES.contains(&qualified_name)
+}
+
+/// Uncalled functions that call something, ranked (all of them).
+fn uncalled_callers(graph: &CodeGraph, calls: &CallIndex) -> Vec<SymbolId> {
     let callers = || {
         graph
             .symbols
@@ -136,9 +176,9 @@ pub fn entry_points(graph: &CodeGraph, calls: &CallIndex) -> Roots {
         .filter(|id| !calls.has_callers.contains(id))
         .collect();
     if uncalled.is_empty() {
-        return ranked_roots(callers(), graph, calls);
+        return ranked(callers(), graph, calls);
     }
-    ranked_roots(uncalled.into_iter(), graph, calls)
+    ranked(uncalled.into_iter(), graph, calls)
 }
 
 /// Roots for a selected symbol: a function itself, or the methods of a
@@ -172,17 +212,18 @@ pub fn roots_for(graph: &CodeGraph, calls: &CallIndex, id: SymbolId) -> Roots {
                 .filter(|m| !is_sibling_called(m))
                 .collect();
             let roots = if outer.is_empty() { methods } else { outer };
-            ranked_roots(roots.into_iter(), graph, calls)
+            capped(ranked(roots.into_iter(), graph, calls))
         }
         _ => Roots::default(),
     }
 }
 
-fn ranked_roots(
+/// `ids` by how much code they reach, most first (`main` wins ties).
+fn ranked(
     ids: impl Iterator<Item = SymbolId>,
     graph: &CodeGraph,
     calls: &CallIndex,
-) -> Roots {
+) -> Vec<SymbolId> {
     let name = |id: SymbolId| {
         graph
             .symbols
@@ -195,15 +236,17 @@ fn ranked_roots(
             std::cmp::Reverse(reach),
             name(id) != "main",
             name(id).to_string(),
+            id,
         )
     });
+    ranked.into_iter().map(|(_, id)| id).collect()
+}
+
+/// The first `MAX_ROOTS` of `ranked`, counting the rest.
+fn capped(ranked: Vec<SymbolId>) -> Roots {
     let hidden = ranked.len().saturating_sub(MAX_ROOTS);
     Roots {
-        ids: ranked
-            .into_iter()
-            .take(MAX_ROOTS)
-            .map(|(_, id)| id)
-            .collect(),
+        ids: ranked.into_iter().take(MAX_ROOTS).collect(),
         hidden,
     }
 }
@@ -416,6 +459,34 @@ pub(super) mod tests {
             names(&graph, tree.children_of(id(&graph, "App::start"))),
             ["App::helper"]
         );
+    }
+
+    #[test]
+    fn all_entry_points_list_program_entries_first_even_without_calls() {
+        let graph = graph_of(
+            "void a() {}\nvoid b() { a(); }\nvoid c() { b(); }\n\
+             int LLVMFuzzerTestOneInput(const char *d, int n) { a(); return 0; }\n\
+             int main() { return 0; }\n\
+             struct S { void main() { a(); } };\n",
+        );
+        let all = all_entry_points(&graph, &CallIndex::new(&graph));
+        // `main` calls nothing but is still a program entry; `S::main` is
+        // just an uncalled method, ranked with the other entry points.
+        assert_eq!(
+            names(&graph, &all),
+            ["LLVMFuzzerTestOneInput", "main", "c", "S::main"]
+        );
+    }
+
+    #[test]
+    fn all_entry_points_are_not_capped() {
+        let defs: String = (0..MAX_ROOTS + 3)
+            .map(|i| format!("void leaf{i}() {{}}\nvoid top{i}() {{ leaf{i}(); }}\n"))
+            .collect();
+        let graph = graph_of(&defs);
+        let calls = CallIndex::new(&graph);
+        assert_eq!(all_entry_points(&graph, &calls).len(), MAX_ROOTS + 3);
+        assert_eq!(entry_points(&graph, &calls).ids.len(), MAX_ROOTS);
     }
 
     #[test]

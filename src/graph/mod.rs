@@ -9,4 +9,5 @@ mod scene;
 mod trail;
 mod view;
 
+pub use render::Badge;
 pub use view::{GraphView, ViewMode};

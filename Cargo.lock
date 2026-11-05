@@ -3110,6 +3110,8 @@ dependencies = [
  "ignore",
  "nucleo-matcher",
  "rfd",
+ "serde",
+ "serde_json",
  "tempfile",
  "tree-sitter",
  "tree-sitter-cpp",

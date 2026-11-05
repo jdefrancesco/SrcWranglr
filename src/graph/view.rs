@@ -13,9 +13,9 @@
 use egui::{Pos2, Response, Sense, Vec2};
 
 use super::camera::Camera;
-use super::hierarchy::{build_hierarchy, CallIndex};
+use super::hierarchy::{all_entry_points, build_hierarchy, CallIndex};
 use super::overview::build_overview;
-use super::render::{self, font_for, Frame, Palette, LEGEND_STRIP_HEIGHT};
+use super::render::{self, font_for, Badge, Frame, Palette, LEGEND_STRIP_HEIGHT};
 use super::scene::{Scene, TextRole};
 use super::trail::build_trail;
 use crate::model::{CodeGraph, SymbolId};
@@ -60,6 +60,14 @@ impl ViewMode {
 /// The selection and mode a scene was laid out for.
 type SceneKey = (Option<SymbolId>, ViewMode);
 
+/// Where "Go to Entry Point" landed: entry point `position` of `count`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntryStep {
+    pub id: SymbolId,
+    pub position: usize,
+    pub count: usize,
+}
+
 pub struct GraphView {
     /// Laid-out scene and what it was built for.
     scene: Option<(SceneKey, Scene)>,
@@ -73,6 +81,9 @@ pub struct GraphView {
     /// Call graph of the project, built on first use of the call hierarchy.
     /// A new project gets a new `GraphView`, so this never goes stale.
     call_index: Option<CallIndex>,
+    /// Every entry point, best first, built on first use (same lifetime
+    /// as `call_index`).
+    entry_points: Option<Vec<SymbolId>>,
     selected: Option<SymbolId>,
     history: Vec<SymbolId>,
     hovered: Option<SymbolId>,
@@ -92,6 +103,7 @@ impl Default for GraphView {
             is_auto_fit: true,
             is_fit_all: false,
             call_index: None,
+            entry_points: None,
             selected: None,
             history: Vec::new(),
             hovered: None,
@@ -141,6 +153,31 @@ impl GraphView {
         self.is_fit_all = true;
     }
 
+    /// Every entry point of the project, best first: `main` and other
+    /// program entry functions, then functions nobody calls.
+    pub fn entry_points(&mut self, graph: &CodeGraph) -> &[SymbolId] {
+        if self.entry_points.is_none() {
+            let calls = self.call_index.get_or_insert_with(|| CallIndex::new(graph));
+            self.entry_points = Some(all_entry_points(graph, calls));
+        }
+        self.entry_points.as_deref().unwrap_or_default()
+    }
+
+    /// Selects the entry point after the selected one (the first, if the
+    /// selection isn't an entry point), so repeating it steps through all.
+    pub fn go_to_entry_point(&mut self, graph: &CodeGraph) -> Option<EntryStep> {
+        let current = self.selected;
+        let list = self.entry_points(graph);
+        let position = next_in_cycle(list, current)?;
+        let step = EntryStep {
+            id: list[position],
+            position,
+            count: list.len(),
+        };
+        self.select(step.id);
+        Some(step)
+    }
+
     /// Make `id` the active symbol, remembering the previous one for "Back".
     pub fn select(&mut self, id: SymbolId) {
         if self.selected == Some(id) {
@@ -155,7 +192,13 @@ impl GraphView {
         self.selected = Some(id);
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, graph: &CodeGraph) -> Response {
+    /// Draws the graph; `badge_of` tells which symbols have notes.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        graph: &CodeGraph,
+        badge_of: &dyn Fn(SymbolId) -> Option<Badge>,
+    ) -> Response {
         let action = self.show_toolbar(ui);
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let pointer_local = response.hover_pos().map(|p| (p - rect.min).to_pos2());
@@ -174,6 +217,7 @@ impl GraphView {
             origin: rect.min,
             hovered: self.hovered,
             palette: Palette::for_visuals(ui.visuals()),
+            badge_of,
         };
         render::paint(&painter, &frame);
         self.notice = notice(&scene, graph, self.mode);
@@ -380,6 +424,18 @@ fn hierarchy_notice(scene: &Scene) -> Option<String> {
     }
 }
 
+/// Index of the item after `current` in `list`, wrapping; the first item
+/// if `current` isn't in it; `None` for an empty list.
+fn next_in_cycle(list: &[SymbolId], current: Option<SymbolId>) -> Option<usize> {
+    if list.is_empty() {
+        return None;
+    }
+    let after_current = current
+        .and_then(|c| list.iter().position(|id| *id == c))
+        .map_or(0, |i| (i + 1) % list.len());
+    Some(after_current)
+}
+
 #[cfg(test)]
 mod tests {
     use egui::{Rect, Vec2};
@@ -437,6 +493,34 @@ mod tests {
         assert_eq!(view.selected(), Some(1));
         view.back(); // nothing left: stays put
         assert_eq!(view.selected(), Some(1));
+    }
+
+    #[test]
+    fn entry_point_cycle_starts_at_the_first_and_wraps() {
+        let list = [7, 8, 9];
+        assert_eq!(next_in_cycle(&list, None), Some(0));
+        assert_eq!(next_in_cycle(&list, Some(42)), Some(0));
+        assert_eq!(next_in_cycle(&list, Some(7)), Some(1));
+        assert_eq!(next_in_cycle(&list, Some(9)), Some(0));
+        assert_eq!(next_in_cycle(&[], Some(7)), None);
+    }
+
+    #[test]
+    fn go_to_entry_point_selects_main_and_reports_position() {
+        let graph = crate::demo::demo_codebase().expect("demo");
+        let mut view = GraphView::default();
+        let step = view.go_to_entry_point(&graph).expect("demo has main");
+        assert_eq!(graph.symbols[&step.id].qualified_name, "main");
+        assert_eq!(view.selected(), Some(step.id));
+        assert_eq!(step.position, 0);
+        assert_eq!(step.count, view.entry_points(&graph).len());
+    }
+
+    #[test]
+    fn go_to_entry_point_on_an_empty_graph_selects_nothing() {
+        let mut view = GraphView::default();
+        assert_eq!(view.go_to_entry_point(&CodeGraph::default()), None);
+        assert_eq!(view.selected(), None);
     }
 
     #[test]

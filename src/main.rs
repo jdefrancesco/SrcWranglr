@@ -1,9 +1,12 @@
+mod analysis;
 mod app;
 mod code_view;
 mod demo;
 mod graph;
 mod index;
 mod model;
+mod notes;
+mod style;
 
 use app::launch::parse_args;
 use app::SlurcetrailApp;
