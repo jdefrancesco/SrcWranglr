@@ -8,6 +8,14 @@ use crate::graph::ViewMode;
 pub const USAGE: &str =
     "usage: slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls]";
 
+/// The window and Dock icon (the macOS bundle also carries it as .icns).
+const ICON_PNG: &[u8] = include_bytes!("../../assets/icon-256.png");
+#[cfg(test)]
+const ICON_SIZE: u32 = 256;
+
+/// macOS may pass `-psn_<number>` to apps launched from the Finder.
+const PROCESS_SERIAL_PREFIX: &str = "-psn_";
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
     /// Project folder to index on startup.
@@ -39,12 +47,18 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<LaunchOpti
                 };
             }
             Some("-h" | "--help") => return Err(USAGE.into()),
+            Some(serial) if serial.starts_with(PROCESS_SERIAL_PREFIX) => {}
             Some(flag) if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ if options.project.is_none() => options.project = Some(PathBuf::from(arg)),
             _ => return Err("only one PROJECT_DIR may be given".into()),
         }
     }
     Ok(options)
+}
+
+/// The app's icon, decoded for the window and Dock.
+pub fn app_icon() -> Result<egui::IconData, String> {
+    eframe::icon_data::from_png_bytes(ICON_PNG).map_err(|e| format!("bad app icon: {e}"))
 }
 
 #[cfg(test)]
@@ -69,6 +83,18 @@ mod tests {
         };
         assert_eq!(parse(&["/p", "--symbol", "ns::Foo"]), Ok(expected.clone()));
         assert_eq!(parse(&["--symbol", "ns::Foo", "/p"]), Ok(expected));
+    }
+
+    #[test]
+    fn ignores_the_process_serial_number_finder_may_pass() {
+        assert_eq!(parse(&["-psn_0_12345"]), Ok(LaunchOptions::default()));
+    }
+
+    #[test]
+    fn the_app_icon_decodes_to_a_square_image() {
+        let icon = app_icon().expect("icon");
+        assert_eq!((icon.width, icon.height), (ICON_SIZE, ICON_SIZE));
+        assert_eq!(icon.rgba.len(), (ICON_SIZE * ICON_SIZE * 4) as usize);
     }
 
     #[test]

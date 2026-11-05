@@ -21,8 +21,19 @@ fn main() -> eframe::Result<()> {
             std::process::exit(2);
         }
     };
+    // The app id matches the Linux .desktop file, so docks group windows.
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1200.0, 800.0])
+        .with_app_id("slurcetrail");
+    let viewport = match app::launch::app_icon() {
+        Ok(icon) => viewport.with_icon(std::sync::Arc::new(icon)),
+        Err(message) => {
+            eprintln!("{message}");
+            viewport
+        }
+    };
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 800.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

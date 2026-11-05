@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=slurcetrail
+GenericName=Source Code Explorer
+Comment=Explore and audit C/C++ codebases as a graph
+Exec=slurcetrail %f
+Icon=slurcetrail
+Terminal=false
+Categories=Development;IDE;
+Keywords=code;source;graph;audit;security;C;C++;
+StartupWMClass=slurcetrail
