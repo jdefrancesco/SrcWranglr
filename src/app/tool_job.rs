@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn a_missing_program_says_it_is_not_installed() {
         let error =
-            run("slurcetrail-no-such-tool", &[], |_, _| Ok(Vec::new())).expect_err("missing");
+            run("srcwranglr-no-such-tool", &[], |_, _| Ok(Vec::new())).expect_err("missing");
         assert!(error.contains("not installed"), "{error}");
     }
 
@@ -170,7 +170,7 @@ mod tests {
         // `poll` before the thread finishes is `None`; eventually it's done.
         let job = ToolJob::spawn(
             Tool::Cppcheck,
-            PathBuf::from("/nonexistent-slurcetrail-root"),
+            PathBuf::from("/nonexistent-srcwranglr-root"),
             egui::Context::default(),
         );
         let result = (0..200).find_map(|_| {

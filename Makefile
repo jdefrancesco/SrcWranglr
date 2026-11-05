@@ -1,10 +1,10 @@
-# Builds slurcetrail and packages it for the platform you run make on.
+# Builds SrcWranglr and packages it for the platform you run make on.
 #
-#   make              release binary (target/release/slurcetrail)
+#   make              release binary (target/release/srcwranglr)
 #   make package      this platform's package, in dist/:
-#                       macOS    slurcetrail.app and slurcetrail-<version>-macos-<arch>.dmg
-#                       Linux    slurcetrail-<version>-linux-<arch>.tar.gz
-#                       Windows  slurcetrail-<version>-windows-<arch>.zip (Git Bash / MSYS2)
+#                       macOS    SrcWranglr.app and SrcWranglr-<version>-macos-<arch>.dmg
+#                       Linux    srcwranglr-<version>-linux-<arch>.tar.gz
+#                       Windows  srcwranglr-<version>-windows-<arch>.zip (Git Bash / MSYS2)
 #   make app          macOS: just the .app bundle, with its icon
 #   make install      macOS: copy the .app to $(APPLICATIONS)
 #                     Linux: install binary, .desktop file and icons under $(PREFIX)
@@ -17,12 +17,14 @@
 # BUNDLE_ID, APPLICATIONS (default /Applications), PREFIX (default /usr/local),
 # DESTDIR (staging root for packagers).
 
-APP           := slurcetrail
+APP           := srcwranglr
+# The name people see: the macOS app bundle and disk image.
+APP_NAME      := SrcWranglr
 VERSION       := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
 ARCH          := $(shell uname -m)
 CARGO         ?= cargo
 RELEASE       := target/release
-BUNDLE_ID     ?= io.github.jdefrancesco.slurcetrail
+BUNDLE_ID     ?= io.github.jdefrancesco.srcwranglr
 SIGN_IDENTITY ?= -
 APPLICATIONS  ?= /Applications
 PREFIX        ?= /usr/local
@@ -44,10 +46,10 @@ else
 endif
 
 # Everything built here lands in dist/ (deleted only by name below).
-APP_BUNDLE    := dist/$(APP).app
+APP_BUNDLE    := dist/$(APP_NAME).app
 ICONSET       := dist/$(APP).iconset
 ICNS          := dist/$(APP).icns
-DMG           := dist/$(APP)-$(VERSION)-macos-$(ARCH).dmg
+DMG           := dist/$(APP_NAME)-$(VERSION)-macos-$(ARCH).dmg
 DMG_STAGING   := dist/dmg-staging
 LINUX_NAME    := $(APP)-$(VERSION)-linux-$(ARCH)
 WINDOWS_NAME  := $(APP)-$(VERSION)-windows-$(ARCH)
@@ -80,7 +82,7 @@ package-unsupported:
 package-macos: dmg
 
 app: build $(ICNS)
-	rm -rf "dist/$(APP).app"
+	rm -rf "dist/$(APP_NAME).app"
 	mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources"
 	cp "$(RELEASE)/$(APP)" "$(APP_BUNDLE)/Contents/MacOS/$(APP)"
 	cp "$(ICNS)" "$(APP_BUNDLE)/Contents/Resources/$(APP).icns"
@@ -108,20 +110,20 @@ dmg: app
 	mkdir -p "$(DMG_STAGING)"
 	cp -R "$(APP_BUNDLE)" "$(DMG_STAGING)/"
 	ln -s /Applications "$(DMG_STAGING)/Applications"
-	hdiutil create -quiet -volname "$(APP) $(VERSION)" -srcfolder "$(DMG_STAGING)" \
+	hdiutil create -quiet -volname "$(APP_NAME) $(VERSION)" -srcfolder "$(DMG_STAGING)" \
 		-ov -format UDZO "$(DMG)"
 	rm -rf "dist/dmg-staging"
 	@echo "Built $(DMG)"
 
 install-macos: app
 	@test -d "$(APPLICATIONS)" || { echo "No folder $(APPLICATIONS)" >&2; exit 1; }
-	rm -rf "$(APPLICATIONS)/$(APP).app"
+	rm -rf "$(APPLICATIONS)/$(APP_NAME).app"
 	cp -R "$(APP_BUNDLE)" "$(APPLICATIONS)/"
-	@echo "Installed $(APPLICATIONS)/$(APP).app"
+	@echo "Installed $(APPLICATIONS)/$(APP_NAME).app"
 
 uninstall-macos:
 	@test -d "$(APPLICATIONS)" || { echo "No folder $(APPLICATIONS)" >&2; exit 1; }
-	rm -rf "$(APPLICATIONS)/$(APP).app"
+	rm -rf "$(APPLICATIONS)/$(APP_NAME).app"
 
 # --- Linux ------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 //! "Open in Editor": the command line that opens a file at a line in the
 //! user's editor, and launching it.
 //!
-//! The editor is, in order: the `SLURCETRAIL_EDITOR` template (e.g.
+//! The editor is, in order: the `SRCWRANGLR_EDITOR` template (e.g.
 //! `code -g {file}:{line}:{column}`), `$VISUAL`, `$EDITOR`, VS Code if
 //! `code` is on the PATH, else the system's default opener. Terminal
 //! editors (vim, nano, …) open in a new terminal window.
@@ -88,7 +88,7 @@ const KNOWN_EDITORS: &[(&str, LineArgs, bool)] = &[
     ("clion", LineArgs::DashDashLine, false),
 ];
 
-const TEMPLATE_VAR: &str = "SLURCETRAIL_EDITOR";
+const TEMPLATE_VAR: &str = "SRCWRANGLR_EDITOR";
 const VSCODE: &str = "code";
 
 impl EditorEnv {
@@ -169,7 +169,7 @@ fn path_text(position: &SourcePosition) -> String {
     position.path.to_string_lossy().into_owned()
 }
 
-/// `SLURCETRAIL_EDITOR`: whitespace-separated words with `{file}`,
+/// `SRCWRANGLR_EDITOR`: whitespace-separated words with `{file}`,
 /// `{line}` and `{column}` filled in; the file is appended if the template
 /// doesn't place it.
 fn from_template(template: &str, position: &SourcePosition) -> Launch {
@@ -274,7 +274,7 @@ fn in_new_terminal(launch: Launch, os: Os) -> Result<Launch, String> {
             if words().any(|w| w.chars().any(char::is_control)) {
                 return Err(
                     "Not opening a terminal editor: the path contains control characters. \
-                     Set SLURCETRAIL_EDITOR to a GUI editor to open it."
+                     Set SRCWRANGLR_EDITOR to a GUI editor to open it."
                         .into(),
                 );
             }

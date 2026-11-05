@@ -2,12 +2,12 @@
 //! them attached to the findings as those change.
 
 use super::findings::line_text;
-use super::{SlurcetrailApp, Status};
+use super::{SrcWranglrApp, Status};
 use crate::analysis::Finding;
 use crate::notes::triage::{self, TriageEntry, TriageStatus};
 use crate::notes::NoteTarget;
 
-impl SlurcetrailApp {
+impl SrcWranglrApp {
     /// Records (or, with `None`, clears) your verdict on `finding` and saves
     /// it; nothing changes if it can't be saved. A confirmed bug is also
     /// added to the line's note, starred.
@@ -137,15 +137,15 @@ mod tests {
     use crate::analysis::dangerous::DangerousList;
     use crate::app::findings::Findings;
     use crate::app::launch::LaunchOptions;
-    use crate::app::SlurcetrailApp;
+    use crate::app::SrcWranglrApp;
     use crate::index::{build_graph, Extractor, SourceFile};
     use crate::notes::triage::TriageStatus;
     use crate::notes::NoteTarget;
 
     /// The demo app, showing a one-file project with a `strcpy` on line 2.
-    fn app_with_strcpy() -> SlurcetrailApp {
+    fn app_with_strcpy() -> SrcWranglrApp {
         let ctx = egui::Context::default();
-        let mut app = SlurcetrailApp::new(&ctx, LaunchOptions::default());
+        let mut app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
         let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
         let facts = Extractor::new()
             .expect("grammar")
@@ -184,7 +184,7 @@ mod tests {
             facts,
         }]);
         let ctx = egui::Context::default();
-        let mut app = SlurcetrailApp::new(&ctx, LaunchOptions::default());
+        let mut app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
         let outcome = crate::index::IndexOutcome {
             graph,
             indexed_files: 1,

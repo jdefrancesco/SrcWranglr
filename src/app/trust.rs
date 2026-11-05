@@ -1,4 +1,4 @@
-//! Whether you trust a project's own `.slurcetrail` verdicts and
+//! Whether you trust a project's own `.srcwranglr` verdicts and
 //! dangerous-functions list. A hostile repository could ship verdicts that
 //! hide its bugs, or a list that silences them, so being there isn't
 //! enough: the decision lives in your config, in `trusted-projects.txt`
@@ -77,7 +77,7 @@ mod tests {
             tempfile::tempdir().expect("tmp"),
             tempfile::tempdir().expect("tmp"),
         );
-        let file = config.path().join("slurcetrail").join(TRUST_FILE);
+        let file = config.path().join("srcwranglr").join(TRUST_FILE);
         assert!(!is_trusted_in(&file, a.path()));
         trust_in(&file, a.path()).expect("trust");
         trust_in(&file, a.path()).expect("again");

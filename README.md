@@ -1,4 +1,4 @@
-# slurcetrail - *name is wip*
+# SrcWranglr
 
 A fast, native **C/C++ source explorer** in the spirit of [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail), written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](https://tree-sitter.github.io/).
 
@@ -93,16 +93,16 @@ cargo run --release -- ~/code/myproject    # index a project on startup
 
 | Platform | You get | Install |
 |---|---|---|
-| macOS | `slurcetrail.app` (with its icon, ad-hoc signed) and `slurcetrail-<version>-macos-<arch>.dmg` | `make install` copies the app to `/Applications` |
-| Linux | `slurcetrail-<version>-linux-<arch>.tar.gz` with the binary, a `.desktop` file and icons | `make install` (`PREFIX=/usr/local` by default; honors `DESTDIR`) |
-| Windows | `slurcetrail-<version>-windows-<arch>.zip`; run `make` from Git Bash or MSYS2 | Unzip anywhere |
+| macOS | `SrcWranglr.app` (with its icon, ad-hoc signed) and `SrcWranglr-<version>-macos-<arch>.dmg` | `make install` copies the app to `/Applications` |
+| Linux | `srcwranglr-<version>-linux-<arch>.tar.gz` with the binary, a `.desktop` file and icons | `make install` (`PREFIX=/usr/local` by default; honors `DESTDIR`) |
+| Windows | `srcwranglr-<version>-windows-<arch>.zip`; run `make` from Git Bash or MSYS2 | Unzip anywhere |
 
 Other targets: `make app` (only the macOS bundle), `make check` (format, clippy, tests), `make uninstall`, and `make clean`. To sign the app with your Developer ID, run `make app SIGN_IDENTITY="Developer ID Application: …"`. The icon's source is `assets/icon.svg`. `make icons` re-renders the PNGs from it and needs `rsvg-convert`.
 
 ### Command line
 
 ```
-slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]
+srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]
 ```
 
 | Option | Meaning |
@@ -154,7 +154,7 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 
 ## Limitations
 
-slurcetrail uses **tree-sitter, which is syntax-only**, so name resolution relies on heuristics rather than a compiler:
+SrcWranglr uses **tree-sitter, which is syntax-only**, so name resolution relies on heuristics rather than a compiler:
 
 - Overloads of the same name merge into one symbol.
 - `static` functions with the same name in different `.c` files currently merge too.
@@ -173,7 +173,7 @@ cargo fmt
 cargo run --example dump_tree -- path/to/file.cpp
 
 # Index any project headlessly and print timing and stats
-SLURCETRAIL_INDEX_PATH=~/code/myproject \
+SRCWRANGLR_INDEX_PATH=~/code/myproject \
   cargo test --release index_real_project -- --ignored --nocapture
 ```
 
@@ -186,11 +186,11 @@ Namely they are **Security Code Auditing** capabilities:
 3. Find functions that will make great fuzz targets. Autogenerate the fuzzing harnesses and collect a solid corpus
 4. Lightweight LM agency to help make sense of a large codebase.
 
-Well actually one more major change is coming up with a new name for the project. *SlurceTrail* was a random pick too close to *SourceTrail*.
+Until v0.2.0 this project was called *slurcetrail*, a working title that sat too close to *Sourcetrail*. It is now **SrcWranglr**.
 
 ## Acknowledgements
 
-- Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. slurcetrail is an independent implementation and shares no code with it.
+- Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. SrcWranglr is an independent implementation and shares no code with it.
 - Screenshots show [LevelDB](https://github.com/google/leveldb) (BSD-3-Clause, © The LevelDB Authors).
 - Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), [rfd](https://github.com/PolyMeilleur/rfd), and [nucleo-matcher](https://github.com/helix-editor/nucleo).
 

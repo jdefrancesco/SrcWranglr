@@ -23,7 +23,7 @@ pub struct Findings {
 }
 
 impl Findings {
-    /// The findings slurcetrail itself makes for `graph`, with `list`'s
+    /// The findings SrcWranglr itself makes for `graph`, with `list`'s
     /// functions flagged too.
     pub fn for_graph(graph: &CodeGraph, list: &DangerousList) -> Self {
         Self::from_findings(risky_calls(graph, list))
@@ -88,7 +88,7 @@ impl Findings {
         self.are_dismissals_applied && self.verdict(index).is_some_and(TriageStatus::is_dismissed)
     }
 
-    /// These findings with slurcetrail's own (rules and your list) made
+    /// These findings with SrcWranglr's own (rules and your list) made
     /// again for `graph` and `list`; external tools' results are kept.
     pub fn with_own_results(&self, graph: &CodeGraph, list: &DangerousList) -> Self {
         let tools = self

@@ -282,11 +282,11 @@ mod tests {
     }
 
     /// Manual check against a real project:
-    /// `SLURCETRAIL_SURVEY_PATH=/path cargo test survey_real_project -- --ignored --nocapture`
+    /// `SRCWRANGLR_SURVEY_PATH=/path cargo test survey_real_project -- --ignored --nocapture`
     #[test]
-    #[ignore = "needs SLURCETRAIL_SURVEY_PATH"]
+    #[ignore = "needs SRCWRANGLR_SURVEY_PATH"]
     fn survey_real_project() {
-        let Some(root) = std::env::var_os("SLURCETRAIL_SURVEY_PATH") else {
+        let Some(root) = std::env::var_os("SRCWRANGLR_SURVEY_PATH") else {
             return;
         };
         let start = std::time::Instant::now();

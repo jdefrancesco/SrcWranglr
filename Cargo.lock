@@ -3132,25 +3132,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "slurcetrail"
-version = "0.2.0"
-dependencies = [
- "eframe",
- "egui",
- "egui_kittest",
- "goblin",
- "ignore",
- "nucleo-matcher",
- "rfd",
- "serde",
- "serde_json",
- "tempfile",
- "toml_edit",
- "tree-sitter",
- "tree-sitter-cpp",
-]
-
-[[package]]
 name = "smallvec"
 version = "1.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3235,6 +3216,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "srcwranglr"
+version = "0.2.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui_kittest",
+ "goblin",
+ "ignore",
+ "nucleo-matcher",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml_edit",
+ "tree-sitter",
+ "tree-sitter-cpp",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-//! Notes on disk: `<project>/.slurcetrail/notes.json`.
+//! Notes on disk: `<project>/.srcwranglr/notes.json`.
 //!
 //! The file lives inside a source tree that may be untrusted, so loading
 //! validates everything, and neither loading nor saving follows symlinks.
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::{Note, NoteTarget, Notes};
 use crate::safe_fs::{is_real_dir, write_new_file};
 
-pub const NOTES_DIR: &str = ".slurcetrail";
+pub const NOTES_DIR: &str = ".srcwranglr";
 pub const NOTES_FILE: &str = "notes.json";
 const TEMP_FILE: &str = "notes.json.tmp";
 const FORMAT_VERSION: u32 = 1;

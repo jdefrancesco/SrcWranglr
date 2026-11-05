@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- slurcetrail app icon: a trail of breadcrumbs through a code graph.
+  <!-- SrcWranglr app icon: a trail of breadcrumbs through a code graph.
        Laid out on the macOS icon grid (824px tile, 100px margin). -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0.35" y2="1">

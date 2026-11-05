@@ -119,7 +119,7 @@ impl FindingView {
             .then(|| FindingViewAction::Triage(self.verdict, self.note.trim().to_string()))
     }
 
-    /// The function whose call this is: for slurcetrail's own findings,
+    /// The function whose call this is: for SrcWranglr's own findings,
     /// the rule names it (`sprintf: unbounded %s` → `sprintf`).
     fn called_function(&self) -> Option<&str> {
         let f = &self.finding;
@@ -173,7 +173,7 @@ mod tests {
 
     fn finding() -> Finding {
         Finding {
-            tool: "slurcetrail".into(),
+            tool: "SrcWranglr".into(),
             rule: "strcpy".into(),
             severity: Severity::High,
             message: "Copies without knowing the destination's size.".into(),
@@ -212,7 +212,7 @@ mod tests {
         harness.get_by_label("net.c:42 in net::read_packet");
         harness.get_by_label("Copies without knowing the destination's size.");
         harness.get_by_label("Use snprintf.");
-        harness.get_by_label("Found by slurcetrail");
+        harness.get_by_label("Found by SrcWranglr");
     }
 
     #[test]

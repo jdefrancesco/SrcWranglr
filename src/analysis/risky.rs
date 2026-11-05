@@ -6,7 +6,7 @@ use super::heuristics::{assess, Assessment, Verdict};
 use super::{Finding, Severity};
 use crate::model::{CodeGraph, EdgeKind, ExternalCall, OccurrenceRole};
 
-pub const TOOL: &str = "slurcetrail";
+pub const TOOL: &str = "SrcWranglr";
 /// What findings from the user's dangerous-functions list say found them.
 pub const LIST_TOOL: &str = "your dangerous-functions list";
 

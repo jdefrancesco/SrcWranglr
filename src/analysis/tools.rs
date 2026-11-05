@@ -15,10 +15,10 @@ pub enum Tool {
 }
 
 /// semgrep rules to use instead of the default `p/c`.
-const SEMGREP_CONFIG_VAR: &str = "SLURCETRAIL_SEMGREP_CONFIG";
-/// slurcetrail's own semgrep rules, written next to yours before each run.
+const SEMGREP_CONFIG_VAR: &str = "SRCWRANGLR_SEMGREP_CONFIG";
+/// SrcWranglr's own semgrep rules, written next to yours before each run.
 const BUNDLED_RULES: &str = include_str!("semgrep_rules.yaml");
-pub const BUNDLED_RULES_FILE: &str = "slurcetrail-builtin.yaml";
+pub const BUNDLED_RULES_FILE: &str = "srcwranglr-builtin.yaml";
 /// cppcheck ids about cppcheck itself (code it couldn't parse, macros or
 /// includes it couldn't see), not about the code's behavior.
 const CPPCHECK_SELF_REPORTS: &[&str] = &[
@@ -107,7 +107,7 @@ struct SemgrepPosition {
     col: u32,
 }
 
-/// The semgrep rules to run: `SLURCETRAIL_SEMGREP_CONFIG` if set, else
+/// The semgrep rules to run: `SRCWRANGLR_SEMGREP_CONFIG` if set, else
 /// `rules_dir` (yours plus the bundled ones, refreshed in it now).
 pub fn prepare_semgrep_rules(rules_dir: Option<&Path>) -> Result<String, String> {
     if let Some(config) = std::env::var(SEMGREP_CONFIG_VAR)
@@ -121,7 +121,7 @@ pub fn prepare_semgrep_rules(rules_dir: Option<&Path>) -> Result<String, String>
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// Writes slurcetrail's rules into `dir`, leaving other files alone.
+/// Writes SrcWranglr's rules into `dir`, leaving other files alone.
 fn write_bundled_rules(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .and_then(|()| std::fs::write(dir.join(BUNDLED_RULES_FILE), BUNDLED_RULES))
@@ -226,14 +226,14 @@ fn semgrep_columns(start: &SemgrepPosition, end: &SemgrepPosition) -> Option<(u3
 }
 
 /// A semgrep rule id without the dotted path of the folder it was loaded
-/// from (`Users.me..config.slurcetrail.semgrep.my-rule` → `my-rule`), so
+/// from (`Users.me..config.srcwranglr.semgrep.my-rule` → `my-rule`), so
 /// ids, and verdicts keyed by them, don't depend on where rules live.
 fn rule_id(check_id: &str) -> &str {
-    const RULES_DIR: &str = "slurcetrail.semgrep.";
+    const RULES_DIR: &str = "srcwranglr.semgrep.";
     if let Some(i) = check_id.find(RULES_DIR) {
         return &check_id[i + RULES_DIR.len()..];
     }
-    match check_id.find("slurcetrail.") {
+    match check_id.find("srcwranglr.") {
         Some(i) => &check_id[i..],
         None => check_id,
     }
@@ -330,7 +330,7 @@ mod tests {
         std::fs::write(rules.join("mine.yaml"), "rules: []\n").expect("write");
         write_bundled_rules(&rules).expect("write");
         let bundled = std::fs::read_to_string(rules.join(BUNDLED_RULES_FILE)).expect("read");
-        assert!(bundled.contains("slurcetrail.use-after-free"));
+        assert!(bundled.contains("srcwranglr.use-after-free"));
         assert_eq!(
             std::fs::read_to_string(rules.join("mine.yaml")).expect("read"),
             "rules: []\n"
@@ -412,16 +412,16 @@ void term(const char *s) {
     #[test]
     fn rule_ids_do_not_depend_on_the_rules_folder() {
         assert_eq!(
-            rule_id("Users.me..config.slurcetrail.semgrep.slurcetrail.use-after-free"),
-            "slurcetrail.use-after-free"
+            rule_id("Users.me..config.srcwranglr.semgrep.srcwranglr.use-after-free"),
+            "srcwranglr.use-after-free"
         );
         assert_eq!(
-            rule_id("Users.me..config.slurcetrail.semgrep.my-rule"),
+            rule_id("Users.me..config.srcwranglr.semgrep.my-rule"),
             "my-rule"
         );
         assert_eq!(
-            rule_id("tmp.rules.slurcetrail.double-free"),
-            "slurcetrail.double-free"
+            rule_id("tmp.rules.srcwranglr.double-free"),
+            "srcwranglr.double-free"
         );
         assert_eq!(rule_id("c.lang.security.gets"), "c.lang.security.gets");
     }

@@ -1,6 +1,6 @@
 //! Your dangerous-functions lists on disk: a global one used for every
-//! project (`$XDG_CONFIG_HOME/slurcetrail/dangerous.toml`, else
-//! `~/.config/…`), and the project's own in `.slurcetrail/`, whose entries
+//! project (`$XDG_CONFIG_HOME/srcwranglr/dangerous.toml`, else
+//! `~/.config/…`), and the project's own in `.srcwranglr/`, whose entries
 //! win. The project's file is untrusted (no symlinks, size limited); the
 //! global one is yours, so a symlinked dotfile is followed.
 
@@ -23,7 +23,7 @@ pub enum ListScope {
 #[derive(Debug, Default)]
 pub struct DangerousLists {
     global_path: Option<PathBuf>,
-    /// The project's `.slurcetrail` folder; `None` for the demo.
+    /// The project's `.srcwranglr` folder; `None` for the demo.
     project_dir: Option<PathBuf>,
     merged: DangerousList,
     /// Why a list couldn't be read (it is then left out).
@@ -146,13 +146,13 @@ impl DangerousLists {
     }
 }
 
-/// `$XDG_CONFIG_HOME/slurcetrail`, else `~/.config/slurcetrail`.
+/// `$XDG_CONFIG_HOME/srcwranglr`, else `~/.config/srcwranglr`.
 pub fn config_dir() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("slurcetrail"))
+    Some(config.join("srcwranglr"))
 }
 
 /// The global dangerous-functions list.
@@ -160,7 +160,7 @@ pub fn global_list_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join(LIST_FILE))
 }
 
-/// Where your semgrep rules live (slurcetrail's are written there too).
+/// Where your semgrep rules live (SrcWranglr's are written there too).
 pub fn semgrep_rules_dir() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("semgrep"))
 }
@@ -207,7 +207,7 @@ mod tests {
 
     fn lists(home: &Path, project: Option<&Path>) -> DangerousLists {
         DangerousLists::load_from(
-            Some(home.join(".config/slurcetrail").join(LIST_FILE)),
+            Some(home.join(".config/srcwranglr").join(LIST_FILE)),
             project.map(|p| p.join(NOTES_DIR)),
             true,
         )
@@ -302,7 +302,7 @@ mod tests {
         );
         let real = dotfiles.path().join(LIST_FILE);
         std::fs::write(&real, "# mine\n").expect("write");
-        let config = home.path().join(".config/slurcetrail");
+        let config = home.path().join(".config/srcwranglr");
         std::fs::create_dir_all(&config).expect("mkdir");
         std::os::unix::fs::symlink(&real, config.join(LIST_FILE)).expect("symlink");
         let mut global = lists(home.path(), None);

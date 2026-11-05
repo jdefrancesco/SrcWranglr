@@ -6,10 +6,10 @@ use super::dangerous_lists::{DangerousLists, ListScope};
 use super::finding_view::{FindingView, FindingViewAction};
 use super::tool_job::{self, ToolJob};
 use super::trust;
-use super::{SlurcetrailApp, Status};
+use super::{SrcWranglrApp, Status};
 use crate::analysis;
 
-impl SlurcetrailApp {
+impl SrcWranglrApp {
     /// Opens the editor for `name`'s dangerous-list entry.
     pub(super) fn mark_dangerous(&mut self, name: &str) {
         let existing = self.dangerous.merged().lookup(name).cloned();

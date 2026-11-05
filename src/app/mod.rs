@@ -65,7 +65,7 @@ const TRIAGE_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
 /// Entry points listed in the Go menu (all of them are reachable with ⌘E).
 const MAX_ENTRY_MENU_ITEMS: usize = 25;
-const APP_NAME: &str = "slurcetrail";
+const APP_NAME: &str = "SrcWranglr";
 const ERROR_COLOR: Color32 = Color32::from_rgb(0xE0, 0x6C, 0x6C);
 const WARNING_COLOR: Color32 = Color32::from_rgb(0xD9, 0xA6, 0x4A);
 
@@ -74,7 +74,7 @@ enum Status {
     Error(String),
 }
 
-pub struct SlurcetrailApp {
+pub struct SrcWranglrApp {
     project: Project,
     graph_view: GraphView,
     code_panel: CodePanel,
@@ -113,7 +113,7 @@ pub struct SlurcetrailApp {
     is_triage_pending: bool,
 }
 
-impl SlurcetrailApp {
+impl SrcWranglrApp {
     pub fn new(ctx: &egui::Context, options: LaunchOptions) -> Self {
         let (project, status) = match Project::demo() {
             Ok(p) => (
@@ -379,7 +379,7 @@ impl SlurcetrailApp {
     }
 }
 
-impl eframe::App for SlurcetrailApp {
+impl eframe::App for SrcWranglrApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
@@ -451,7 +451,7 @@ impl eframe::App for SlurcetrailApp {
     }
 }
 
-impl SlurcetrailApp {
+impl SrcWranglrApp {
     fn run_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
             Command::OpenProject => self.open_project_dialog(ctx),
@@ -599,13 +599,13 @@ impl SlurcetrailApp {
 mod tests {
     use super::*;
 
-    fn demo_app() -> (SlurcetrailApp, egui::Context) {
+    fn demo_app() -> (SrcWranglrApp, egui::Context) {
         let ctx = egui::Context::default();
-        let app = SlurcetrailApp::new(&ctx, LaunchOptions::default());
+        let app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
         (app, ctx)
     }
 
-    fn status_text(app: &SlurcetrailApp) -> &str {
+    fn status_text(app: &SrcWranglrApp) -> &str {
         match &app.status {
             Status::Info(text) | Status::Error(text) => text,
         }

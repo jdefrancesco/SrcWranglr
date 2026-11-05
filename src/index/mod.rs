@@ -262,11 +262,11 @@ mod tests {
     }
 
     /// Manual smoke test against a real project:
-    /// `SLURCETRAIL_INDEX_PATH=/path/to/project cargo test --release index_real_project -- --ignored --nocapture`
+    /// `SRCWRANGLR_INDEX_PATH=/path/to/project cargo test --release index_real_project -- --ignored --nocapture`
     #[test]
-    #[ignore = "needs SLURCETRAIL_INDEX_PATH"]
+    #[ignore = "needs SRCWRANGLR_INDEX_PATH"]
     fn index_real_project() {
-        let Some(root) = std::env::var_os("SLURCETRAIL_INDEX_PATH") else {
+        let Some(root) = std::env::var_os("SRCWRANGLR_INDEX_PATH") else {
             return;
         };
         let start = std::time::Instant::now();

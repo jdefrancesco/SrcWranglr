@@ -24,7 +24,7 @@ const TABLE: &str = "function";
 const MAX_ENTRIES: usize = 10_000;
 /// What a new list file starts with.
 const NEW_FILE_HEADER: &str = "\
-# Functions slurcetrail flags wherever they are called.
+# Functions SrcWranglr flags wherever they are called.
 # name: qualified (ns::f) or plain (any scope); severity: high | medium | low | off
 ";
 

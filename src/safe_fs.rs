@@ -1,4 +1,4 @@
-//! File access for files slurcetrail keeps inside a project, which may be
+//! File access for files SrcWranglr keeps inside a project, which may be
 //! an untrusted source tree: symlinks are never followed, reads are size
 //! limited, writes replace the file atomically.
 
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn writes_atomically_creating_the_folder() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let sub = dir.path().join(".slurcetrail");
+        let sub = dir.path().join(".srcwranglr");
         write_atomically(&sub, "a.toml", "one").expect("write");
         write_atomically(&sub, "a.toml", "two").expect("write");
         assert_eq!(

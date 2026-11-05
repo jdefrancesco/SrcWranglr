@@ -1,5 +1,5 @@
 //! Command-line options:
-//! `slurcetrail [PROJECT_DIR] [--symbol NAME] [--view trail|calls] [--triage]`.
+//! `srcwranglr [PROJECT_DIR] [--symbol NAME] [--view trail|calls] [--triage]`.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::graph::ViewMode;
 
 pub const USAGE: &str =
-    "usage: slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]";
+    "usage: srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]";
 
 /// The window and Dock icon (the macOS bundle also carries it as .icns).
 const ICON_PNG: &[u8] = include_bytes!("../../assets/icon-256.png");

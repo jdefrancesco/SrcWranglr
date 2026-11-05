@@ -5,11 +5,11 @@ use egui::RichText;
 use super::palette::{self, Command, OPEN_COMMAND_SHORTCUT, OPEN_SYMBOL_SHORTCUT};
 use super::survey_view::SurveyTab;
 use super::{
-    SlurcetrailApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
+    SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
     MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT, OPEN_SHORTCUT, TRIAGE_SHORTCUT,
 };
 
-impl SlurcetrailApp {
+impl SrcWranglrApp {
     pub(super) fn show_menu_bar(&mut self, ui: &mut egui::Ui) -> Option<Command> {
         egui::Panel::top("menu_bar")
             .show(ui, |ui| {

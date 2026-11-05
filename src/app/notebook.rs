@@ -1,5 +1,5 @@
 //! The open project's notes and bookmarks: loaded from and saved to
-//! `.slurcetrail/notes.json` (the demo's stay in memory), with each
+//! `.srcwranglr/notes.json` (the demo's stay in memory), with each
 //! symbol's mark resolved for the graph, symbol list, and code view.
 
 use std::collections::{BTreeMap, HashMap};

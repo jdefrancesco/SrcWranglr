@@ -3,14 +3,14 @@
 
 use super::note_editor::{EditorOutcome, NoteEditor};
 use super::notebook::symbol_target;
-use super::{SlurcetrailApp, Status};
+use super::{SrcWranglrApp, Status};
 use crate::model::SymbolId;
 use crate::notes::NoteTarget;
 
 /// Note text shown in a palette row (long notes would make search slow).
 const MAX_LABEL_CHARS: usize = 80;
 
-impl SlurcetrailApp {
+impl SrcWranglrApp {
     /// The note target of the selected symbol, or says why there's none.
     pub(super) fn selected_target(&mut self) -> Option<NoteTarget> {
         let target = self
@@ -203,13 +203,13 @@ mod tests {
     use crate::app::launch::LaunchOptions;
     use crate::app::palette::Command;
 
-    fn demo_app() -> (SlurcetrailApp, egui::Context) {
+    fn demo_app() -> (SrcWranglrApp, egui::Context) {
         let ctx = egui::Context::default();
-        let app = SlurcetrailApp::new(&ctx, LaunchOptions::default());
+        let app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
         (app, ctx)
     }
 
-    fn select(app: &mut SlurcetrailApp, name: &str) -> SymbolId {
+    fn select(app: &mut SrcWranglrApp, name: &str) -> SymbolId {
         let id = app.project.find(name).expect(name);
         app.graph_view.select(id);
         id

@@ -11,9 +11,9 @@ mod style;
 mod survey;
 
 use app::launch::parse_args;
-use app::SlurcetrailApp;
+use app::SrcWranglrApp;
 
-/// Usage: `slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME]`.
+/// Usage: `srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME]`.
 fn main() -> eframe::Result<()> {
     let options = match parse_args(std::env::args_os().skip(1)) {
         Ok(options) => options,
@@ -25,7 +25,7 @@ fn main() -> eframe::Result<()> {
     // The app id matches the Linux .desktop file, so docks group windows.
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1200.0, 800.0])
-        .with_app_id("slurcetrail");
+        .with_app_id("srcwranglr");
     let viewport = match app::launch::app_icon() {
         Ok(icon) => viewport.with_icon(std::sync::Arc::new(icon)),
         Err(message) => {
@@ -38,8 +38,8 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "slurcetrail",
+        "SrcWranglr",
         native_options,
-        Box::new(move |cc| Ok(Box::new(SlurcetrailApp::new(&cc.egui_ctx, options)))),
+        Box::new(move |cc| Ok(Box::new(SrcWranglrApp::new(&cc.egui_ctx, options)))),
     )
 }

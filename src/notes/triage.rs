@@ -1,5 +1,5 @@
 //! Your verdicts on findings: reviewed, false positive, or confirmed bug,
-//! with a note. Kept in `.slurcetrail/triage.json`, keyed by the rule, the
+//! with a note. Kept in `.srcwranglr/triage.json`, keyed by the rule, the
 //! file, and the flagged line's text, so a verdict follows its line when
 //! code above it changes.
 

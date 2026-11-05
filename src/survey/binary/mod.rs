@@ -115,7 +115,7 @@ fn inspect_bytes(path: &str, bytes: &[u8]) -> Inspection {
         Ok(goblin::Object::PE(pe)) => pe::report(path, size, &pe),
         Ok(goblin::Object::Mach(mach)) => macho::report(path, size, mach),
         Ok(goblin::Object::Archive(_) | goblin::Object::COFF(_)) => Inspection::Object,
-        Ok(_) => Inspection::Unreadable("not a format slurcetrail inspects".into()),
+        Ok(_) => Inspection::Unreadable("not a format SrcWranglr inspects".into()),
         Err(error) => Inspection::Unreadable(error.to_string()),
     }
 }

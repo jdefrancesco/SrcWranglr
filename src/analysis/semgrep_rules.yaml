@@ -1,8 +1,8 @@
-# slurcetrail's bundled semgrep rules: bug patterns that span statements,
-# which slurcetrail's own per-call checks can't see. Rewritten on every
+# SrcWranglr's bundled semgrep rules: bug patterns that span statements,
+# which SrcWranglr's own per-call checks can't see. Rewritten on every
 # run; put your own rules in other .yaml files in this folder.
 rules:
-  - id: slurcetrail.use-after-free
+  - id: srcwranglr.use-after-free
     languages: [c, cpp]
     severity: ERROR
     message: >-
@@ -24,7 +24,7 @@ rules:
           - pattern: $P->$F
           - pattern: $P[$I]
           - pattern: "*$P"
-  - id: slurcetrail.double-free
+  - id: srcwranglr.double-free
     languages: [c, cpp]
     severity: ERROR
     message: >-
@@ -44,7 +44,7 @@ rules:
           ...
           free($P);
 
-  - id: slurcetrail.unchecked-malloc
+  - id: srcwranglr.unchecked-malloc
     languages: [c, cpp]
     severity: WARNING
     message: >-
@@ -75,7 +75,7 @@ rules:
       - pattern-either:
           - pattern: $P->$F
           - pattern: $P[$I]
-  - id: slurcetrail.realloc-leak
+  - id: srcwranglr.realloc-leak
     languages: [c, cpp]
     severity: WARNING
     message: >-
@@ -86,7 +86,7 @@ rules:
       cwe: ["CWE-401: Missing Release of Memory after Effective Lifetime"]
     pattern: $P = realloc($P, $N);
 
-  - id: slurcetrail.return-stack-buffer
+  - id: srcwranglr.return-stack-buffer
     languages: [c, cpp]
     severity: ERROR
     message: >-
@@ -110,7 +110,7 @@ rules:
           }
       - pattern: return $B;
 
-  - id: slurcetrail.snprintf-return-as-length
+  - id: srcwranglr.snprintf-return-as-length
     languages: [c, cpp]
     severity: WARNING
     message: >-
@@ -138,7 +138,7 @@ rules:
           - pattern: $B + $N
           - pattern: $B[$N]
           - pattern: $S - $N
-  - id: slurcetrail.strncpy-not-terminated
+  - id: srcwranglr.strncpy-not-terminated
     languages: [c, cpp]
     severity: WARNING
     message: >-

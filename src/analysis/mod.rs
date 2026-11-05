@@ -32,7 +32,7 @@ impl Severity {
 /// Something worth a look at one place in the source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    /// What found it, e.g. `slurcetrail` or `semgrep`.
+    /// What found it, e.g. `SrcWranglr` or `semgrep`.
     pub tool: String,
     /// The rule, e.g. `strcpy` or a semgrep rule id.
     pub rule: String,
