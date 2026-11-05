@@ -4,9 +4,9 @@ A fast, native **C/C++ source explorer** in the spirit of [Sourcetrail](https://
 
 Point it at a project folder and it indexes every C/C++ file, then lets you explore classes, functions, and fields as an interactive graph next to the source. Callers are on the left, the symbol you're looking at is in the middle, and what it uses is on the right.
 
-![Exploring DBImpl::MakeRoomForWrite in LevelDB](docs/screenshots/method-trail.png)
+![A tour of SrcWranglr: the trail and class views, linked source with notes, Open in Editor, findings, Project Triage, IPC and capabilities, and fuzz targets](docs/screenshots/slideshow.webp)
 
-*Exploring `DBImpl::MakeRoomForWrite` in [LevelDB](https://github.com/google/leveldb). Its sibling members it touches are wired inside the `DBImpl` box, and the methods it calls on `VersionSet` and `MemTable` sit on the right.*
+*A quick tour: the trail and class views, linked source with notes, Open in Editor, findings, Project Triage, IPC & capabilities, and fuzz targets. (`docs/screenshots/make-slideshow.sh` rebuilds it from the screenshots.)*
 
 ---
 
