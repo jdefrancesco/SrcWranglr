@@ -7,6 +7,7 @@ use std::cmp::Reverse;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher};
 
+use crate::app::survey_view::SurveyTab;
 use crate::model::SymbolId;
 
 /// Typing this first switches the palette from symbols to commands.
@@ -33,11 +34,13 @@ pub enum Command {
     Fit,
     TrailView,
     CallHierarchy,
+    /// Opens the Project Triage window on this tab.
+    Triage(SurveyTab),
     Quit,
 }
 
 impl Command {
-    pub const ALL: [Command; 18] = [
+    pub const ALL: [Command; 24] = [
         Command::OpenProject,
         Command::Reindex,
         Command::Overview,
@@ -55,6 +58,12 @@ impl Command {
         Command::Fit,
         Command::TrailView,
         Command::CallHierarchy,
+        Command::Triage(SurveyTab::Overview),
+        Command::Triage(SurveyTab::Languages),
+        Command::Triage(SurveyTab::Links),
+        Command::Triage(SurveyTab::Binaries),
+        Command::Triage(SurveyTab::Ipc),
+        Command::Triage(SurveyTab::Complexity),
         Command::Quit,
     ];
 
@@ -77,6 +86,7 @@ impl Command {
             Command::Fit => "Fit Graph to Window",
             Command::TrailView => "View: Trail (callers and callees)",
             Command::CallHierarchy => "View: Call Hierarchy",
+            Command::Triage(tab) => tab.command_label(),
             Command::Quit => "Quit",
         }
     }

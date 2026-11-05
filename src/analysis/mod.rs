@@ -2,6 +2,7 @@
 //! (and, from external tools, their findings), and what each function
 //! does by way of the APIs it calls.
 
+pub mod capabilities;
 pub mod dangerous;
 pub mod heuristics;
 pub mod risky;

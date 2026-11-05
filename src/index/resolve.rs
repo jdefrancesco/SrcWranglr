@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use super::extract::{Decl, FileFacts, Lookup, Reference};
 use crate::model::{
-    CodeGraph, Edge, EdgeKind, ExternalCall, Occurrence, OccurrenceRole, Symbol, SymbolId,
-    SymbolKind,
+    CodeGraph, Edge, EdgeKind, ExternalCall, FunctionMetrics, Occurrence, OccurrenceRole, Symbol,
+    SymbolId, SymbolKind,
 };
 
 /// A reference whose source and target symbols are both known.
@@ -77,6 +77,7 @@ pub fn build_graph(files: Vec<SourceFile>) -> CodeGraph {
         })
         .collect();
 
+    let functions = function_metrics(&files, &by_qname);
     let file_contents = files.into_iter().map(|f| (f.path, f.contents)).collect();
     CodeGraph {
         symbols,
@@ -84,7 +85,29 @@ pub fn build_graph(files: Vec<SourceFile>) -> CodeGraph {
         file_contents,
         occurrences,
         external_calls,
+        functions,
     }
+}
+
+/// Each function definition's metrics, in file order.
+fn function_metrics(
+    files: &[SourceFile],
+    by_qname: &HashMap<&str, SymbolId>,
+) -> Vec<FunctionMetrics> {
+    files
+        .iter()
+        .flat_map(|file| {
+            file.facts.functions.iter().filter_map(|f| {
+                Some(FunctionMetrics {
+                    symbol: *by_qname.get(f.qualified_name.as_str())?,
+                    file: file.path.clone(),
+                    line: f.line,
+                    lines: f.lines,
+                    complexity: f.complexity,
+                })
+            })
+        })
+        .collect()
 }
 
 fn resolve_file<'f>(
@@ -743,6 +766,28 @@ mod tests {
     #[test]
     fn demo_spans_match_symbol_names() {
         assert_spans_match_names(&crate::demo::demo_codebase().expect("demo"));
+    }
+
+    #[test]
+    fn records_each_function_definitions_complexity() {
+        let graph = graph_of(&[(
+            "a.c",
+            "int pick(int a) {\n  if (a > 1 && a < 9) return 1;\n  return 0;\n}\nint one(void) { return 1; }\n",
+        )]);
+        let metrics: Vec<(&str, u32, u32, u32)> = graph
+            .functions
+            .iter()
+            .map(|f| {
+                (
+                    graph.symbols[&f.symbol].name.as_str(),
+                    f.line,
+                    f.lines,
+                    f.complexity,
+                )
+            })
+            .collect();
+        assert_eq!(metrics, vec![("pick", 1, 4, 3), ("one", 5, 1, 1)]);
+        assert!(graph.functions.iter().all(|f| f.file == "a.c"));
     }
 
     #[test]

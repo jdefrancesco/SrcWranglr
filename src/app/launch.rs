@@ -1,4 +1,5 @@
-//! Command-line options: `slurcetrail [PROJECT_DIR] [--symbol NAME] [--view trail|calls]`.
+//! Command-line options:
+//! `slurcetrail [PROJECT_DIR] [--symbol NAME] [--view trail|calls] [--triage]`.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -6,7 +7,7 @@ use std::path::PathBuf;
 use crate::graph::ViewMode;
 
 pub const USAGE: &str =
-    "usage: slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls]";
+    "usage: slurcetrail [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]";
 
 /// The window and Dock icon (the macOS bundle also carries it as .icns).
 const ICON_PNG: &[u8] = include_bytes!("../../assets/icon-256.png");
@@ -24,6 +25,8 @@ pub struct LaunchOptions {
     pub symbol: Option<String>,
     /// Graph view to start in.
     pub view: ViewMode,
+    /// Open the Project Triage window once the project is loaded.
+    pub triage: bool,
 }
 
 /// Parses arguments (without the program name).
@@ -46,6 +49,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<LaunchOpti
                     _ => return Err("--view needs `trail` or `calls`".into()),
                 };
             }
+            Some("--triage") => options.triage = true,
             Some("-h" | "--help") => return Err(USAGE.into()),
             Some(serial) if serial.starts_with(PROCESS_SERIAL_PREFIX) => {}
             Some(flag) if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
@@ -80,6 +84,7 @@ mod tests {
             project: Some(PathBuf::from("/p")),
             symbol: Some("ns::Foo".into()),
             view: ViewMode::Trail,
+            triage: false,
         };
         assert_eq!(parse(&["/p", "--symbol", "ns::Foo"]), Ok(expected.clone()));
         assert_eq!(parse(&["--symbol", "ns::Foo", "/p"]), Ok(expected));
@@ -95,6 +100,13 @@ mod tests {
         let icon = app_icon().expect("icon");
         assert_eq!((icon.width, icon.height), (ICON_SIZE, ICON_SIZE));
         assert_eq!(icon.rgba.len(), (ICON_SIZE * ICON_SIZE * 4) as usize);
+    }
+
+    #[test]
+    fn parses_the_triage_flag() {
+        let options = parse(&["/p", "--triage"]).expect("parse");
+        assert!(options.triage);
+        assert_eq!(options.project, Some(PathBuf::from("/p")));
     }
 
     #[test]

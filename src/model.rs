@@ -118,6 +118,19 @@ pub struct ExternalCall {
     pub args: Vec<String>,
 }
 
+/// Size and branching of one function definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionMetrics {
+    pub symbol: SymbolId,
+    pub file: String,
+    /// 1-based line where the definition starts.
+    pub line: u32,
+    /// Lines the definition covers, from its return type to its `}`.
+    pub lines: u32,
+    /// McCabe cyclomatic complexity: 1 plus one per branch point.
+    pub complexity: u32,
+}
+
 /// An occurrence together with the file it is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Location {
@@ -135,6 +148,8 @@ pub struct CodeGraph {
     pub occurrences: HashMap<String, Vec<Occurrence>>,
     /// Calls to functions outside the project, per file, sorted by span.
     pub external_calls: HashMap<String, Vec<ExternalCall>>,
+    /// Every function definition's size and complexity.
+    pub functions: Vec<FunctionMetrics>,
 }
 
 impl CodeGraph {

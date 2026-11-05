@@ -8,6 +8,7 @@ mod model;
 mod notes;
 mod safe_fs;
 mod style;
+mod survey;
 
 use app::launch::parse_args;
 use app::SlurcetrailApp;

@@ -18,6 +18,9 @@ mod notes_actions;
 mod notes_panel;
 mod palette;
 mod project;
+mod survey_code;
+mod survey_tabs;
+mod survey_view;
 mod symbol_list;
 mod tool_job;
 mod triage_actions;
@@ -44,6 +47,7 @@ use notebook::Notebook;
 use notes_panel::{NotesPanel, NotesPanelAction};
 use palette::{Command, Entry, Palette};
 use project::Project;
+use survey_view::{SurveyAction, SurveyTab, SurveyView};
 use symbol_list::SymbolList;
 use tool_job::ToolJob;
 
@@ -57,6 +61,8 @@ const NOTE_SHORTCUT: KeyboardShortcut =
 const NOTES_PANEL_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::B);
 const FINDINGS_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::R);
+const TRIAGE_SHORTCUT: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
 /// Entry points listed in the Go menu (all of them are reachable with ⌘E).
 const MAX_ENTRY_MENU_ITEMS: usize = 25;
 const APP_NAME: &str = "slurcetrail";
@@ -95,12 +101,16 @@ pub struct SlurcetrailApp {
     are_project_files_trusted: bool,
     /// The dangerous-list entry being edited, if its editor is open.
     dangerous_editor: Option<dangerous_editor::DangerousEditor>,
+    /// The Project Triage window.
+    survey_view: SurveyView,
     job: Option<IndexJob>,
     status: Status,
     warnings: Vec<String>,
     is_warnings_open: bool,
     /// `--symbol` from the command line, focused once its project loads.
     pending_symbol: Option<String>,
+    /// `--triage` from the command line: open Project Triage once loaded.
+    is_triage_pending: bool,
 }
 
 impl SlurcetrailApp {
@@ -128,6 +138,7 @@ impl SlurcetrailApp {
             tool_jobs: Vec::new(),
             finding_view: None,
             dangerous_editor: None,
+            survey_view: SurveyView::default(),
             triage: Default::default(),
             triage_error: None,
             are_project_files_trusted: true,
@@ -144,11 +155,15 @@ impl SlurcetrailApp {
             warnings: Vec::new(),
             is_warnings_open: false,
             pending_symbol: options.symbol,
+            is_triage_pending: options.triage,
         };
         app.graph_view.set_mode(options.view);
         match options.project {
             Some(root) => app.start_indexing(root, ctx),
-            None => app.apply_pending_symbol(),
+            None => {
+                app.apply_pending_symbol();
+                app.apply_pending_triage(ctx);
+            }
         }
         app
     }
@@ -209,6 +224,7 @@ impl SlurcetrailApp {
         // Their results belong to the old project.
         self.tool_jobs.clear();
         self.finding_view = None;
+        self.survey_view.reset();
         self.report_findings();
         let root_for_triage = root.clone();
         self.project = Project::new(name.clone(), Some(root), outcome.graph);
@@ -231,6 +247,13 @@ impl SlurcetrailApp {
         self.warnings = outcome.warnings;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{APP_NAME} — {name}")));
         self.apply_pending_symbol();
+        self.apply_pending_triage(ctx);
+    }
+
+    fn apply_pending_triage(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.is_triage_pending) {
+            self.run_command(Command::Triage(SurveyTab::Overview), ctx);
+        }
     }
 
     /// Adds what's worth knowing about the project's notes to the status.
@@ -278,6 +301,9 @@ impl SlurcetrailApp {
         });
         if can_use && ctx.input_mut(|i| i.consume_shortcut(&FINDINGS_SHORTCUT)) {
             self.run_command(Command::ShowFindings, ctx);
+        }
+        if can_use && ctx.input_mut(|i| i.consume_shortcut(&TRIAGE_SHORTCUT)) {
+            self.run_command(Command::Triage(SurveyTab::Overview), ctx);
         }
         if panel {
             self.run_command(Command::ShowNotes, ctx);
@@ -400,6 +426,12 @@ impl eframe::App for SlurcetrailApp {
         self.show_note_editor(&ctx);
         self.show_finding_view(&ctx);
         self.show_dangerous_editor(&ctx);
+        let survey = self
+            .survey_view
+            .show(&ctx, &self.project.name, &self.project.graph);
+        if let Some(SurveyAction::GoTo { symbol, file, line }) = survey {
+            self.go_to_place(symbol, &file, line);
+        }
         let notes = if self.palette.is_open() {
             self.note_candidates()
         } else {
@@ -453,6 +485,11 @@ impl SlurcetrailApp {
             Command::Fit => self.graph_view.fit(),
             Command::TrailView => self.graph_view.set_mode(ViewMode::Trail),
             Command::CallHierarchy => self.graph_view.set_mode(ViewMode::CallHierarchy),
+            Command::Triage(tab) => {
+                let root = self.project.root.clone();
+                self.survey_view
+                    .open(tab, &self.project.graph, root.as_deref(), ctx);
+            }
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }
@@ -572,6 +609,14 @@ mod tests {
         match &app.status {
             Status::Info(text) | Status::Error(text) => text,
         }
+    }
+
+    #[test]
+    fn the_triage_command_opens_the_triage_window() {
+        let (mut app, ctx) = demo_app();
+        assert!(!app.survey_view.is_open());
+        app.run_command(Command::Triage(SurveyTab::Binaries), &ctx);
+        assert!(app.survey_view.is_open());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! `resolve` names into a [`CodeGraph`]. [`job::IndexJob`] runs the whole
 //! thing on a background thread for the UI.
 
+mod complexity;
 mod discover;
 mod extract;
 pub mod job;
@@ -296,6 +297,14 @@ mod tests {
             *risky_by_rule.entry(finding.rule).or_default() += 1;
         }
         println!("external calls: {external}; risky calls by rule: {risky_by_rule:?}");
+        for found in crate::analysis::capabilities::capabilities_in(graph) {
+            let functions: Vec<(&str, usize)> = found
+                .functions
+                .iter()
+                .map(|f| (f.name.as_str(), f.calls.len()))
+                .collect();
+            println!("capability {}: {functions:?}", found.category.label());
+        }
         let name = |id| {
             graph
                 .symbols
