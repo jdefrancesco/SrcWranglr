@@ -81,8 +81,8 @@ A first look at an unfamiliar codebase. Open it with **Triage → Project Triage
 **Requirements:** a recent Rust toolchain (**1.95+**, required by eframe 0.37). Development and testing happen on macOS. egui/eframe also targets Linux and Windows, but those platforms haven't been tested yet.
 
 ```sh
-git clone https://github.com/jdefrancesco/slurcetrail.git
-cd slurcetrail
+git clone https://github.com/jdefrancesco/SrcWranglr.git
+cd SrcWranglr
 cargo run --release                        # starts with a small built-in demo
 cargo run --release -- ~/code/myproject    # index a project on startup
 ```
