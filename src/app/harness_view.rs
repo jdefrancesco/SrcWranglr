@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::dialogs::{self, DialogState, PendingDialog};
 use super::survey_view::{plural, ERROR_COLOR};
 use super::{SrcWranglrApp, Status};
 use crate::analysis::fuzz::harness::{draft, todo_count, Harness};
@@ -25,6 +26,8 @@ pub struct HarnessView {
     /// The harness text, as edited.
     code: String,
     saved: Option<Saved>,
+    /// The Save As… dialog, while it is open.
+    save_dialog: Option<PendingDialog<PathBuf>>,
 }
 
 impl HarnessView {
@@ -34,6 +37,7 @@ impl HarnessView {
             file_name: harness.file_name,
             code: harness.code,
             saved: None,
+            save_dialog: None,
         }
     }
 
@@ -52,6 +56,7 @@ impl HarnessView {
     }
 
     fn contents(&mut self, ui: &mut egui::Ui, root: Option<&Path>) {
+        self.poll_save_dialog();
         let heading = ui.horizontal(|ui| {
             let heading = ui.strong(&self.file_name);
             let todos = todo_count(&self.code);
@@ -59,8 +64,12 @@ impl HarnessView {
             if ui.button("Copy").clicked() {
                 ui.ctx().copy_text(self.code.clone());
             }
-            if ui.button("Save As…").clicked() {
-                self.save_as(root);
+            let can_save = self.save_dialog.is_none();
+            if ui
+                .add_enabled(can_save, egui::Button::new("Save As…"))
+                .clicked()
+            {
+                self.save_as(ui.ctx(), root);
             }
             heading.id
         });
@@ -85,16 +94,38 @@ impl HarnessView {
         });
     }
 
-    fn save_as(&mut self, root: Option<&Path>) {
-        let dialog = rfd::FileDialog::new()
-            .set_title("Save the fuzz harness")
-            .set_file_name(&self.file_name);
-        let dialog = match root {
-            Some(root) => dialog.set_directory(root),
-            None => dialog,
+    /// Asks where to save, off the UI code (see `dialogs`);
+    /// `poll_save_dialog` saves there.
+    fn save_as(&mut self, ctx: &egui::Context, root: Option<&Path>) {
+        let file_name = self.file_name.clone();
+        let root = root.map(Path::to_path_buf);
+        let dialog = dialogs::spawn(ctx, move || {
+            let dialog = rfd::FileDialog::new()
+                .set_title("Save the fuzz harness")
+                .set_file_name(file_name);
+            match root {
+                Some(root) => dialog.set_directory(root),
+                None => dialog,
+            }
+            .save_file()
+        });
+        match dialog {
+            Ok(dialog) => self.save_dialog = Some(dialog),
+            Err(error) => self.saved = Some(Saved::Failed(error)),
+        }
+    }
+
+    fn poll_save_dialog(&mut self) {
+        let Some(state) = self.save_dialog.as_ref().map(PendingDialog::poll) else {
+            return;
         };
-        if let Some(path) = dialog.save_file() {
-            self.save_to(&path);
+        if state != DialogState::Open {
+            self.save_dialog = None;
+        }
+        match state {
+            DialogState::Open | DialogState::Cancelled => {}
+            DialogState::Picked(path) => self.save_to(&path),
+            DialogState::Failed(error) => self.saved = Some(Saved::Failed(error)),
         }
     }
 
@@ -191,6 +222,35 @@ mod tests {
         assert_eq!(view.saved, Some(Saved::To(path.clone())));
         let written = std::fs::read_to_string(&path).expect("read");
         assert!(written.ends_with("// edited\n"));
+    }
+
+    #[test]
+    fn a_path_picked_in_the_save_dialog_gets_the_harness() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fuzz_parse.cc");
+        let picked = path.clone();
+        let mut view = view();
+        view.save_dialog =
+            Some(dialogs::spawn(&egui::Context::default(), move || Some(picked)).expect("spawn"));
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 700.0))
+            .build_ui_state(
+                |ui, view: &mut HarnessView| {
+                    let ctx = ui.ctx().clone();
+                    view.show(&ctx, None);
+                },
+                view,
+            );
+        for _ in 0..400 {
+            harness.step();
+            if harness.state().save_dialog.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(harness.state().saved, Some(Saved::To(path.clone())));
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert!(written.contains("TODO: one"));
     }
 
     #[cfg(unix)]

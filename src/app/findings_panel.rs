@@ -1,6 +1,7 @@
 //! The Findings panel: risky calls (and imported tool results), most
 //! severe first, filterable by severity and text; click one to go there.
 
+use super::layout::Layout;
 use egui::RichText;
 
 use super::findings::Findings;
@@ -32,11 +33,12 @@ impl FindingsPanel {
         ui: &mut egui::Ui,
         findings: &'f Findings,
         graph: &CodeGraph,
+        layout: Layout,
     ) -> Option<&'f Finding> {
         if !self.is_open {
             return None;
         }
-        egui::Panel::right("findings_panel")
+        egui::Panel::right(layout.pane_id("findings_panel"))
             .resizable(true)
             .default_size(DEFAULT_WIDTH)
             .show(ui, |ui| self.contents(ui, findings, graph))
@@ -263,7 +265,9 @@ mod tests {
         };
         let mut harness = Harness::new_ui_state(
             |ui, state: &mut State| {
-                let picked = state.panel.show(ui, &state.findings, &state.graph);
+                let picked = state
+                    .panel
+                    .show(ui, &state.findings, &state.graph, Layout::default());
                 if let Some(f) = picked {
                     state.picked = Some((f.rule.clone(), f.line));
                 }

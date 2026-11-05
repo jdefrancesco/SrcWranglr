@@ -95,9 +95,11 @@ A first look at an unfamiliar codebase. Open it with **Triage → Project Triage
 ```sh
 git clone https://github.com/jdefrancesco/SrcWranglr.git
 cd SrcWranglr
-cargo run --release                        # starts with a small built-in demo
+cargo run --release                        # opens on the start page
 cargo run --release -- ~/code/myproject    # index a project on startup
 ```
+
+The start page opens a project folder (⌘O), reopens one of your recent projects, or shows a small built-in demo. **File → Open Recent** and **File → Open Demo Project** do the same once a project is open.
 
 ### Building a package
 
@@ -140,6 +142,10 @@ srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triag
 | Frame everything | **Fit**, or double-click the background |
 | Filter symbols | Type in **Search** |
 | Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
+| Put the source beside the graph, or back below it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
+| Undo dragged pane sizes | **View → Reset Layout** |
+
+The window opens maximized the first time. After that it reopens with the size, position and pane sizes you left it at, and with the source pane where you put it.
 
 ---
 

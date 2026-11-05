@@ -4,6 +4,7 @@
 mod code_panel;
 mod dangerous_editor;
 mod dangerous_lists;
+mod dialogs;
 mod editor;
 mod finding_view;
 mod findings;
@@ -11,12 +12,14 @@ mod findings_actions;
 mod findings_panel;
 mod harness_view;
 pub mod launch;
+mod layout;
 mod locations;
 mod menus;
 mod note_editor;
 mod notebook;
 mod notes_actions;
 mod notes_panel;
+mod opening;
 mod palette;
 mod project;
 mod survey_code;
@@ -27,6 +30,7 @@ mod symbol_list;
 mod tool_job;
 mod triage_actions;
 mod trust;
+mod welcome;
 
 use std::path::PathBuf;
 
@@ -44,6 +48,7 @@ use editor::SourcePosition;
 use finding_view::FindingView;
 use findings::Findings;
 use findings_panel::FindingsPanel;
+use layout::{Layout, SourcePlacement};
 use note_editor::NoteEditor;
 use notebook::Notebook;
 use notes_panel::{NotesPanel, NotesPanelAction};
@@ -52,6 +57,7 @@ use project::Project;
 use survey_view::{SurveyAction, SurveyTab, SurveyView};
 use symbol_list::SymbolList;
 use tool_job::ToolJob;
+use welcome::RecentProjects;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const ENTRY_POINT_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::E);
@@ -65,6 +71,8 @@ const FINDINGS_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::R);
 const TRIAGE_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
+const LAYOUT_SHORTCUT: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::L);
 /// Entry points listed in the Go menu (all of them are reachable with ⌘E).
 const MAX_ENTRY_MENU_ITEMS: usize = 25;
 const APP_NAME: &str = "SrcWranglr";
@@ -107,6 +115,15 @@ pub struct SrcWranglrApp {
     survey_view: SurveyView,
     /// The drafted fuzz harness, if its window is open.
     harness_view: Option<harness_view::HarnessView>,
+    /// Where the source pane sits; kept between launches.
+    layout: Layout,
+    /// The Open Project folder dialog, while it is open.
+    open_dialog: Option<dialogs::PendingDialog<PathBuf>>,
+    /// Project folders opened before; kept between launches.
+    recent: RecentProjects,
+    /// Whether a project (or the demo) is open; until then the start page
+    /// shows.
+    is_project_open: bool,
     job: Option<IndexJob>,
     status: Status,
     warnings: Vec<String>,
@@ -118,20 +135,14 @@ pub struct SrcWranglrApp {
 }
 
 impl SrcWranglrApp {
-    pub fn new(ctx: &egui::Context, options: LaunchOptions) -> Self {
-        let (project, status) = match Project::demo() {
-            Ok(p) => (
-                p,
-                Status::Info(
-                    "Showing the built-in demo. File → Open Project… (⌘O) to index your own code."
-                        .into(),
-                ),
-            ),
-            Err(e) => (
-                Project::empty(),
-                Status::Error(format!("Could not load the demo: {e}")),
-            ),
-        };
+    /// The app, with the layout saved in `storage` from the last launch.
+    pub fn new(
+        ctx: &egui::Context,
+        storage: Option<&dyn eframe::Storage>,
+        options: LaunchOptions,
+    ) -> Self {
+        let project = Project::empty();
+        let status = Status::Info("Open a project folder to get started.".into());
         let notebook = Notebook::open(&project);
         let dangerous = DangerousLists::load(None, true);
         let findings = Findings::for_graph(&project.graph, dangerous.merged());
@@ -144,6 +155,10 @@ impl SrcWranglrApp {
             dangerous_editor: None,
             survey_view: SurveyView::default(),
             harness_view: None,
+            layout: Layout::load(storage),
+            open_dialog: None,
+            recent: RecentProjects::load(storage),
+            is_project_open: false,
             triage: Default::default(),
             triage_error: None,
             are_project_files_trusted: true,
@@ -165,130 +180,11 @@ impl SrcWranglrApp {
         app.graph_view.set_mode(options.view);
         match options.project {
             Some(root) => app.start_indexing(root, ctx),
-            None => {
-                app.apply_pending_symbol();
-                app.apply_pending_triage(ctx);
-            }
+            // `--symbol` or `--triage` without a folder: look in the demo.
+            None if app.pending_symbol.is_some() || app.is_triage_pending => app.open_demo(ctx),
+            None => {}
         }
         app
-    }
-
-    fn start_indexing(&mut self, root: PathBuf, ctx: &egui::Context) {
-        if let Some(previous) = self.job.take() {
-            previous.cancel();
-        }
-        // Old warnings belong to the old project; don't show them next to
-        // this run's result (which may be an error).
-        self.warnings.clear();
-        self.is_warnings_open = false;
-        self.status = Status::Info(format!("Indexing {}…", root.display()));
-        self.job = Some(IndexJob::spawn(root, IndexOptions::default(), ctx.clone()));
-    }
-
-    fn open_project_dialog(&mut self, ctx: &egui::Context) {
-        let mut dialog = rfd::FileDialog::new().set_title("Open a C/C++ project folder");
-        if let Some(root) = &self.project.root {
-            dialog = dialog.set_directory(root);
-        }
-        if let Some(root) = dialog.pick_folder() {
-            self.start_indexing(root, ctx);
-        }
-    }
-
-    fn poll_job(&mut self, ctx: &egui::Context) {
-        let Some(job) = self.job.as_mut() else {
-            return;
-        };
-        let Some(result) = job.poll() else {
-            return;
-        };
-        let root = job.root().to_path_buf();
-        self.job = None;
-        match result {
-            Ok(outcome) => self.load_project(root, outcome, ctx),
-            Err(IndexError::Cancelled) => self.status = Status::Info("Indexing cancelled.".into()),
-            Err(err) => self.status = Status::Error(err.to_string()),
-        }
-    }
-
-    fn load_project(&mut self, root: PathBuf, outcome: IndexOutcome, ctx: &egui::Context) {
-        let name = root
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| root.display().to_string());
-        self.status = Status::Info(format!(
-            "Indexed {} files: {} symbols, {} relationships.",
-            outcome.indexed_files,
-            outcome.graph.symbols.len(),
-            outcome.graph.edges.len()
-        ));
-        self.are_project_files_trusted =
-            !trust::has_project_files(&root) || trust::is_trusted(&root);
-        self.dangerous = DangerousLists::load(Some(&root), self.are_project_files_trusted);
-        self.findings = Findings::for_graph(&outcome.graph, self.dangerous.merged());
-        // Their results belong to the old project.
-        self.tool_jobs.clear();
-        self.finding_view = None;
-        self.survey_view.reset();
-        self.harness_view = None;
-        self.report_findings();
-        let root_for_triage = root.clone();
-        self.project = Project::new(name.clone(), Some(root), outcome.graph);
-        self.notebook = Notebook::open(&self.project);
-        self.note_editor = None;
-        let (triage, triage_error) = match crate::notes::triage::load(&root_for_triage) {
-            Ok(triage) => (triage, None),
-            Err(error) => (Default::default(), Some(error)),
-        };
-        self.triage = triage;
-        self.triage_error = triage_error;
-        self.refresh_verdicts();
-        self.report_notes_on_open();
-        // A new project starts with a fresh selection, in the same view mode.
-        self.graph_view = GraphView::with_mode(self.graph_view.mode());
-        self.code_panel = CodePanel::default();
-        // Palette results hold ids from the old project.
-        self.palette = Palette::default();
-        self.symbol_list.invalidate();
-        self.warnings = outcome.warnings;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{APP_NAME} — {name}")));
-        self.apply_pending_symbol();
-        self.apply_pending_triage(ctx);
-    }
-
-    fn apply_pending_triage(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.is_triage_pending) {
-            self.run_command(Command::Triage(SurveyTab::Overview), ctx);
-        }
-    }
-
-    /// Adds what's worth knowing about the project's notes to the status.
-    fn report_notes_on_open(&mut self) {
-        if let Some(error) = self.notebook.load_error() {
-            self.status = Status::Error(format!("Notes are read-only: {error}"));
-            return;
-        }
-        if let Some(error) = self.notebook.open_save_error() {
-            self.status = Status::Error(format!("Line notes moved, but {error}"));
-            return;
-        }
-        let moved = self.notebook.moved_on_open();
-        if let (Status::Info(text), true) = (&mut self.status, moved > 0) {
-            text.push_str(&format!(" {moved} line note(s) followed their code."));
-        }
-    }
-
-    fn apply_pending_symbol(&mut self) {
-        let Some(name) = self.pending_symbol.take() else {
-            return;
-        };
-        match self.project.find(&name) {
-            Some(id) => self.graph_view.select(id),
-            None => {
-                self.status =
-                    Status::Error(format!("Symbol {name} not found in {}", self.project.name))
-            }
-        }
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
@@ -310,6 +206,9 @@ impl SrcWranglrApp {
         }
         if can_use && ctx.input_mut(|i| i.consume_shortcut(&TRIAGE_SHORTCUT)) {
             self.run_command(Command::Triage(SurveyTab::Overview), ctx);
+        }
+        if can_use && ctx.input_mut(|i| i.consume_shortcut(&LAYOUT_SHORTCUT)) {
+            self.run_command(Command::SwapSourcePane, ctx);
         }
         if panel {
             self.run_command(Command::ShowNotes, ctx);
@@ -386,8 +285,16 @@ impl SrcWranglrApp {
 }
 
 impl eframe::App for SrcWranglrApp {
+    /// Keeps the layout for the next launch (eframe keeps the window's and
+    /// the panes' sizes).
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.layout.save(storage);
+        self.recent.save(storage);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.poll_open_dialog(&ctx);
         self.poll_job(&ctx);
         self.poll_tool_jobs();
         // Global shortcuts pause while the palette or a dialog is open.
@@ -404,30 +311,11 @@ impl eframe::App for SrcWranglrApp {
             self.run_command(command, &ctx);
         }
         self.show_status_bar(ui);
-        self.show_symbol_list(ui);
-        match self.notes_panel.show(ui, &self.notebook) {
-            Some(NotesPanelAction::GoTo(target)) => self.go_to_note(&target),
-            Some(NotesPanelAction::Edit(target)) => self.edit_note(target),
-            None => {}
+        if self.is_project_open {
+            self.show_project_panes(ui);
+        } else {
+            self.show_start_page(ui, &ctx);
         }
-        let finding = self
-            .findings_panel
-            .show(ui, &self.findings, &self.project.graph)
-            .map(|f| (f.symbol, f.file.clone(), f.line));
-        if let Some((symbol, file, line)) = finding {
-            self.go_to_place(symbol, &file, line);
-        }
-        self.show_code_panel(ui);
-        egui::CentralPanel::default().show(ui, |ui| {
-            let notebook = &self.notebook;
-            let badge_of = |id| {
-                notebook.mark(id).map(|m| Badge {
-                    is_starred: m.is_starred,
-                    has_text: m.has_text,
-                })
-            };
-            self.graph_view.show(ui, &self.project.graph, &badge_of);
-        });
         self.show_warnings_window(&ctx);
         self.show_note_editor(&ctx);
         self.show_finding_view(&ctx);
@@ -465,9 +353,57 @@ impl eframe::App for SrcWranglrApp {
 }
 
 impl SrcWranglrApp {
+    /// The symbol list, notes, findings, source and graph of the open project.
+    fn show_project_panes(&mut self, ui: &mut egui::Ui) {
+        self.show_symbol_list(ui);
+        match self.notes_panel.show(ui, &self.notebook, self.layout) {
+            Some(NotesPanelAction::GoTo(target)) => self.go_to_note(&target),
+            Some(NotesPanelAction::Edit(target)) => self.edit_note(target),
+            None => {}
+        }
+        let finding = self
+            .findings_panel
+            .show(ui, &self.findings, &self.project.graph, self.layout)
+            .map(|f| (f.symbol, f.file.clone(), f.line));
+        if let Some((symbol, file, line)) = finding {
+            self.go_to_place(symbol, &file, line);
+        }
+        self.show_code_panel(ui);
+        egui::CentralPanel::default().show(ui, |ui| {
+            let notebook = &self.notebook;
+            let badge_of = |id| {
+                notebook.mark(id).map(|m| Badge {
+                    is_starred: m.is_starred,
+                    has_text: m.has_text,
+                })
+            };
+            self.graph_view.show(ui, &self.project.graph, &badge_of);
+        });
+    }
+
+    /// The start page, until a project (or the demo) is open.
+    fn show_start_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let open_keys = ctx.format_shortcut(&OPEN_SHORTCUT);
+        let indexing = self.job.as_ref().map(|job| job.root().to_path_buf());
+        let action = egui::CentralPanel::default()
+            .show(ui, |ui| {
+                welcome::show(ui, &self.recent, indexing.as_deref(), &open_keys)
+            })
+            .inner;
+        if let Some(action) = action {
+            self.handle_welcome(action, ctx);
+        }
+    }
+
     fn run_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
             Command::OpenProject => self.open_project_dialog(ctx),
+            Command::OpenRecent(index) => {
+                if let Some(root) = self.recent.paths().get(index).cloned() {
+                    self.open_recent(root, ctx);
+                }
+            }
+            Command::OpenDemo => self.open_demo(ctx),
             Command::Reindex => match self.project.root.clone() {
                 Some(root) => self.start_indexing(root, ctx),
                 None => {
@@ -506,6 +442,21 @@ impl SrcWranglrApp {
                     self.findings.all(),
                     root.as_deref(),
                     ctx,
+                );
+            }
+            Command::SwapSourcePane => {
+                self.layout = self.layout.swapped();
+                let place = match self.layout.source {
+                    SourcePlacement::Below => "below",
+                    SourcePlacement::Beside => "beside",
+                };
+                self.status = Status::Info(format!("Source pane moved {place} the graph."));
+            }
+            Command::ResetLayout => {
+                self.layout = self.layout.reset();
+                ctx.memory_mut(egui::Memory::reset_areas);
+                self.status = Status::Info(
+                    "Layout reset: panes and windows are back where they start.".into(),
                 );
             }
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -556,7 +507,7 @@ impl SrcWranglrApp {
     }
 
     fn show_symbol_list(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::left("symbol_list")
+        egui::Panel::left(self.layout.pane_id("symbol_list"))
             .resizable(true)
             .default_size(260.0)
             .show(ui, |ui| {
@@ -571,28 +522,27 @@ impl SrcWranglrApp {
     }
 
     fn show_code_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("code_panel")
-            .resizable(true)
-            .default_size(260.0)
-            .show(ui, |ui| {
-                let selected = self.graph_view.selected();
-                let action = self.code_panel.show(
-                    ui,
-                    &self.project.graph,
-                    selected,
-                    &self.notebook,
-                    &self.findings,
-                );
-                match action {
-                    Some(PanelAction::Explore(id)) => self.graph_view.select(id),
-                    Some(PanelAction::OpenInEditor) => self.open_in_editor(),
-                    Some(PanelAction::ToggleBookmark(target)) => self.toggle_bookmark(target),
-                    Some(PanelAction::EditNote(target)) => self.edit_note(target),
-                    Some(PanelAction::ShowFinding(id)) => self.explain_finding(id),
-                    Some(PanelAction::MarkDangerous(name)) => self.mark_dangerous(&name),
-                    None => {}
-                }
-            });
+        let layout = self.layout;
+        let (layout, ()) = layout.show_source_pane(ui, |ui| {
+            let selected = self.graph_view.selected();
+            let action = self.code_panel.show(
+                ui,
+                &self.project.graph,
+                selected,
+                &self.notebook,
+                &self.findings,
+            );
+            match action {
+                Some(PanelAction::Explore(id)) => self.graph_view.select(id),
+                Some(PanelAction::OpenInEditor) => self.open_in_editor(),
+                Some(PanelAction::ToggleBookmark(target)) => self.toggle_bookmark(target),
+                Some(PanelAction::EditNote(target)) => self.edit_note(target),
+                Some(PanelAction::ShowFinding(id)) => self.explain_finding(id),
+                Some(PanelAction::MarkDangerous(name)) => self.mark_dangerous(&name),
+                None => {}
+            }
+        });
+        self.layout = layout;
     }
 
     fn show_warnings_window(&mut self, ctx: &egui::Context) {
@@ -619,8 +569,20 @@ mod tests {
 
     fn demo_app() -> (SrcWranglrApp, egui::Context) {
         let ctx = egui::Context::default();
-        let app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
+        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
+        app.open_demo(&ctx);
         (app, ctx)
+    }
+
+    #[test]
+    fn the_source_pane_can_be_swapped_and_the_layout_reset() {
+        let (mut app, ctx) = demo_app();
+        app.run_command(Command::SwapSourcePane, &ctx);
+        assert_eq!(app.layout.source, SourcePlacement::Beside);
+        let before_reset = app.layout;
+        app.run_command(Command::ResetLayout, &ctx);
+        assert_eq!(app.layout.source, SourcePlacement::Below);
+        assert_ne!(app.layout.generation, before_reset.generation);
     }
 
     fn status_text(app: &SrcWranglrApp) -> &str {

@@ -1,6 +1,7 @@
 //! The Notes & Bookmarks panel on the right: every note of the project,
 //! newest first, filterable; click one to go there.
 
+use super::layout::Layout;
 use egui::RichText;
 
 use super::notebook::Notebook;
@@ -63,11 +64,16 @@ impl NotesPanel {
     }
 
     /// Draws the panel (if open) at the right of `ui`.
-    pub fn show(&mut self, ui: &mut egui::Ui, notebook: &Notebook) -> Option<NotesPanelAction> {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        notebook: &Notebook,
+        layout: Layout,
+    ) -> Option<NotesPanelAction> {
         if !self.is_open {
             return None;
         }
-        egui::Panel::right("notes_panel")
+        egui::Panel::right(layout.pane_id("notes_panel"))
             .resizable(true)
             .default_size(DEFAULT_WIDTH)
             .show(ui, |ui| self.contents(ui, notebook))

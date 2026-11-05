@@ -145,7 +145,7 @@ mod tests {
     /// The demo app, showing a one-file project with a `strcpy` on line 2.
     fn app_with_strcpy() -> SrcWranglrApp {
         let ctx = egui::Context::default();
-        let mut app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
+        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
         let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
         let facts = Extractor::new()
             .expect("grammar")
@@ -184,7 +184,7 @@ mod tests {
             facts,
         }]);
         let ctx = egui::Context::default();
-        let mut app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
+        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
         let outcome = crate::index::IndexOutcome {
             graph,
             indexed_files: 1,

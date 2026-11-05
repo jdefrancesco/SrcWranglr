@@ -1,12 +1,14 @@
-//! The menu bar: File, Go, Analyze, and Triage.
+//! The menu bar: File, Go, View, Analyze, and Triage.
 
 use egui::RichText;
 
+use super::layout::SourcePlacement;
 use super::palette::{self, Command, OPEN_COMMAND_SHORTCUT, OPEN_SYMBOL_SHORTCUT};
 use super::survey_view::SurveyTab;
 use super::{
     SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
-    MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT, OPEN_SHORTCUT, TRIAGE_SHORTCUT,
+    LAYOUT_SHORTCUT, MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT, OPEN_SHORTCUT,
+    TRIAGE_SHORTCUT,
 };
 
 impl SrcWranglrApp {
@@ -17,12 +19,14 @@ impl SrcWranglrApp {
                     .ui(ui, |ui| {
                         let file = ui.menu_button("File", |ui| self.file_menu(ui));
                         let go = ui.menu_button("Go", |ui| self.go_menu(ui));
+                        let view = ui.menu_button("View", |ui| self.view_menu(ui));
                         let analyze = ui.menu_button("Analyze", |ui| self.analyze_menu(ui));
                         let triage = ui.menu_button("Triage", triage_menu);
                         let action = file
                             .inner
                             .flatten()
                             .or(go.inner.flatten())
+                            .or(view.inner.flatten())
                             .or(analyze.inner.flatten())
                             .or(triage.inner.flatten());
                         ui.separator();
@@ -40,6 +44,19 @@ impl SrcWranglrApp {
         if ui.add(open).clicked() {
             return Some(Command::OpenProject);
         }
+        let recent = ui
+            .add_enabled_ui(!self.recent.paths().is_empty(), |ui| {
+                ui.menu_button("Open Recent", |ui| self.recent_menu(ui))
+                    .inner
+                    .flatten()
+            })
+            .inner;
+        if recent.is_some() {
+            return recent;
+        }
+        if ui.button("Open Demo Project").clicked() {
+            return Some(Command::OpenDemo);
+        }
         let can_reindex = self.project.root.is_some() && self.job.is_none();
         if ui
             .add_enabled(can_reindex, egui::Button::new("Re-index"))
@@ -49,6 +66,15 @@ impl SrcWranglrApp {
         }
         ui.separator();
         ui.button("Quit").clicked().then_some(Command::Quit)
+    }
+
+    /// Recent projects, most recent first.
+    fn recent_menu(&self, ui: &mut egui::Ui) -> Option<Command> {
+        self.recent
+            .paths()
+            .iter()
+            .position(|path| ui.button(path.display().to_string()).clicked())
+            .map(Command::OpenRecent)
     }
 
     /// The Go menu: opens the palette itself, returns other commands.
@@ -104,6 +130,30 @@ impl SrcWranglrApp {
         ]
         .into_iter()
         .find(|command| ui.button(command.label()).clicked())
+    }
+
+    /// The View menu: where the source pane sits, and resetting pane sizes.
+    pub(super) fn view_menu(&self, ui: &mut egui::Ui) -> Option<Command> {
+        let keys = ui.ctx().format_shortcut(&LAYOUT_SHORTCUT);
+        let placements = [
+            (SourcePlacement::Below, "Source Below the Graph"),
+            (SourcePlacement::Beside, "Source Beside the Graph"),
+        ];
+        let is_other_placement_picked = placements.into_iter().any(|(placement, label)| {
+            let is_current = self.layout.source == placement;
+            let keys = if is_current { "" } else { keys.as_str() };
+            let button = egui::Button::new(label)
+                .selected(is_current)
+                .shortcut_text(keys);
+            ui.add(button).clicked() && !is_current
+        });
+        if is_other_placement_picked {
+            return Some(Command::SwapSourcePane);
+        }
+        ui.separator();
+        ui.button("Reset Layout")
+            .clicked()
+            .then_some(Command::ResetLayout)
     }
 
     pub(super) fn analyze_menu(&self, ui: &mut egui::Ui) -> Option<Command> {

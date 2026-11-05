@@ -205,7 +205,8 @@ mod tests {
 
     fn demo_app() -> (SrcWranglrApp, egui::Context) {
         let ctx = egui::Context::default();
-        let app = SrcWranglrApp::new(&ctx, LaunchOptions::default());
+        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
+        app.open_demo(&ctx);
         (app, ctx)
     }
 

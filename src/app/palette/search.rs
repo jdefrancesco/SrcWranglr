@@ -18,6 +18,9 @@ pub const NOTE_PREFIX: char = '#';
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     OpenProject,
+    /// Reopens the project at this position in the recent list.
+    OpenRecent(usize),
+    OpenDemo,
     Reindex,
     Overview,
     GoToEntryPoint,
@@ -34,14 +37,17 @@ pub enum Command {
     Fit,
     TrailView,
     CallHierarchy,
+    SwapSourcePane,
+    ResetLayout,
     /// Opens the Project Triage window on this tab.
     Triage(SurveyTab),
     Quit,
 }
 
 impl Command {
-    pub const ALL: [Command; 25] = [
+    pub const ALL: [Command; 28] = [
         Command::OpenProject,
+        Command::OpenDemo,
         Command::Reindex,
         Command::Overview,
         Command::GoToEntryPoint,
@@ -58,6 +64,8 @@ impl Command {
         Command::Fit,
         Command::TrailView,
         Command::CallHierarchy,
+        Command::SwapSourcePane,
+        Command::ResetLayout,
         Command::Triage(SurveyTab::Overview),
         Command::Triage(SurveyTab::Languages),
         Command::Triage(SurveyTab::Links),
@@ -71,6 +79,8 @@ impl Command {
     pub fn label(self) -> &'static str {
         match self {
             Command::OpenProject => "Open Project…",
+            Command::OpenRecent(_) => "Open Recent Project",
+            Command::OpenDemo => "Open the Built-in Demo",
             Command::Reindex => "Re-index Project",
             Command::Overview => "Show Overview",
             Command::GoToEntryPoint => "Go to Entry Point (main)",
@@ -87,6 +97,8 @@ impl Command {
             Command::Fit => "Fit Graph to Window",
             Command::TrailView => "View: Trail (callers and callees)",
             Command::CallHierarchy => "View: Call Hierarchy",
+            Command::SwapSourcePane => "View: Move Source Pane Below or Beside the Graph",
+            Command::ResetLayout => "View: Reset Layout",
             Command::Triage(tab) => tab.command_label(),
             Command::Quit => "Quit",
         }
