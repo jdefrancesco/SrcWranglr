@@ -381,3 +381,325 @@ fn deeply_nested_code_is_cut_short_instead_of_overflowing() {
         assert!(trace.is_cut_short);
     }
 }
+
+#[test]
+fn a_default_set_in_a_branch_keeps_the_callers_value() {
+    let source = "void use_name(char *p) {\n\
+        char b[8];\n\
+        if (!p) p = \"guest\";\n\
+        strcpy(b, p);\n\
+    }\n\
+    int main(int argc, char **argv) { use_name(argv[1]); return 0; }\n";
+    let trace = trace_of(&[("d.c", source)], "d.c", "strcpy");
+    assert_eq!(trace.paths.len(), 2, "{trace:#?}");
+    assert_eq!(trace.paths[0].origin, Origin::Input(COMMAND_LINE.into()));
+    assert_eq!(stopped(&trace), ["set to a constant"]);
+}
+
+#[test]
+fn the_other_arm_of_an_if_does_not_reach() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *x = \"k\";\n\
+        if (argc > 2) { x = argv[1]; } else { strcpy(d, x); }\n\
+        return 0;\n\
+    }\n";
+    let trace = trace_of(&[("e.c", source)], "e.c", "strcpy");
+    assert_eq!(stopped(&trace), ["set to a constant"], "{trace:#?}");
+    assert_eq!(trace.paths.len(), 1);
+}
+
+#[test]
+fn the_other_arm_does_reach_on_the_next_pass_of_a_loop() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *x = \"k\";\n\
+        for (int i = 1; i < argc; i++) {\n\
+            if (i % 2) { x = argv[i]; } else { strcpy(d, x); }\n\
+        }\n\
+    }\n";
+    let trace = trace_of(&[("l.c", source)], "l.c", "strcpy");
+    assert!(
+        trace.paths.iter().any(|p| p.origin.is_input()),
+        "{trace:#?}"
+    );
+}
+
+#[test]
+fn a_variable_in_a_closed_block_is_another_variable() {
+    let source = "void f(char *p) {\n\
+        char d[8];\n\
+        { char *p = \"inner\"; p = \"inner2\"; }\n\
+        strcpy(d, p);\n\
+    }\n\
+    int main(int argc, char **argv) { f(argv[1]); }\n";
+    let trace = trace_of(&[("b.c", source)], "b.c", "strcpy");
+    assert_eq!(trace.paths.len(), 1, "{trace:#?}");
+    assert_eq!(trace.paths[0].origin, Origin::Input(COMMAND_LINE.into()));
+}
+
+#[test]
+fn a_later_write_in_a_loop_reaches_an_earlier_use() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *p = \"k\";\n\
+        while (argc-- > 1) {\n\
+            strcpy(d, p);\n\
+            p = argv[argc];\n\
+        }\n\
+    }\n";
+    let trace = trace_of(&[("w.c", source)], "w.c", "strcpy");
+    assert_eq!(trace.paths.len(), 2, "{trace:#?}");
+    assert!(trace.paths[0].origin.is_input());
+    assert_eq!(stopped(&trace), ["set to a constant"]);
+}
+
+#[test]
+fn a_for_update_runs_only_after_the_body() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *p;\n\
+        for (p = \"start\"; *p; p = argv[1]) strcpy(d, p);\n\
+    }\n";
+    let trace = trace_of(&[("f.c", source)], "f.c", "strcpy");
+    assert_eq!(trace.paths.len(), 2, "{trace:#?}");
+    assert_eq!(stopped(&trace), ["set to a constant"]);
+}
+
+#[test]
+fn too_many_writes_are_cut_short() {
+    let writes: String = (0..10)
+        .map(|i| format!("    if (c) p = \"{i}\";\n"))
+        .collect();
+    let source =
+        format!("void f(int c, char *d) {{\n    char *p = \"a\";\n{writes}    strcpy(d, p);\n}}\n");
+    let trace = trace_of(&[("m.c", &source)], "m.c", "strcpy");
+    assert!(trace.is_cut_short, "{trace:#?}");
+}
+
+#[test]
+fn a_left_out_default_argument_says_so() {
+    let source = "void put(char *d, const char *s = \"dflt\") { strcpy(d, s); }\n\
+        void g(char *d) { put(d); }\n";
+    let trace = trace_of(&[("p.cpp", source)], "p.cpp", "strcpy");
+    assert_eq!(trace.paths.len(), 1, "{trace:#?}");
+    assert!(stopped(&trace)[0].contains("default"), "{trace:#?}");
+}
+
+#[test]
+fn a_buffer_handed_to_a_function_that_never_writes_it_still_has_no_value() {
+    let source = "void look(char *b) { }\n\
+        void f(char *d) {\n\
+            char b[8];\n\
+            look(b);\n\
+            strcpy(d, b);\n\
+        }\n";
+    let trace = trace_of(&[("n.c", source)], "n.c", "strcpy");
+    assert_eq!(
+        stopped(&trace),
+        ["`b` has no value before this"],
+        "{trace:#?}"
+    );
+}
+
+#[test]
+fn a_write_to_another_field_is_not_the_traced_field() {
+    let source = "struct s { char *name; int len; };\n\
+    int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        struct s v;\n\
+        v.len = atoi(argv[2]);\n\
+        if (argc > 3) v.name = \"fixed\";\n\
+        strcpy(d, v.name);\n\
+    }\n";
+    let trace = trace_of(&[("v.c", source)], "v.c", "strcpy");
+    assert!(
+        trace.paths.iter().all(|p| !p.origin.is_input()),
+        "{trace:#?}"
+    );
+    let mut why = stopped(&trace);
+    why.sort_unstable();
+    assert_eq!(why, ["`v` has no value before this", "set to a constant"]);
+}
+
+#[test]
+fn a_field_set_by_the_caller_is_found_through_the_struct() {
+    let source = "struct s { char *name; int len; };\n\
+    void use(struct s *q, int c, char *d) {\n\
+        if (c) q->name = \"x\";\n\
+        strcpy(d, q->name);\n\
+    }\n\
+    int main(int argc, char **argv) {\n\
+        struct s v;\n\
+        char d[8];\n\
+        v.len = 4;\n\
+        v.name = argv[1];\n\
+        use(&v, argc, d);\n\
+    }\n";
+    let trace = trace_of(&[("u.c", source)], "u.c", "strcpy");
+    assert_eq!(trace.paths.len(), 2, "{trace:#?}");
+    assert_eq!(trace.paths[0].origin, Origin::Input(COMMAND_LINE.into()));
+    assert!(trace.paths[0]
+        .steps
+        .iter()
+        .all(|s| !s.code.contains("v.len")));
+    assert_eq!(stopped(&trace), ["set to a constant"]);
+}
+
+fn lines_of(trace: &Trace) -> Vec<Vec<u32>> {
+    trace.paths.iter().map(lines).collect()
+}
+
+#[test]
+fn a_break_can_skip_an_assignment() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *p = argv[1];\n\
+        do { if (argc) break; p = \"k\"; } while (0);\n\
+        strcpy(d, p);\n\
+    }\n";
+    let trace = trace_of(&[("j.c", source)], "j.c", "strcpy");
+    assert_eq!(trace.paths.len(), 2, "{trace:#?}");
+    assert!(trace.paths[0].origin.is_input());
+}
+
+#[test]
+fn a_goto_can_skip_an_assignment() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *p = argv[1];\n\
+        if (argc > 1) goto out;\n\
+        p = \"k\";\n\
+    out:\n\
+        strcpy(d, p);\n\
+    }\n";
+    let trace = trace_of(&[("g.c", source)], "g.c", "strcpy");
+    assert_eq!(trace.paths.len(), 2, "{trace:#?}");
+    assert!(trace.paths[0].origin.is_input());
+}
+
+#[test]
+fn a_whole_struct_write_replaces_its_fields() {
+    let source = "struct S { char *x; };\n\
+    int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        struct S s;\n\
+        s.x = \"k\";\n\
+        s = parse(argv[1]);\n\
+        strcpy(d, s.x);\n\
+    }\n";
+    let trace = trace_of(&[("s.c", source)], "s.c", "strcpy");
+    assert_eq!(trace.paths.len(), 1, "{trace:#?}");
+    assert!(trace.paths[0].origin.is_input());
+}
+
+#[test]
+fn clearing_a_struct_replaces_its_fields() {
+    let source = "struct S { char *x; };\n\
+    void f(struct S *p, char **argv, char *d) {\n\
+        p->x = argv[1];\n\
+        memset(p, 0, sizeof *p);\n\
+        strcpy(d, p->x);\n\
+    }\n";
+    let trace = trace_of(&[("c.c", source)], "c.c", "strcpy");
+    assert_eq!(stopped(&trace), ["`p` is cleared here"], "{trace:#?}");
+}
+
+#[test]
+fn a_variable_declared_in_a_loop_is_new_on_each_pass() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        for (int i = 0; i < 2; i++) { char *p = \"k\"; strcpy(d, p); p = argv[1]; }\n\
+    }\n";
+    let trace = trace_of(&[("r.c", source)], "r.c", "strcpy");
+    assert_eq!(stopped(&trace), ["set to a constant"], "{trace:#?}");
+    assert_eq!(trace.paths.len(), 1);
+}
+
+#[test]
+fn an_outer_loop_carries_a_later_write_too() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *p = \"k\";\n\
+        while (argc) { while (argc > 1) { strcpy(d, p); argc--; } p = argv[1]; argc--; }\n\
+    }\n";
+    let trace = trace_of(&[("o.c", source)], "o.c", "strcpy");
+    assert_eq!(trace.paths.len(), 2, "{trace:#?}");
+    assert!(trace.paths[0].origin.is_input());
+}
+
+#[test]
+fn tracing_a_write_itself_ignores_the_loops_later_writes() {
+    let source = "int main(int argc, char **argv) {\n\
+        char *p, *q;\n\
+        while (argc--) { p = \"a\"; q = p; p = argv[1]; }\n\
+    }\n";
+    let graph = graph_of_files(&[("t.c", source)]);
+    let (line, column) = position(&graph, "t.c", "p = \"a\"");
+    let trace = trace_variable(&graph, "t.c", line, column).expect("a trace");
+    assert_eq!(stopped(&trace), ["set to a constant"], "{trace:#?}");
+    assert_eq!(trace.paths.len(), 1);
+}
+
+#[test]
+fn a_declaration_in_a_condition_has_its_value() {
+    let source = "void f(char *d) {\n\
+        if (char *p = getenv(\"X\")) strcpy(d, p);\n\
+    }\n";
+    let trace = trace_of(&[("i.cpp", source)], "i.cpp", "strcpy");
+    assert_eq!(trace.paths.len(), 1, "{trace:#?}");
+    assert_eq!(trace.paths[0].origin, Origin::Input("getenv()".into()));
+}
+
+#[test]
+fn a_field_written_in_between_replaces_the_callers() {
+    let source = "typedef struct T { char *name; } T;\n\
+    void g(T *t, char *d) { strcpy(d, t->name); }\n\
+    void h(T *q, char *d, char **argv) { q->name = argv[1]; g(q, d); }\n\
+    int main(int argc, char **v) { T t; char dd[8]; t.name = \"zz\"; h(&t, dd, v); }\n";
+    let trace = trace_of(&[("h.c", source)], "h.c", "strcpy");
+    assert_eq!(trace.paths.len(), 1, "{trace:#?}");
+    assert!(trace.paths[0].origin.is_input());
+}
+
+#[test]
+fn a_lambdas_parameter_is_another_variable() {
+    let source = "void f(char *d, char *p) {\n\
+        auto g = [](char *p) { p = \"a\"; };\n\
+        strcpy(d, p);\n\
+    }\n\
+    int main(int argc, char **argv) { char d[8]; f(d, argv[1]); }\n";
+    let trace = trace_of(&[("l.cpp", source)], "l.cpp", "strcpy");
+    assert_eq!(trace.paths.len(), 1, "{trace:#?}");
+    assert!(trace.paths[0].origin.is_input());
+}
+
+#[test]
+fn each_write_into_a_buffer_is_its_own_path() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char b[8];\n\
+        b[0] = argv[1][0];\n\
+        b[1] = 'x';\n\
+        b[2] = 'x';\n\
+        b[3] = 'x';\n\
+        strcpy(d, b);\n\
+    }\n";
+    let trace = trace_of(&[("x.c", source)], "x.c", "strcpy");
+    assert!(!trace.is_cut_short, "{:?}", lines_of(&trace));
+    // From input, and the three constants, each once.
+    assert_eq!(trace.paths.len(), 4, "{:?}", lines_of(&trace));
+    assert!(trace.paths[0].origin.is_input());
+}
+
+#[test]
+fn a_loops_start_runs_once() {
+    let source = "int main(int argc, char **argv) {\n\
+        char d[8];\n\
+        char *p = \"k\";\n\
+        for (char *q = p; *q; q++) { strcpy(d, q); p = argv[1]; }\n\
+    }\n";
+    let trace = trace_of(&[("q.c", source)], "q.c", "strcpy");
+    assert_eq!(stopped(&trace), ["set to a constant"], "{trace:#?}");
+    assert_eq!(trace.paths.len(), 1);
+}

@@ -306,10 +306,13 @@ fn code_line(source: &str, line: u32) -> String {
 
 /// `node`'s code for a note: whitespace collapsed, cut short.
 pub(super) fn snippet(node: Node, source: &str) -> String {
-    let compact = text(node, source)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Only as much as can show: a node may be a whole function long.
+    let written = text(node, source);
+    let shown = written
+        .char_indices()
+        .nth(MAX_SNIPPET_CHARS * 4)
+        .map_or(written, |(end, _)| &written[..end]);
+    let compact = shown.split_whitespace().collect::<Vec<_>>().join(" ");
     cut(&compact, MAX_SNIPPET_CHARS)
 }
 

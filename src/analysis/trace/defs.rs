@@ -6,6 +6,7 @@ use tree_sitter::Node;
 
 use super::calls::{library_name, method_write, write_of};
 use super::flows::{flows, name_of, refers_to, Flow};
+use super::scope::{binding, contains, is_exclusive, loop_around, Declaration, Jumps};
 use crate::analysis::reach::{input_source, Lands};
 use crate::index::syntax::{clean_name, declarator_name, field_children, named_children, text};
 
@@ -23,6 +24,8 @@ pub(super) struct Def<'t> {
     pub kind: DefKind<'t>,
     /// It replaces the whole value, rather than part of it or adding to it.
     pub is_whole: bool,
+    /// It declares the variable (and so starts a new one).
+    pub is_declaration: bool,
 }
 
 pub(super) enum DefKind<'t> {
@@ -54,14 +57,13 @@ impl Def<'_> {
         )
     }
 
-    /// Whether, on every path to `at`, nothing set before it survives.
-    fn replaces_all(&self, function: Node, at: usize) -> bool {
-        let is_replacing = match self.kind {
+    /// Whether it replaces the whole variable (wherever it runs).
+    fn is_replacing(&self) -> bool {
+        match self.kind {
             DefKind::Set(_) | DefKind::Declared => true,
             DefKind::Copied { .. } | DefKind::Read(_) => self.is_whole,
             DefKind::Grows(_) | DefKind::Part(_) | DefKind::Passed { .. } => false,
-        };
-        is_replacing && is_unconditional(self.node, function, at)
+        }
     }
 
     /// Only a stand-in until something real is written: a bare
@@ -80,46 +82,151 @@ impl Def<'_> {
     }
 }
 
-/// The writes to `name` in `function` that finish before byte `at`, latest
-/// first, back to one that replaces the whole value on every path to `at`.
-/// With `is_through`, only writes into what `name` points to count, as its
-/// caller would see them. `is_project_call` says whether a call's
-/// `function` node names a function the project defines.
-pub(super) fn reaching<'t>(
-    function: Node<'t>,
-    source: &str,
-    name: &str,
-    at: usize,
-    is_through: bool,
-    is_project_call: &dyn Fn(Node<'t>) -> bool,
-) -> Vec<Def<'t>> {
-    let mut found: Vec<Def> = all_defs(function, source, name, at, is_project_call)
-        .into_iter()
-        .filter(|d| !is_through || d.is_through())
-        .collect();
-    found.sort_by_key(|d| std::cmp::Reverse((d.node.end_byte(), d.node.start_byte())));
-    let mut out = Vec::new();
-    for def in found {
-        let is_last = !is_through && def.replaces_all(function, at);
-        out.push(def);
-        if is_last || out.len() >= MAX_DEFS {
-            break;
-        }
-    }
-    out
+/// What sets a variable before a use.
+pub(super) struct Reaching<'t> {
+    /// Latest first; then writes later in a loop around the use, which
+    /// reach it on the next pass.
+    pub defs: Vec<Def<'t>>,
+    /// One of them replaces the value on every path to the use, so nothing
+    /// from outside the function (a parameter's, a global's) reaches it.
+    pub is_complete: bool,
+    /// There were more than `MAX_DEFS`.
+    pub is_truncated: bool,
+    /// A real write (not a stand-in like a bare declaration) among them
+    /// runs on every path to the use.
+    pub has_certain_write: bool,
 }
 
+/// What is looked up: the writes to `name` that reach byte `at`.
+pub(super) struct Query<'a, 't> {
+    pub name: &'a str,
+    pub at: usize,
+    /// Only writes into what `name` points to count, as its caller would
+    /// see them.
+    pub is_through: bool,
+    /// Whether a call's `function` node names a function the project
+    /// defines.
+    pub is_project_call: &'a dyn Fn(Node<'t>) -> bool,
+    /// Whether a write is to what is wanted (not another field of it).
+    pub keeps: &'a dyn Fn(&Def<'t>) -> bool,
+    /// Whether a write replaces all that is wanted, though not the whole
+    /// variable: the field of a struct wanted.
+    pub replaces: &'a dyn Fn(&Def<'t>) -> bool,
+    /// `at` is a use, which writes later in a loop reach on the next pass
+    /// (not the end of a write being traced from).
+    pub has_later: bool,
+}
+
+/// The writes to the variable `q.name` means at byte `q.at` of `function`
+/// that can reach it: finished before it, latest first, back to one that
+/// replaces the value on every path (no branch, loop or jump around it);
+/// then the ones later in a loop around it. A write to another variable of
+/// the same name (in a closed block, or a lambda's parameter) or in the
+/// other arm of an `if` doesn't count.
+pub(super) fn reaching<'t>(function: Node<'t>, source: &str, q: &Query<'_, 't>) -> Reaching<'t> {
+    let (all, parameters) = all_defs(function, source, q.name, q.is_project_call);
+    let declarations: Vec<Declaration> = all
+        .iter()
+        .filter(|d| d.is_declaration)
+        .map(|d| d.name)
+        .chain(parameters)
+        .map(Declaration::of)
+        .collect();
+    let meant = binding(&declarations, q.at);
+    let counts = |d: &Def<'t>| {
+        (!q.is_through || d.is_through())
+            && (q.keeps)(d)
+            && binding(&declarations, d.name.start_byte()) == meant
+            && !is_exclusive(d.node, q.at, function)
+    };
+    let counted: Vec<Def> = all.into_iter().filter(|d| counts(d)).collect();
+    let around = loop_around(function, q.at, meant).filter(|_| q.has_later);
+    let (before, later) = before_and_later(counted, around, q.at);
+    let mut found = Reaching {
+        defs: Vec::new(),
+        is_complete: false,
+        is_truncated: false,
+        has_certain_write: false,
+    };
+    // Back to the first write that replaces the value; earlier ones are
+    // gone by `at`. Then the loop's later writes.
+    let jumps = Jumps::of(function, source);
+    let is_certain =
+        |d: &Def| is_unconditional(d.node, function, q.at) && !jumps.can_skip(d.node, q.at);
+    let replacing = before
+        .iter()
+        .position(|d| !q.is_through && (d.is_replacing() || (q.replaces)(d)) && is_certain(d));
+    found.has_certain_write = before
+        .iter()
+        .take(replacing.map_or(before.len(), |i| i + 1))
+        .any(|d| !d.is_placeholder(source) && is_certain(d));
+    found.is_complete = replacing.is_some();
+    let kept = replacing.map_or(before.len(), |i| i + 1);
+    for def in before.into_iter().take(kept).chain(later) {
+        if found.defs.len() >= MAX_DEFS {
+            found.is_truncated = true;
+            break;
+        }
+        found.defs.push(def);
+    }
+    found
+}
+
+/// `defs` split into those finished before `at`, latest first, and those
+/// later in the loop `around` it (which reach it on the next pass), in
+/// source order. Others can't reach `at`.
+fn before_and_later<'t>(
+    defs: Vec<Def<'t>>,
+    around: Option<Node<'t>>,
+    at: usize,
+) -> (Vec<Def<'t>>, Vec<Def<'t>>) {
+    let is_later_in_loop = |d: &Def| {
+        d.node.start_byte() >= at
+            && around.is_some_and(|l| {
+                contains(l, d.node.start_byte()) && d.node.end_byte() <= l.end_byte()
+            })
+    };
+    let (mut before, mut later): (Vec<Def>, Vec<Def>) = (Vec::new(), Vec::new());
+    for def in defs {
+        if def.node.end_byte() <= at {
+            before.push(def);
+        } else if is_later_in_loop(&def) {
+            later.push(def);
+        }
+    }
+    before.sort_by_key(|d| std::cmp::Reverse((d.node.end_byte(), d.node.start_byte())));
+    later.sort_by_key(|d| d.node.start_byte());
+    (before, later)
+}
+
+/// Every write to `name` in `function`, in no particular order, and the
+/// lambda parameters named `name` (other variables, in their lambdas).
+/// Only the parts of the body where `name` is written are read.
 fn all_defs<'t>(
     function: Node<'t>,
     source: &str,
     name: &str,
-    at: usize,
     is_project_call: &dyn Fn(Node<'t>) -> bool,
-) -> Vec<Def<'t>> {
+) -> (Vec<Def<'t>>, Vec<Node<'t>>) {
+    let none = || (Vec::new(), Vec::new());
     let Some(body) = function.child_by_field_name("body") else {
-        return Vec::new();
+        return none();
+    };
+    // `conn->buf` is written with `buf` in it, however it is spaced.
+    let needle = name.rsplit(['.', '>']).next().unwrap_or(name);
+    let Some(text) = source.get(body.byte_range()).filter(|_| !needle.is_empty()) else {
+        return none();
+    };
+    let places: Vec<usize> = text
+        .match_indices(needle)
+        .map(|(i, _)| body.start_byte() + i)
+        .collect();
+    let mentions = |node: Node| {
+        let first = places.partition_point(|&p| p < node.start_byte());
+        places.get(first).is_some_and(|&p| p < node.end_byte())
     };
     let mut out = Vec::new();
+    let mut parameters = Vec::new();
     let mut stack = vec![body];
     let mut seen = 0usize;
     while let Some(node) = stack.pop() {
@@ -127,57 +234,88 @@ fn all_defs<'t>(
         if seen > MAX_SCAN_NODES {
             break;
         }
-        if node.start_byte() >= at {
+        if !mentions(node) {
             continue;
         }
-        let is_done = node.end_byte() <= at || node.kind() == "for_range_loop";
-        if is_done {
-            out.extend(def_at(node, source, name, at, is_project_call));
+        if node.kind() == "lambda_expression" {
+            parameters.extend(lambda_parameters(node, source, name));
         }
+        out.extend(def_at(node, source, name, is_project_call));
         stack.extend(named_children(node));
     }
-    out
+    (out, parameters)
+}
+
+/// The parameters named `name` of a lambda, by their names' nodes.
+fn lambda_parameters<'t>(lambda: Node<'t>, source: &str, name: &str) -> Vec<Node<'t>> {
+    lambda
+        .child_by_field_name("declarator")
+        .and_then(|d| d.child_by_field_name("parameters"))
+        .map(named_children)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| {
+            p.child_by_field_name("declarator")
+                .and_then(declarator_name)
+        })
+        .filter(|n| text(*n, source) == name)
+        .collect()
 }
 
 fn def_at<'t>(
     node: Node<'t>,
     source: &str,
     name: &str,
-    at: usize,
     is_project_call: &dyn Fn(Node<'t>) -> bool,
 ) -> Option<Def<'t>> {
     let declared =
         |declarator: Node<'t>| declarator_name(declarator).filter(|d| text(*d, source) == name);
-    let set = |node, name, value| Def {
-        node,
-        name,
-        kind: DefKind::Set(value),
-        is_whole: true,
-    };
     match node.kind() {
         "init_declarator" => {
             let name = declared(node.child_by_field_name("declarator")?)?;
-            Some(set(node, name, node.child_by_field_name("value")?))
+            Some(declaring(node, name, node.child_by_field_name("value")?))
         }
-        "declaration" => field_children(node, "declarator")
-            .into_iter()
-            .filter(|d| d.kind() != "init_declarator")
-            .find_map(declared)
-            .map(|name| Def {
-                node,
-                name,
+        "declaration" => {
+            let declarators = field_children(node, "declarator");
+            // `if (char *p = f())`: in a condition, the value is the
+            // declaration's own.
+            if let Some(value) = node.child_by_field_name("value") {
+                let name = declarators.into_iter().find_map(declared)?;
+                return Some(declaring(node, name, value));
+            }
+            let name = declarators
+                .into_iter()
+                .filter(|d| d.kind() != "init_declarator")
+                .find_map(declared)?;
+            Some(Def {
                 kind: DefKind::Declared,
-                is_whole: true,
-            }),
+                ..declaring(node, name, node)
+            })
+        }
         "for_range_loop" => {
             let declarator = node.child_by_field_name("declarator")?;
-            let name = declared(declarator).filter(|_| declarator.end_byte() <= at)?;
-            Some(set(declarator, name, node.child_by_field_name("right")?))
+            let name = declared(declarator)?;
+            Some(declaring(
+                declarator,
+                name,
+                node.child_by_field_name("right")?,
+            ))
         }
         "assignment_expression" => assignment(node, source, name),
         "call_expression" => call_def(node, source, name, is_project_call),
         "binary_expression" => stream_read(node, source, name),
         _ => None,
+    }
+}
+
+/// A declaration of `name` at `node`, set from `value`.
+fn declaring<'t>(node: Node<'t>, name: Node<'t>, value: Node<'t>) -> Def<'t> {
+    Def {
+        node,
+        name,
+        kind: DefKind::Set(value),
+        is_whole: true,
+        is_declaration: true,
     }
 }
 
@@ -197,6 +335,7 @@ fn assignment<'t>(node: Node<'t>, source: &str, name: &str) -> Option<Def<'t>> {
         name: left,
         kind,
         is_whole,
+        is_declaration: false,
     })
 }
 
@@ -269,6 +408,7 @@ impl<'t> Site<'_, 't> {
                 name: arg,
                 kind: kind(),
                 is_whole: is_whole && !is_append,
+                is_declaration: false,
             })
         })
     }
@@ -287,6 +427,7 @@ impl<'t> Site<'_, 't> {
                 index,
             },
             is_whole: false,
+            is_declaration: false,
         })
     }
 }
@@ -311,6 +452,7 @@ fn method_def<'t>(
             from: args.to_vec(),
         },
         is_whole: is_whole && !is_append,
+        is_declaration: false,
     })
 }
 
@@ -340,6 +482,7 @@ fn stream_read<'t>(node: Node<'t>, source: &str, name: &str) -> Option<Def<'t>> 
         name: right,
         kind: DefKind::Read(stream_name),
         is_whole,
+        is_declaration: false,
     })
 }
 
@@ -362,8 +505,7 @@ fn is_unconditional(node: Node, function: Node, at: usize) -> bool {
         if parent == function {
             return true;
         }
-        let holds_at = child.start_byte() <= at && at <= child.end_byte();
-        if is_branch(parent, child) && !holds_at {
+        if is_branch(parent, child) && !contains(child, at) {
             return false;
         }
         child = parent;
@@ -375,8 +517,13 @@ fn is_branch(parent: Node, child: Node) -> bool {
     let is = |field: &str| parent.child_by_field_name(field) == Some(child);
     match parent.kind() {
         "if_statement" | "conditional_expression" => is("consequence") || is("alternative"),
-        "while_statement" | "for_statement" | "for_range_loop" => is("body"),
-        "case_statement" | "catch_clause" => true,
+        "while_statement" | "for_range_loop" => is("body"),
+        // The update runs only after the body, from the second pass on.
+        "for_statement" => is("body") || is("update"),
+        // A lambda's body runs when it is called, if ever.
+        "case_statement" | "catch_clause" | "lambda_expression" => true,
+        // An exception may leave a `try` body before a write.
+        "try_statement" => is("body"),
         "binary_expression" => {
             is("right")
                 && parent

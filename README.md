@@ -101,14 +101,28 @@ Path 1 — from the command line
 ```
 
 What a trace follows:
-- **Inside a function:** declarations, assignments, `+=` and writes into part of a variable. Also library calls that copy into one (`strcpy`, `memcpy`, `sprintf`, `sscanf`…) or read input into one. An assignment in a branch keeps the earlier ones as other paths. One that always runs hides them.
-- **Across functions:** a parameter goes back to each call site's argument. A return value goes into the function and back out to that same call. A buffer handed to a project function (`read_name(name)`) is followed into it, to what it writes there. A method's result (`s.c_str()`) comes from its object.
+- **Inside a function:**
+  - Declarations, assignments, `+=` and writes into part of a variable.
+  - Library calls that copy into a variable (`strcpy`, `memcpy`, `sprintf`, `sscanf`…) or read input into one.
+  - An assignment that may not run (in a branch, a `for` loop's update, a `try` body, a lambda, or after a `break`, `continue` or `goto` that can skip it) keeps the earlier ones, and a parameter's value from its callers, as other paths. One that always runs hides them.
+  - The other arm of an `if` doesn't count, except on a later pass of a loop.
+  - A write later in a loop counts for a use earlier in it, through the next pass.
+  - A variable declared in a block that has closed, or in a loop on an earlier pass, or a lambda's parameter, is another variable.
+  - A declaration in a condition (`if (char *p = getenv("X"))`) has its value.
+- **Across functions:**
+  - A parameter goes back to each call site's argument, or says its default value is used when the call leaves it out.
+  - A return value goes into the function and back out to that same call.
+  - A buffer handed to a project function (`read_name(name)`) is followed into it, to what it writes there.
+  - A method's result (`s.c_str()`) comes from its object.
+- **Struct fields:**
+  - A field is followed field by field, through the struct it is in, into functions the struct is handed to, and back to the caller's variable.
+  - Writes to the struct's other fields don't count; a write to the whole struct (`s = …`, `*p = …`, `memset(p, …)`) replaces its fields.
 - **Same-named functions:** a call in a file with its own definition, or to a `static` function, stays in that file.
 
 A path means the value *may* come from there:
 - The trace reads syntax, not types.
-- Writes through other pointers to the same memory aren't seen, and neither are calls through function pointers or checks that limit the value.
-- An assignment inside a loop after the use isn't followed.
+- Writes through other pointers to the same memory aren't seen: `strm = &state->strm`, or a library filling a buffer through a pointer it was given. Neither are calls through function pointers, or checks that limit the value.
+- A trace stops after a time limit, or after following many paths; it then says there may be more.
 
 ### Settings
 

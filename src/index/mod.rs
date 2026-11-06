@@ -307,7 +307,12 @@ mod tests {
             from_input.len(),
             cut_short
         );
-        for trace in from_input.iter().take(2) {
+        // SRCWRANGLR_TRACES=all prints every one, not just two.
+        let shown = match std::env::var("SRCWRANGLR_TRACES").as_deref() {
+            Ok("all") => from_input.len(),
+            _ => 2,
+        };
+        for trace in from_input.iter().take(shown) {
             let path = trace
                 .paths
                 .iter()

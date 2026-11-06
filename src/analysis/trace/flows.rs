@@ -83,13 +83,24 @@ pub(super) fn name_of(node: Node, source: &str) -> String {
     text(node, source).split_whitespace().collect()
 }
 
+/// Whether `node` is written as `name` (whitespace aside), without
+/// copying its text: most nodes are rejected by their length.
+fn is_named(node: Node, source: &str, name: &str) -> bool {
+    let written = text(node, source);
+    written.len() >= name.len()
+        && written
+            .split_whitespace()
+            .flat_map(str::chars)
+            .eq(name.chars())
+}
+
 /// Whether `arg` is `name` (`Some(true)`: it, its address, or it cast) or a
 /// part of it (`Some(false)`: `name[i]`, `*name`, `name->f`, `name + 4`).
 pub(super) fn refers_to(arg: Node, source: &str, name: &str) -> Option<bool> {
     let mut node = arg;
     let mut is_whole = true;
     for _ in 0..MAX_UNWRAP {
-        if name_of(node, source) == name {
+        if is_named(node, source, name) {
             return Some(is_whole);
         }
         let operator = node
@@ -114,6 +125,42 @@ pub(super) fn refers_to(arg: Node, source: &str, name: &str) -> Option<bool> {
         };
     }
     None
+}
+
+/// The variable an access is to, and the fields it goes through:
+/// `(char *)&r->hdr.name[2]` is `r`, through `hdr` then `name`.
+pub(super) fn access_path<'t>(node: Node<'t>, source: &str) -> (Node<'t>, Vec<String>) {
+    let mut fields = Vec::new();
+    let mut current = node;
+    for _ in 0..MAX_UNWRAP * 4 {
+        let field = |name: &str| current.child_by_field_name(name);
+        let next = match current.kind() {
+            "field_expression" => {
+                fields.extend(field("field").map(|f| text(f, source).to_string()));
+                field("argument")
+            }
+            "cast_expression" => field("value"),
+            "parenthesized_expression" => current.named_child(0),
+            "pointer_expression" | "subscript_expression" => field("argument"),
+            "binary_expression" => field("left"),
+            _ => None,
+        };
+        match next {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+    fields.reverse();
+    (current, fields)
+}
+
+/// The fields in a written field path: `q.hdr->name` → `hdr`, `name`.
+pub(super) fn fields_of(name: &str) -> Vec<String> {
+    name.replace("->", ".")
+        .split('.')
+        .skip(1)
+        .map(String::from)
+        .collect()
 }
 
 /// The variable a field path is in: `conn->buf.data` → `conn`.
@@ -200,6 +247,19 @@ mod tests {
         assert_eq!(check(2, "r->name"), Some(true));
         assert_eq!(check(3, "p"), Some(true));
         assert_eq!(check(4, "buf"), None);
+    }
+
+    #[test]
+    fn reads_an_access_path() {
+        let code = "void f() { g((char *)&r->hdr.name[2]); }";
+        let tree = parse(code);
+        let call = expression(&tree);
+        let args = named_children(call.child_by_field_name("arguments").expect("args"));
+        let (base, fields) = access_path(args[0], code);
+        assert_eq!(text(base, code), "r");
+        assert_eq!(fields, ["hdr", "name"]);
+        assert_eq!(fields_of("q.hdr->name"), ["hdr", "name"]);
+        assert!(fields_of("q").is_empty());
     }
 
     #[test]

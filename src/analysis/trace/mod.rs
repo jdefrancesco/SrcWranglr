@@ -14,6 +14,7 @@ mod calls;
 mod defs;
 mod files;
 mod flows;
+mod scope;
 mod walk;
 
 use crate::model::{CodeGraph, Span, SymbolId};
