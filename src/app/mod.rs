@@ -28,6 +28,8 @@ mod survey_tabs;
 mod survey_view;
 mod symbol_list;
 mod tool_job;
+mod trace_actions;
+mod trace_panel;
 mod triage_actions;
 mod trust;
 mod welcome;
@@ -120,6 +122,8 @@ pub struct SrcWranglrApp {
     layout: Layout,
     /// Which functions outside input reaches, for the open project.
     reach: Reach,
+    /// The trace shown in the Trace pane, if any.
+    trace_panel: trace_panel::TracePanel,
     /// The Open Project folder dialog, while it is open.
     open_dialog: Option<dialogs::PendingDialog<PathBuf>>,
     /// Project folders opened before; kept between launches.
@@ -153,6 +157,7 @@ impl SrcWranglrApp {
             dangerous,
             findings,
             findings_panel: FindingsPanel::default(),
+            trace_panel: trace_panel::TracePanel::default(),
             tool_jobs: Vec::new(),
             finding_view: None,
             dangerous_editor: None,
@@ -378,6 +383,7 @@ impl SrcWranglrApp {
         if let Some((symbol, file, line)) = finding {
             self.go_to_place(symbol, &file, line);
         }
+        self.show_trace_panel(ui);
         self.show_code_panel(ui);
         egui::CentralPanel::default().show(ui, |ui| {
             let notebook = &self.notebook;
@@ -549,6 +555,9 @@ impl SrcWranglrApp {
                 Some(PanelAction::EditNote(target)) => self.edit_note(target),
                 Some(PanelAction::ShowFinding(id)) => self.explain_finding(id),
                 Some(PanelAction::MarkDangerous(name)) => self.mark_dangerous(&name),
+                Some(PanelAction::Trace { file, line, column }) => {
+                    self.trace_variable(&file, line, column);
+                }
                 None => {}
             }
         });

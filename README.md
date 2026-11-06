@@ -82,6 +82,34 @@ This is a prioritizer, not proof:
 - Same-named functions in different files are one symbol to the indexer (see **Limitations**), so one can lend reach to another.
 - A finding without the tag isn't proven unreachable.
 
+### Tracing a value
+
+**Trace Back** follows a value to where it comes from. It shows that `argv[1]` ends up in `strcpy(buf, name)`, and every line it passes on the way. Start a trace in either of two ways:
+- **Trace Back** in a finding's window traces the arguments that make the call risky: the source and length of a copy, a format's arguments, a command, a size.
+- Right-click a line in the source, then **Trace Value Of** and a variable, to trace that one.
+
+The **Trace** pane lists each way the value gets there, as a path from where it starts to where it is used. Click a step to show it in the source with the variable highlighted. A path starts at outside input (the command line, `fgets()`, `read()`, `getenv()`, `std::cin`…) or says why it stops: a constant, a global, a struct field set elsewhere, a parameter nothing calls, a function from outside the project.
+
+```
+Path 1 — from the command line
+ 1. main.c:10   int main(int argc, char **argv)   `argv` is the command line
+ 2. main.c:11   load_user(argv[1]);               passes `argv[1]` as `raw`
+ 3. user.c:7    char *name = trim(raw);           passes `raw` as `s`
+ 4. user.c:3    return s;                         `trim()` returns `s`
+ 5. user.c:7    char *name = trim(raw);           `name` set from `trim(raw)`
+ 6. user.c:8    strcpy(buf, name);                the risky call to `strcpy()`
+```
+
+What a trace follows:
+- **Inside a function:** declarations, assignments, `+=` and writes into part of a variable. Also library calls that copy into one (`strcpy`, `memcpy`, `sprintf`, `sscanf`…) or read input into one. An assignment in a branch keeps the earlier ones as other paths. One that always runs hides them.
+- **Across functions:** a parameter goes back to each call site's argument. A return value goes into the function and back out to that same call. A buffer handed to a project function (`read_name(name)`) is followed into it, to what it writes there. A method's result (`s.c_str()`) comes from its object.
+- **Same-named functions:** a call in a file with its own definition, or to a `static` function, stays in that file.
+
+A path means the value *may* come from there:
+- The trace reads syntax, not types.
+- Writes through other pointers to the same memory aren't seen, and neither are calls through function pointers or checks that limit the value.
+- An assignment inside a loop after the use isn't followed.
+
 ### Quick open
 
 - **⌘P / Ctrl+P:** jump to any symbol by fuzzy name (`dbimplwr` finds `DBImpl::Write`).
@@ -162,6 +190,7 @@ srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triag
 | Filter symbols | Type in **Search** |
 | Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
 | Put the source beside the graph, or back below it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
+| Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Value Of** |
 | Undo dragged pane sizes | **View → Reset Layout** |
 
 The window opens maximized the first time. After that it reopens with the size, position and pane sizes you left it at, and with the source pane where you put it.
@@ -183,6 +212,7 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/index/signature.rs` | Each function definition's prototype and parameters, for fuzz harnesses |
 | `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`) and libFuzzer harness drafting (`harness/`) |
 | `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
+| `src/analysis/trace/` | Tracing a value back to where it comes from, across functions, by syntax |
 | `src/index/job.rs` | Background indexing thread with progress, cancellation, and crash containment |
 | `src/graph/trail.rs` | Three-column, Sourcetrail-style layout around the active symbol |
 | `src/graph/overview.rs` | Per-file overview grid |
@@ -226,7 +256,7 @@ SRCWRANGLR_INDEX_PATH=~/code/myproject SRCWRANGLR_HARNESS_OUT=/tmp/harnesses \
 
 Namely they are **Security Code Auditing** capabilities:
 
-1. Taint flow analysis. Input reachability (see **Findings**) is a first step: call paths, not data flow through variables.
+1. Taint flow analysis. Input reachability (see **Findings**) finds call paths, and **Tracing a value** follows one value back by syntax. Next: tracing forward from a source to every sink it reaches, and seeing through pointer aliases.
 2. Semantic code indexing and searches
 3. Collect a solid corpus for fuzz targets (finding the targets and drafting their harnesses is done: see **Fuzz Targets** above)
 4. Lightweight LM agency to help make sense of a large codebase.

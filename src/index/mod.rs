@@ -10,7 +10,7 @@ mod extract;
 pub mod job;
 mod resolve;
 mod signature;
-mod syntax;
+pub(crate) mod syntax;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -277,6 +277,58 @@ mod tests {
         assert!(matches!(result, Err(IndexError::Cancelled)));
     }
 
+    /// Traces every risky call's arguments back; prints how many reach
+    /// input, the slowest trace, and a few paths.
+    fn print_traces(graph: &CodeGraph, findings: &[crate::analysis::Finding]) {
+        use crate::analysis::trace::trace_finding;
+        let start = std::time::Instant::now();
+        let mut slowest = (std::time::Duration::ZERO, String::new());
+        let mut traces = Vec::new();
+        for finding in findings {
+            let one = std::time::Instant::now();
+            let trace = trace_finding(graph, finding);
+            if one.elapsed() > slowest.0 {
+                slowest = (one.elapsed(), format!("{}:{}", finding.file, finding.line));
+            }
+            traces.extend(trace);
+        }
+        let from_input: Vec<_> = traces
+            .iter()
+            .filter(|t| t.paths.iter().any(|p| p.origin.is_input()))
+            .collect();
+        let cut_short = traces.iter().filter(|t| t.is_cut_short).count();
+        println!(
+            "traced {} of {} risky calls in {:?} (slowest {:?} at {}); {} reach input, {} cut short",
+            traces.len(),
+            findings.len(),
+            start.elapsed(),
+            slowest.0,
+            slowest.1,
+            from_input.len(),
+            cut_short
+        );
+        for trace in from_input.iter().take(2) {
+            let path = trace
+                .paths
+                .iter()
+                .find(|p| p.origin.is_input())
+                .expect("one");
+            println!(
+                "  {} at {}:{} {}",
+                trace.subject,
+                trace.file,
+                trace.line,
+                path.origin.label()
+            );
+            for step in &path.steps {
+                println!(
+                    "      {}:{}  {}  — {}",
+                    step.file, step.line, step.code, step.note
+                );
+            }
+        }
+    }
+
     /// Manual smoke test against a real project:
     /// `SRCWRANGLR_INDEX_PATH=/path/to/project cargo test --release index_real_project -- --ignored --nocapture`
     /// (add `SRCWRANGLR_HARNESS_OUT=/some/dir` to write the best fuzz targets' harnesses there)
@@ -346,6 +398,7 @@ mod tests {
                 );
             }
         }
+        print_traces(graph, &findings);
         let scoring = std::time::Instant::now();
         let targets = crate::analysis::fuzz::fuzz_targets(graph, &findings);
         println!(

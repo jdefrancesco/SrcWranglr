@@ -15,6 +15,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use self::code::Code;
+pub(crate) use self::sources::{input_source, Lands, COMMAND_LINE, MAIN_NAMES};
 use self::sources::{readers, sort_key, Reader};
 use crate::analysis::Finding;
 use crate::model::{CodeGraph, EdgeKind, SymbolId};

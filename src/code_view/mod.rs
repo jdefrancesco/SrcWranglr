@@ -7,6 +7,7 @@
 
 mod segments;
 mod tokenize;
+mod variables;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -21,6 +22,7 @@ use crate::model::{CodeGraph, EdgeKind, Occurrence, OccurrenceRole, Span, Symbol
 use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR};
 use segments::{merge, overlay_risks, Mark, Segment};
 use tokenize::colored_ranges;
+use variables::variables_in;
 
 const CODE_BACKGROUND: Color32 = Color32::from_gray(18);
 const ACTIVE_LINE_BACKGROUND: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x14);
@@ -98,6 +100,8 @@ pub enum LineAction {
     ToggleBookmark,
     /// Add this called function to the dangerous-functions list.
     MarkDangerous(String),
+    /// Trace where the variable at this byte column gets its value.
+    Trace(u32),
 }
 
 /// Something the user did in the code view.
@@ -201,9 +205,17 @@ impl Rows<'_> {
         let line_no = u32::try_from(idx + 1).unwrap_or(u32::MAX);
         let (shown, visible_len) = display_text(text);
         let occurrences = self.graph.occurrences_on_line(self.focus.file, line_no);
+        // The focused span may be a name the index doesn't know (a local
+        // variable a trace stepped to), so it is marked on its own too.
+        let focused = self
+            .focus
+            .span
+            .filter(|s| s.line == line_no)
+            .map(|s| (byte_range(s, visible_len), Mark::Active));
         let marks: Vec<(Range<usize>, Mark)> = occurrences
             .iter()
             .map(|o| (byte_range(o.span, visible_len), self.mark_for(o)))
+            .chain(focused)
             .collect();
         let risks = self
             .focus
@@ -445,6 +457,20 @@ fn line_menu(
         }
         if ui.button(star).clicked() {
             action = Some(LineAction::ToggleBookmark);
+        }
+        let variables = variables_in(shown);
+        if !variables.is_empty() {
+            ui.separator();
+            ui.menu_button("Trace Value Of", |ui| {
+                for (name, column) in &variables {
+                    let item = ui.button(name.as_str()).on_hover_text(format!(
+                        "Follow where `{name}` gets its value, back to outside input"
+                    ));
+                    if item.clicked() {
+                        action = u32::try_from(*column).ok().map(LineAction::Trace);
+                    }
+                }
+            });
         }
         if !calls.is_empty() {
             ui.separator();

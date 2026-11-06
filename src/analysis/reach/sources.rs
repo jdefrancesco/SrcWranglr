@@ -10,8 +10,8 @@ use super::code::{calls, words, Code};
 use crate::model::{CodeGraph, EdgeKind, ExternalCall, OccurrenceRole, SymbolId};
 
 /// Where a library call puts what it reads.
-#[derive(Debug, Clone, Copy)]
-enum Lands {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lands {
     /// In the buffer passed as this argument.
     Arg(usize),
     /// In every argument from this one on (`scanf`'s targets).
@@ -46,7 +46,7 @@ const SOURCES: &[(&str, Lands)] = &[
     ("gzread", Lands::Arg(1)),
 ];
 /// Entry points whose parameters are the command line.
-const MAIN_NAMES: &[&str] = &["main", "wmain", "_tmain"];
+pub(crate) const MAIN_NAMES: &[&str] = &["main", "wmain", "_tmain"];
 /// How the command line is named as a source.
 pub const COMMAND_LINE: &str = "the command line";
 /// A function that reads input itself, in one file, and what it hands it to.
@@ -182,13 +182,15 @@ fn code_of<'c>(codes: &'c mut HashMap<String, Code>, graph: &CodeGraph, file: &s
         .or_insert_with(|| Code::of(graph.file_contents.get(file).map_or("", String::as_str)))
 }
 
-/// The input source a call is, if any: by bare name (or `std::` or
-/// global), so `mylib::read` is not `read`.
+/// The input source a call is, if any.
 fn source_of(call: &ExternalCall) -> Option<(&'static str, Lands)> {
-    let (scope, name) = call
-        .name
-        .rsplit_once("::")
-        .unwrap_or(("", call.name.as_str()));
+    input_source(&call.name)
+}
+
+/// The input source a call to `called` (as written) is, if any: by bare
+/// name (or `std::` or global), so `mylib::read` is not `read`.
+pub(crate) fn input_source(called: &str) -> Option<(&'static str, Lands)> {
+    let (scope, name) = called.rsplit_once("::").unwrap_or(("", called));
     if !matches!(scope, "" | "std") {
         return None;
     }

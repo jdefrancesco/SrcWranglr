@@ -164,6 +164,11 @@ impl SrcWranglrApp {
             FindingViewAction::Close => {}
             FindingViewAction::Explore(id) => self.graph_view.select(id),
             FindingViewAction::MarkDangerous(name) => self.mark_dangerous(&name),
+            FindingViewAction::Trace => {
+                if let Some(finding) = view.as_ref().map(|v| v.finding().clone()) {
+                    self.trace_finding(&finding);
+                }
+            }
             FindingViewAction::Triage(status, note) => {
                 if let Some(finding) = view.as_ref().map(|v| v.finding().clone()) {
                     self.apply_verdict(&finding, status, note);

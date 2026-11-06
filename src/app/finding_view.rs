@@ -20,6 +20,8 @@ pub enum FindingViewAction {
     MarkDangerous(String),
     /// Record your verdict (`None` clears it) and its note.
     Triage(Option<TriageStatus>, String),
+    /// Trace where the call's arguments come from.
+    Trace,
 }
 
 pub struct FindingView {
@@ -156,6 +158,12 @@ impl FindingView {
                 action = Some(FindingViewAction::Explore(id));
             }
         }
+        let trace = ui.button("Trace Back").on_hover_text(
+            "Follow the values this call uses back to where they come from, in the Trace pane",
+        );
+        if trace.clicked() {
+            action = Some(FindingViewAction::Trace);
+        }
         if ui.button("Open in Editor").clicked() {
             action = Some(FindingViewAction::OpenInEditor);
         }
@@ -283,6 +291,14 @@ mod tests {
         harness.get_by_label("Close").click();
         harness.run();
         assert_eq!(harness.state().action, Some(FindingViewAction::Close));
+    }
+
+    #[test]
+    fn trace_back_asks_where_the_call_gets_its_values() {
+        let mut harness = harness(Some("net::read_packet"));
+        harness.get_by_label("Trace Back").click();
+        harness.run();
+        assert_eq!(harness.state().action, Some(FindingViewAction::Trace));
     }
 
     #[test]

@@ -5,13 +5,13 @@ use tree_sitter::Node;
 use super::extract::MAX_DECLARATOR_DEPTH;
 use crate::model::Span;
 
-pub(super) fn text<'s>(node: Node, src: &'s str) -> &'s str {
+pub(crate) fn text<'s>(node: Node, src: &'s str) -> &'s str {
     src.get(node.byte_range()).unwrap_or("")
 }
 
 /// Name as written, without whitespace or template arguments:
 /// `Box < T > :: get` → `Box::get`.
-pub(super) fn clean_name(raw: &str) -> String {
+pub(crate) fn clean_name(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut template_depth = 0usize;
     for c in raw.chars() {
@@ -28,7 +28,7 @@ pub(super) fn clean_name(raw: &str) -> String {
 /// Name of a declared entity. Unlike `clean_name`, operator names keep their
 /// `<`/`>` (`operator<<` must not be read as a template argument list), and
 /// template arguments are stripped structurally from qualifiers only.
-pub(super) fn declared_name(node: Node, src: &str) -> String {
+pub(crate) fn declared_name(node: Node, src: &str) -> String {
     let compact = |n: Node| text(n, src).split_whitespace().collect::<String>();
     match node.kind() {
         "operator_name" | "destructor_name" => compact(node),
@@ -53,19 +53,19 @@ pub(super) fn declared_name(node: Node, src: &str) -> String {
 }
 
 /// `void (*cb)(int)` declares a pointer *variable*, not a function.
-pub(super) fn is_function_pointer(func_declarator: Node) -> bool {
+pub(crate) fn is_function_pointer(func_declarator: Node) -> bool {
     func_declarator
         .child_by_field_name("declarator")
         .is_some_and(|inner| inner.kind() == "parenthesized_declarator")
 }
 
-pub(super) fn segments(name: &str) -> impl Iterator<Item = String> + '_ {
+pub(crate) fn segments(name: &str) -> impl Iterator<Item = String> + '_ {
     name.split("::")
         .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
 
-pub(super) fn join(scope: &[String], name: &str) -> String {
+pub(crate) fn join(scope: &[String], name: &str) -> String {
     if scope.is_empty() {
         name.to_string()
     } else {
@@ -73,12 +73,12 @@ pub(super) fn join(scope: &[String], name: &str) -> String {
     }
 }
 
-pub(super) fn line_of(node: Node) -> u32 {
+pub(crate) fn line_of(node: Node) -> u32 {
     u32::try_from(node.start_position().row + 1).unwrap_or(u32::MAX)
 }
 
 /// Where `node` sits, or `None` if it spans several lines.
-pub(super) fn span_of(node: Node) -> Option<Span> {
+pub(crate) fn span_of(node: Node) -> Option<Span> {
     let (start, end) = (node.start_position(), node.end_position());
     if start.row != end.row {
         return None;
@@ -92,7 +92,7 @@ pub(super) fn span_of(node: Node) -> Option<Span> {
 
 /// The last name inside a qualified or templated name: `a::Box<T>::run` → `run`.
 /// That is the part made clickable in the code view.
-pub(super) fn name_leaf(node: Node) -> Node {
+pub(crate) fn name_leaf(node: Node) -> Node {
     let mut current = node;
     for _ in 0..MAX_DECLARATOR_DEPTH {
         let is_wrapper = matches!(
@@ -108,23 +108,23 @@ pub(super) fn name_leaf(node: Node) -> Node {
 }
 
 /// Span of the clickable part of a name node.
-pub(super) fn name_span(node: Node) -> Option<Span> {
+pub(crate) fn name_span(node: Node) -> Option<Span> {
     span_of(name_leaf(node))
 }
 
-pub(super) fn named_children(node: Node) -> Vec<Node> {
+pub(crate) fn named_children(node: Node) -> Vec<Node> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).collect()
 }
 
-pub(super) fn field_children<'t>(node: Node<'t>, field: &str) -> Vec<Node<'t>> {
+pub(crate) fn field_children<'t>(node: Node<'t>, field: &str) -> Vec<Node<'t>> {
     let mut cursor = node.walk();
     node.children_by_field_name(field, &mut cursor).collect()
 }
 
 /// Unwraps `pointer_declarator`, `reference_declarator`, ... down to the
 /// `function_declarator`, if this declarator declares a function.
-pub(super) fn find_function_declarator(node: Node) -> Option<Node> {
+pub(crate) fn find_function_declarator(node: Node) -> Option<Node> {
     let mut current = node;
     for _ in 0..MAX_DECLARATOR_DEPTH {
         match current.kind() {
@@ -144,7 +144,7 @@ pub(super) fn find_function_declarator(node: Node) -> Option<Node> {
 }
 
 /// The name node inside a declarator (`*x[3]` → `x`, `Foo::bar` → itself).
-pub(super) fn declarator_name(node: Node) -> Option<Node> {
+pub(crate) fn declarator_name(node: Node) -> Option<Node> {
     let mut current = node;
     for _ in 0..MAX_DECLARATOR_DEPTH {
         match current.kind() {
@@ -166,7 +166,7 @@ pub(super) fn declarator_name(node: Node) -> Option<Node> {
 }
 
 /// Name of a user-defined type node, or `None` for builtins like `int`.
-pub(super) fn type_name(node: Node, src: &str) -> Option<String> {
+pub(crate) fn type_name(node: Node, src: &str) -> Option<String> {
     match node.kind() {
         "type_identifier" | "qualified_identifier" => Some(clean_name(text(node, src))),
         "template_type" => node
@@ -177,7 +177,7 @@ pub(super) fn type_name(node: Node, src: &str) -> Option<String> {
     .filter(|name| !name.is_empty())
 }
 
-pub(super) fn is_class_like(kind: &str) -> bool {
+pub(crate) fn is_class_like(kind: &str) -> bool {
     matches!(
         kind,
         "class_specifier" | "struct_specifier" | "union_specifier"

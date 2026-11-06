@@ -156,6 +156,7 @@ impl SrcWranglrApp {
         self.finding_view = None;
         self.survey_view.reset();
         self.harness_view = None;
+        self.trace_panel.close();
         self.report_findings();
         let name = project.name.clone();
         self.project = project;

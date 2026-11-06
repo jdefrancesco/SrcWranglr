@@ -9,6 +9,7 @@ pub mod heuristics;
 pub mod reach;
 pub mod risky;
 pub mod tools;
+pub mod trace;
 
 use crate::model::SymbolId;
 
