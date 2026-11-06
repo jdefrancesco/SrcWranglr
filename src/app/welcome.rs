@@ -84,6 +84,7 @@ pub fn show(
     ui.vertical_centered(|ui| {
         ui.set_max_width(PAGE_WIDTH);
         ui.heading(egui::RichText::new(super::APP_NAME).size(32.0).strong());
+        ui.weak(format!("Version {}", crate::version::version_line()));
         ui.weak("Explore and audit C/C++ source code: call graphs, risky calls, triage and fuzz targets.");
         ui.add_space(24.0);
         if let Some(root) = indexing {
@@ -302,6 +303,16 @@ mod tests {
         assert_eq!(
             click(&mut harness, "Try the built-in demo"),
             Some(WelcomeAction::OpenDemo)
+        );
+    }
+
+    #[test]
+    fn the_page_shows_which_version_this_is() {
+        let harness = page(RecentProjects::default(), None);
+        let version = crate::version::version_line();
+        assert!(
+            harness.query_by_label_contains(&version).is_some(),
+            "{version}"
         );
     }
 

@@ -38,6 +38,7 @@ pub enum Command {
     SaveSession,
     OpenSession,
     ShowTodos,
+    About,
     Back,
     Fit,
     TrailView,
@@ -50,7 +51,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 33] = [
+    pub const ALL: [Command; 34] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -70,6 +71,7 @@ impl Command {
         Command::SaveSession,
         Command::OpenSession,
         Command::ShowTodos,
+        Command::About,
         Command::Back,
         Command::Fit,
         Command::TrailView,
@@ -108,6 +110,7 @@ impl Command {
             Command::SaveSession => "Save Session As…",
             Command::OpenSession => "Open Session…",
             Command::ShowTodos => "TODO List",
+            Command::About => "About SrcWranglr",
             Command::Back => "Go Back",
             Command::Fit => "Fit Graph to Window",
             Command::TrailView => "View: Trail (callers and callees)",
@@ -276,6 +279,15 @@ mod tests {
             Command::ALL.len()
         );
         assert!(search(SYMBOLS, NO_NOTES, " >quit", 10).contains(&Entry::Command(Command::Quit)));
+    }
+
+    #[test]
+    fn about_is_a_command() {
+        assert_eq!(
+            search(SYMBOLS, NO_NOTES, ">about", 10).first(),
+            Some(&Entry::Command(Command::About))
+        );
+        assert_eq!(Command::About.label(), "About SrcWranglr");
     }
 
     #[test]

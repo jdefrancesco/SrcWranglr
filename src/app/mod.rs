@@ -1,6 +1,7 @@
 //! Top-level window: menu, symbol list, graph, code panel, status bar, and
 //! the lifecycle of background indexing jobs.
 
+mod about;
 mod code_panel;
 mod dangerous_editor;
 mod dangerous_lists;
@@ -136,6 +137,8 @@ pub struct SrcWranglrApp {
     settings: settings::Settings,
     /// The Settings window, while it is open.
     settings_view: Option<settings_view::SettingsView>,
+    /// Whether Help > About is showing.
+    is_about_open: bool,
     /// Where you were in each project opened.
     sessions: session::Sessions,
     /// A session file's project and session, restored once that project
@@ -187,6 +190,7 @@ impl SrcWranglrApp {
             trace_panel: trace_panel::TracePanel::default(),
             settings: settings::Settings::default(),
             settings_view: None,
+            is_about_open: false,
             sessions: session::Sessions::load(storage),
             pending_session: None,
             session_to_confirm: None,
@@ -377,6 +381,7 @@ impl eframe::App for SrcWranglrApp {
         self.show_finding_view(&ctx);
         self.show_dangerous_editor(&ctx);
         self.show_settings_view(&ctx);
+        about::show(&ctx, &mut self.is_about_open);
         self.show_session_confirm(&ctx);
         let survey = self
             .survey_view
@@ -496,6 +501,7 @@ impl SrcWranglrApp {
             Command::SaveSession => self.save_session_dialog(ctx),
             Command::OpenSession => self.open_session_dialog(ctx),
             Command::ShowTodos => self.todo_panel.toggle(),
+            Command::About => self.is_about_open = true,
             Command::EditNote => {
                 if let Some(target) = self.selected_target() {
                     self.edit_note(target);

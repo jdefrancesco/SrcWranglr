@@ -10,6 +10,7 @@ mod programs;
 mod safe_fs;
 mod style;
 mod survey;
+mod version;
 
 use app::launch::parse_args;
 use app::SrcWranglrApp;
@@ -19,7 +20,7 @@ const WINDOW_SIZE: [f32; 2] = [1440.0, 900.0];
 /// Below this the panes stop fitting.
 const MIN_WINDOW_SIZE: [f32; 2] = [960.0, 600.0];
 
-/// Usage: `srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME]`.
+/// Usage: see `app::launch::USAGE`.
 fn main() -> eframe::Result<()> {
     let options = match parse_args(std::env::args_os().skip(1)) {
         Ok(options) => options,
@@ -28,6 +29,10 @@ fn main() -> eframe::Result<()> {
             std::process::exit(2);
         }
     };
+    if options.should_print_version {
+        println!("srcwranglr {}", version::version_line());
+        return Ok(());
+    }
     // Maximized the first time; after that eframe restores the window as
     // it was left, overriding these. The app id matches the Linux .desktop
     // file, so docks group windows.

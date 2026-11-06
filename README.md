@@ -204,6 +204,7 @@ Other targets: `make app` (only the macOS bundle), `make check` (format, clippy,
 
 ```
 srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]
+srcwranglr --version
 ```
 
 | Option | Meaning |
@@ -212,6 +213,7 @@ srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triag
 | `--symbol NAME` | Focus a symbol once indexing finishes, either by qualified name (`leveldb::DBImpl::Write`) or by a short name if only one symbol has it. |
 | `--view calls` | Start in the call hierarchy instead of the trail view. |
 | `--triage` | Open the Project Triage window once the project is loaded. |
+| `--version`, `-V` | Print the version and quit. A build from a git checkout also names its commit, e.g. `0.4.0 (v0.4.0-5-g842efb4)` for five commits after v0.4.0. The start page and **Help → About SrcWranglr** show the same. |
 
 ### Controls
 
@@ -257,6 +259,7 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
 | `src/analysis/trace/` | Tracing a value back to where it comes from, across functions, by syntax |
 | `src/analysis/tools.rs`, `flawfinder.rs` | Running semgrep, cppcheck and flawfinder, and reading their reports |
+| `src/version.rs`, `build.rs` | Which version this is; `build.rs` records the git commit it was built from |
 | `src/programs.rs` | Finding the programs to run: your folders, `PATH`, then the usual install places |
 | `src/app/settings.rs` | Your settings file; `settings_view.rs` is the Settings window |
 | `src/app/session.rs` | Sessions: what is kept per project and in session files, and checking them |

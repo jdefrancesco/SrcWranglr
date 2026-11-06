@@ -1,13 +1,14 @@
 //! Command-line options:
-//! `srcwranglr [PROJECT_DIR] [--symbol NAME] [--view trail|calls] [--triage]`.
+//! `srcwranglr [PROJECT_DIR] [--symbol NAME] [--view trail|calls] [--triage]`,
+//! or `srcwranglr --version`.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::graph::ViewMode;
 
-pub const USAGE: &str =
-    "usage: srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triage]";
+pub const USAGE: &str = "usage: srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] \
+                         [--view trail|calls] [--triage]\n       srcwranglr --version";
 
 /// The window and Dock icon (the macOS bundle also carries it as .icns).
 const ICON_PNG: &[u8] = include_bytes!("../../assets/icon-256.png");
@@ -27,6 +28,8 @@ pub struct LaunchOptions {
     pub view: ViewMode,
     /// Open the Project Triage window once the project is loaded.
     pub triage: bool,
+    /// Print the version and quit instead of opening the window.
+    pub should_print_version: bool,
 }
 
 /// Parses arguments (without the program name).
@@ -50,6 +53,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<LaunchOpti
                 };
             }
             Some("--triage") => options.triage = true,
+            Some("-V" | "--version") => options.should_print_version = true,
             Some("-h" | "--help") => return Err(USAGE.into()),
             Some(serial) if serial.starts_with(PROCESS_SERIAL_PREFIX) => {}
             Some(flag) if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
@@ -85,6 +89,7 @@ mod tests {
             symbol: Some("ns::Foo".into()),
             view: ViewMode::Trail,
             triage: false,
+            should_print_version: false,
         };
         assert_eq!(parse(&["/p", "--symbol", "ns::Foo"]), Ok(expected.clone()));
         assert_eq!(parse(&["--symbol", "ns::Foo", "/p"]), Ok(expected));
@@ -117,6 +122,16 @@ mod tests {
         assert!(parse(&["--help"]).is_err());
         assert!(parse(&["--view"]).is_err());
         assert!(parse(&["--view", "sideways"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_version_flag_in_either_spelling() {
+        for flag in ["--version", "-V"] {
+            let options = parse(&[flag]).expect(flag);
+            assert!(options.should_print_version, "{flag}");
+        }
+        assert!(!parse(&["/p"]).expect("parse").should_print_version);
+        assert!(USAGE.contains("--version"));
     }
 
     #[test]

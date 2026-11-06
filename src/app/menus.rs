@@ -1,4 +1,4 @@
-//! The menu bar: File, Go, View, Analyze, and Triage.
+//! The menu bar: File, Go, View, Analyze, Triage, and Help.
 
 use egui::RichText;
 
@@ -22,13 +22,15 @@ impl SrcWranglrApp {
                         let view = ui.menu_button("View", |ui| self.view_menu(ui));
                         let analyze = ui.menu_button("Analyze", |ui| self.analyze_menu(ui));
                         let triage = ui.menu_button("Triage", triage_menu);
+                        let help = ui.menu_button("Help", help_menu);
                         let action = file
                             .inner
                             .flatten()
                             .or(go.inner.flatten())
                             .or(view.inner.flatten())
                             .or(analyze.inner.flatten())
-                            .or(triage.inner.flatten());
+                            .or(triage.inner.flatten())
+                            .or(help.inner.flatten());
                         ui.separator();
                         ui.label(RichText::new(&self.project.name).strong());
                         action
@@ -234,4 +236,10 @@ fn triage_menu(ui: &mut egui::Ui) -> Option<Command> {
         .skip(1)
         .find(|tab| ui.button(tab.label()).clicked())
         .map(Command::Triage)
+}
+
+fn help_menu(ui: &mut egui::Ui) -> Option<Command> {
+    ui.button(Command::About.label())
+        .clicked()
+        .then_some(Command::About)
 }
