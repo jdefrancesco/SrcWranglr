@@ -1,8 +1,11 @@
 //! Runs an external analyzer on a background thread, so the UI stays
-//! responsive while semgrep or cppcheck works through the project.
+//! responsive while semgrep, cppcheck or flawfinder works through the
+//! project. The program is looked for where Settings says (see
+//! `programs`), and runs with that search as its `PATH`.
 
+use std::ffi::OsStr;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
@@ -10,6 +13,7 @@ use super::dangerous_lists::semgrep_rules_dir;
 use crate::analysis::tools::{prepare_semgrep_rules, Tool};
 use crate::analysis::Finding;
 use crate::model::{CodeGraph, SymbolId, SymbolKind};
+use crate::programs::SearchPath;
 
 /// How much of a failed tool's error output to show.
 const MAX_ERROR_CHARS: usize = 300;
@@ -20,16 +24,18 @@ pub struct ToolJob {
 }
 
 impl ToolJob {
-    pub fn spawn(tool: Tool, root: PathBuf, ctx: egui::Context) -> Self {
+    pub fn spawn(tool: Tool, root: PathBuf, search: SearchPath, ctx: egui::Context) -> Self {
         let (tx, results) = channel();
         std::thread::spawn(move || {
             let rules = match tool {
                 Tool::Semgrep => prepare_semgrep_rules(semgrep_rules_dir().as_deref()),
-                Tool::Cppcheck => Ok(String::new()),
+                Tool::Cppcheck | Tool::Flawfinder => Ok(String::new()),
             };
             let result = rules.and_then(|rules| {
                 let (program, args) = tool.command(&root, &rules);
-                run(&program, &args, |out, err| tool.parse(out, err, &root))
+                let found = locate(tool, &program, &search)?;
+                let parse = |out: &str, err: &str| tool.parse(out, err, &root);
+                run(&found, &args, &search.joined(), parse)
             });
             // The app may be gone (closed) by now; nothing to report to then.
             let _ = tx.send(result);
@@ -54,20 +60,35 @@ impl ToolJob {
     }
 }
 
-/// Runs `program` and parses its output; an unparseable report from a
-/// failing run is explained with the start of its error output.
+/// Where `tool`'s `program` is, or how to get it found.
+fn locate(tool: Tool, program: &str, search: &SearchPath) -> Result<PathBuf, String> {
+    search.find(program).ok_or_else(|| {
+        format!(
+            "{program} is not installed, or not in a folder SrcWranglr searches. \
+             Install it ({}), or add its folder in Settings (⌘,).",
+            tool.install_hint()
+        )
+    })
+}
+
+/// Runs `program` with `path_var` as its `PATH` and parses its output; an
+/// unparseable report from a failing run is explained with the start of
+/// its error output.
 fn run(
-    program: &str,
+    program: &Path,
     args: &[String],
+    path_var: &OsStr,
     parse: impl Fn(&str, &str) -> Result<Vec<Finding>, String>,
 ) -> Result<Vec<Finding>, String> {
+    let shown = program.display();
     let output = Command::new(program)
         .args(args)
+        .env("PATH", path_var)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| match e.kind() {
-            ErrorKind::NotFound => format!("{program} is not installed (or not on PATH)"),
-            _ => format!("Could not run {program}: {e}"),
+            ErrorKind::NotFound => format!("{shown} is not installed (or not on PATH)"),
+            _ => format!("Could not run {shown}: {e}"),
         })?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -75,7 +96,7 @@ fn run(
         let detail: String = stderr.trim().chars().take(MAX_ERROR_CHARS).collect();
         match output.status.success() {
             true => error,
-            false => format!("{program} failed ({}): {detail}", output.status),
+            false => format!("{shown} failed ({}): {detail}", output.status),
         }
     })
 }
@@ -109,18 +130,63 @@ mod tests {
     use crate::analysis::Severity;
 
     #[test]
-    fn a_missing_program_says_it_is_not_installed() {
+    fn a_missing_program_says_how_to_get_it_found() {
+        let search = SearchPath::new(&[], None, None);
         let error =
-            run("srcwranglr-no-such-tool", &[], |_, _| Ok(Vec::new())).expect_err("missing");
+            locate(Tool::Flawfinder, "srcwranglr-no-such-tool", &search).expect_err("missing");
         assert!(error.contains("not installed"), "{error}");
+        assert!(error.contains("pipx install flawfinder"), "{error}");
+        assert!(error.contains("Settings"), "{error}");
     }
 
     #[cfg(unix)]
     #[test]
     fn a_failing_run_explains_itself_with_its_error_output() {
         let args = ["-c".to_string(), "echo boom >&2; exit 3".to_string()];
-        let error = run("/bin/sh", &args, |_, _| Err("bad report".into())).expect_err("fails");
+        let parse = |_: &str, _: &str| Err("bad report".into());
+        let error =
+            run(Path::new("/bin/sh"), &args, OsStr::new("/usr/bin"), parse).expect_err("fails");
         assert!(error.contains("boom") && error.contains('3'), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_program_runs_with_the_search_as_its_path() {
+        let args = ["-c".to_string(), "echo \"$PATH\" >&2; exit 1".to_string()];
+        let parse = |_: &str, _: &str| Err("no report".into());
+        let error = run(
+            Path::new("/bin/sh"),
+            &args,
+            OsStr::new("/my/tools:/usr/bin"),
+            parse,
+        )
+        .expect_err("fails");
+        assert!(error.contains("/my/tools:/usr/bin"), "{error}");
+    }
+
+    /// With the short PATH an app opened from the Dock gets, flawfinder
+    /// is still found (in the usual places) and its report read. Skipped
+    /// where flawfinder isn't installed.
+    #[test]
+    fn flawfinder_is_found_and_read_with_a_short_path() {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let search = SearchPath::new(&[], Some("/usr/bin:/bin".into()), home.as_deref());
+        let Some(program) = search.find("flawfinder") else {
+            return;
+        };
+        let project = tempfile::tempdir().expect("dir");
+        let code = "void f(char *s) {\n  char b[8];\n  strcpy(b, s);\n}\n";
+        std::fs::write(project.path().join("a.c"), code).expect("write");
+        let (_, args) = Tool::Flawfinder.command(project.path(), "");
+        let root = project.path();
+        let parse = |out: &str, err: &str| Tool::Flawfinder.parse(out, err, root);
+        let findings = run(&program, &args, &search.joined(), parse).expect("ran");
+        let strcpy = findings
+            .iter()
+            .find(|f| f.rule == "strcpy")
+            .expect("strcpy flagged");
+        assert_eq!((strcpy.file.as_str(), strcpy.line), ("a.c", 3));
+        assert_eq!(strcpy.columns, Some((2, 8)));
     }
 
     #[test]
@@ -171,6 +237,7 @@ mod tests {
         let job = ToolJob::spawn(
             Tool::Cppcheck,
             PathBuf::from("/nonexistent-srcwranglr-root"),
+            SearchPath::new(&[], None, None),
             egui::Context::default(),
         );
         let result = (0..200).find_map(|_| {

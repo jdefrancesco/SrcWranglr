@@ -15,7 +15,6 @@ use super::files::{
 use super::flows::{carries_data, field_base, flows, name_of, Flow};
 use super::{Origin, Step, Trace, TracePath};
 use crate::analysis::reach::{input_source, COMMAND_LINE, MAIN_NAMES};
-use crate::analysis::Finding;
 use crate::index::syntax::{line_of, text};
 use crate::model::{CodeGraph, EdgeKind, OccurrenceRole, Span, SymbolId};
 
@@ -90,13 +89,12 @@ impl<'g> Tracer<'g> {
         }
     }
 
-    /// Traces the arguments that make `finding`'s call risky.
-    pub(super) fn finding(mut self, finding: &Finding) -> Option<Trace> {
-        let file = finding.file.as_str();
+    /// Traces the arguments that make the call at `line`, `column` of
+    /// `file` risky.
+    pub(super) fn call(mut self, file: &str, line: u32, column: u32) -> Option<Trace> {
         let tree = self.files.tree(file)?;
         let source = self.files.source(file);
-        let column = finding.columns.map_or(0, |(start, _)| start);
-        let call = call_at(tree.root_node(), finding.line, column)?;
+        let call = call_at(tree.root_node(), line, column)?;
         let function = call.child_by_field_name("function")?;
         let called = called_name(function, source);
         let symbol = self.symbol_around(tree.root_node(), file, call.start_byte());

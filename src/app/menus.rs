@@ -8,7 +8,7 @@ use super::survey_view::SurveyTab;
 use super::{
     SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
     LAYOUT_SHORTCUT, MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT, OPEN_SHORTCUT,
-    TRIAGE_SHORTCUT,
+    SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
 };
 
 impl SrcWranglrApp {
@@ -57,12 +57,28 @@ impl SrcWranglrApp {
         if ui.button("Open Demo Project").clicked() {
             return Some(Command::OpenDemo);
         }
+        ui.separator();
+        if ui.button(Command::OpenSession.label()).clicked() {
+            return Some(Command::OpenSession);
+        }
+        let can_save_session = self.project.root.is_some() && self.is_project_open;
+        let save_session = egui::Button::new(Command::SaveSession.label());
+        if ui.add_enabled(can_save_session, save_session).clicked() {
+            return Some(Command::SaveSession);
+        }
+        ui.separator();
         let can_reindex = self.project.root.is_some() && self.job.is_none();
         if ui
             .add_enabled(can_reindex, egui::Button::new("Re-index"))
             .clicked()
         {
             return Some(Command::Reindex);
+        }
+        ui.separator();
+        let settings = egui::Button::new(Command::Settings.label())
+            .shortcut_text(ui.ctx().format_shortcut(&SETTINGS_SHORTCUT));
+        if ui.add(settings).clicked() {
+            return Some(Command::Settings);
         }
         ui.separator();
         ui.button("Quit").clicked().then_some(Command::Quit)
@@ -120,6 +136,9 @@ impl SrcWranglrApp {
         if ui.add(panel).clicked() {
             return Some(Command::ShowNotes);
         }
+        if ui.button(Command::ShowTodos.label()).clicked() {
+            return Some(Command::ShowTodos);
+        }
 
         ui.separator();
         [
@@ -168,6 +187,7 @@ impl SrcWranglrApp {
             Command::TrustProject,
             Command::RunSemgrep,
             Command::RunCppcheck,
+            Command::RunFlawfinder,
         ]
         .into_iter()
         .find(|command| ui.button(command.label()).clicked())

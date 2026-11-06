@@ -202,7 +202,9 @@ impl SrcWranglrApp {
             tool.name(),
             self.project.name
         ));
-        self.tool_jobs.push(ToolJob::spawn(tool, root, ctx.clone()));
+        let search = self.settings.search_path();
+        self.tool_jobs
+            .push(ToolJob::spawn(tool, root, search, ctx.clone()));
     }
 
     /// Adds finished tools' findings.

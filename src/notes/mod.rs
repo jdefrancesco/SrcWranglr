@@ -5,6 +5,7 @@
 //! a starred note is a bookmark. Each target has at most one note.
 
 pub mod store;
+pub mod todo;
 pub mod triage;
 
 use std::collections::{HashMap, HashSet};

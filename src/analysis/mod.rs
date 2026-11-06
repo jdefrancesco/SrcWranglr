@@ -4,6 +4,7 @@
 
 pub mod capabilities;
 pub mod dangerous;
+pub mod flawfinder;
 pub mod fuzz;
 pub mod heuristics;
 pub mod reach;

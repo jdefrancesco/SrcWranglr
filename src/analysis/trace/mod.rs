@@ -16,7 +16,6 @@ mod files;
 mod flows;
 mod walk;
 
-use crate::analysis::Finding;
 use crate::model::{CodeGraph, Span, SymbolId};
 
 /// Where a traced value comes from, and every step on the way.
@@ -80,8 +79,17 @@ pub struct Step {
 
 /// Where the arguments that make `finding`'s call risky come from. `None`
 /// if no call is found where the finding is.
-pub fn trace_finding(graph: &CodeGraph, finding: &Finding) -> Option<Trace> {
-    walk::Tracer::new(graph).finding(finding)
+#[cfg(test)]
+pub fn trace_finding(graph: &CodeGraph, finding: &crate::analysis::Finding) -> Option<Trace> {
+    let column = finding.columns.map_or(0, |(start, _)| start);
+    trace_call(graph, &finding.file, finding.line, column)
+}
+
+/// Where the arguments that make the call at `line` (1-based), byte
+/// `column` of `file` risky come from: the call named there, else the
+/// first one starting on that line at or after it.
+pub fn trace_call(graph: &CodeGraph, file: &str, line: u32, column: u32) -> Option<Trace> {
+    walk::Tracer::new(graph).call(file, line, column)
 }
 
 /// Where the variable written at `line` (1-based), byte `column` of `file`

@@ -33,6 +33,11 @@ pub enum Command {
     TrustProject,
     RunSemgrep,
     RunCppcheck,
+    RunFlawfinder,
+    Settings,
+    SaveSession,
+    OpenSession,
+    ShowTodos,
     Back,
     Fit,
     TrailView,
@@ -45,7 +50,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 28] = [
+    pub const ALL: [Command; 33] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -60,6 +65,11 @@ impl Command {
         Command::TrustProject,
         Command::RunSemgrep,
         Command::RunCppcheck,
+        Command::RunFlawfinder,
+        Command::Settings,
+        Command::SaveSession,
+        Command::OpenSession,
+        Command::ShowTodos,
         Command::Back,
         Command::Fit,
         Command::TrailView,
@@ -93,6 +103,11 @@ impl Command {
             Command::TrustProject => "Trust This Project's Verdicts and List",
             Command::RunSemgrep => "Run semgrep",
             Command::RunCppcheck => "Run cppcheck",
+            Command::RunFlawfinder => "Run flawfinder",
+            Command::Settings => "Settings…",
+            Command::SaveSession => "Save Session As…",
+            Command::OpenSession => "Open Session…",
+            Command::ShowTodos => "TODO List",
             Command::Back => "Go Back",
             Command::Fit => "Fit Graph to Window",
             Command::TrailView => "View: Trail (callers and callees)",

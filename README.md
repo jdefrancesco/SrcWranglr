@@ -65,7 +65,7 @@ A first look at an unfamiliar codebase. Open it with **Triage → Project Triage
 
 ### Findings
 
-**Analyze → Findings** (⌘⇧R / Ctrl+Shift+R) lists risky calls, most severe first. The calls are judged by their arguments, so a constant-size `memcpy` isn't flagged but `sprintf` with a non-literal format is. The list also includes results from semgrep and cppcheck, and the functions on your dangerous-functions list. Filter by severity or text, and record a verdict on each one.
+**Analyze → Findings** (⌘⇧R / Ctrl+Shift+R) lists risky calls, most severe first. The calls are judged by their arguments, so a constant-size `memcpy` isn't flagged but `sprintf` with a non-literal format is. The list also includes results from semgrep, cppcheck and flawfinder (**Analyze → Run …**), and the functions on your dangerous-functions list. Filter by severity or text, and record a verdict on each one.
 
 **Input reachability** marks the findings that outside input may get to:
 - Input comes in at calls such as `recv`, `read`, `fread`, `fgets`, `getline`, `getenv`, `scanf`, `ReadFile` and `SSL_read`, and through `main`'s command line.
@@ -109,6 +109,32 @@ A path means the value *may* come from there:
 - The trace reads syntax, not types.
 - Writes through other pointers to the same memory aren't seen, and neither are calls through function pointers or checks that limit the value.
 - An assignment inside a loop after the use isn't followed.
+
+### Settings
+
+**File → Settings…** (⌘, / Ctrl+,) sets three things, saved to `~/.config/srcwranglr/settings.toml` (edit it by hand if you like):
+- **Editor:** what **Open in Editor** uses. Pick VS Code, Cursor, Zed, Sublime Text, Emacs, CLion, or Vim, Neovim or Helix in a terminal. Or write a custom command: `{file}`, `{line}` and `{column}` are filled in (`code -g {file}:{line}:{column}`). **Automatic** keeps the old behavior: `SRCWRANGLR_EDITOR`, `$VISUAL`, `$EDITOR`, then VS Code.
+- **Tools:** extra folders to look for semgrep, cppcheck, flawfinder and your editor in. Each tool shows where it was found, or how to install it.
+  - Tools are looked for in your folders first, then `PATH`, then the usual install places: Homebrew, `/usr/local/bin`, `~/.local/bin` (pipx), `~/Library/Python/*/bin`.
+  - An app opened from the Dock or Finder gets a short `PATH` without those folders, which is why a tool can work in a terminal but not in the app. With these places searched, it usually just works.
+  - Tools run with the same search as their `PATH`.
+- **Source colors:** SrcWranglr Dark, Solarized Dark or Light, Monokai, Gruvbox Dark or Paper Light, with a preview.
+
+### Sessions
+
+Reopening a project puts you back where you were:
+- the selected symbol and the line the source showed,
+- the graph view,
+- which of the Notes, Findings and TODO panes were open,
+- the last trace, run again.
+
+**File → Save Session As…** writes the same to a `.srcwranglr-session` file, with the project's folder, to come back to later or to hand to someone. **File → Open Session…** opens one: it indexes the project if it isn't the one open, then restores the session. A session file from someone else is checked before anything in it is used: the project folder must be a full path, and files must be inside the project.
+
+### TODO list
+
+**Go → TODO List** opens a lightweight list for the project, saved next to its notes in `.srcwranglr/todo.json`:
+- Type a TODO and press Enter. Tick it when done, double-click it to edit, and **Clear Done** to tidy up.
+- Right-click a line of code, then **Add TODO Here…**, to write one about that line. Its `file:line` link takes you back there.
 
 ### Quick open
 
@@ -190,6 +216,9 @@ srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triag
 | Filter symbols | Type in **Search** |
 | Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
 | Put the source beside the graph, or back below it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
+| Settings (editor, tool folders, source colors) | **⌘, / Ctrl+,**, or **File → Settings…** |
+| Save or reopen where you were | **File → Save Session As… / Open Session…** (reopening a project restores it too) |
+| TODO list | **Go → TODO List**; right-click a line, then **Add TODO Here…** |
 | Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Value Of** |
 | Undo dragged pane sizes | **View → Reset Layout** |
 
@@ -213,6 +242,11 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`) and libFuzzer harness drafting (`harness/`) |
 | `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
 | `src/analysis/trace/` | Tracing a value back to where it comes from, across functions, by syntax |
+| `src/analysis/tools.rs`, `flawfinder.rs` | Running semgrep, cppcheck and flawfinder, and reading their reports |
+| `src/programs.rs` | Finding the programs to run: your folders, `PATH`, then the usual install places |
+| `src/app/settings.rs` | Your settings file; `settings_view.rs` is the Settings window |
+| `src/app/session.rs` | Sessions: what is kept per project and in session files, and checking them |
+| `src/notes/todo.rs` | The project's TODO list on disk |
 | `src/index/job.rs` | Background indexing thread with progress, cancellation, and crash containment |
 | `src/graph/trail.rs` | Three-column, Sourcetrail-style layout around the active symbol |
 | `src/graph/overview.rs` | Per-file overview grid |

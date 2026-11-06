@@ -12,6 +12,14 @@ impl SrcWranglrApp {
         if let Some(previous) = self.job.take() {
             previous.cancel();
         }
+        // A session file's session is for its own project only.
+        if self
+            .pending_session
+            .as_ref()
+            .is_some_and(|(r, _)| *r != root)
+        {
+            self.pending_session = None;
+        }
         // Old warnings belong to the old project; don't show them next to
         // this run's result (which may be an error).
         self.warnings.clear();
@@ -68,8 +76,14 @@ impl SrcWranglrApp {
         self.job = None;
         match result {
             Ok(outcome) => self.load_project(root, outcome, ctx),
-            Err(IndexError::Cancelled) => self.status = Status::Info("Indexing cancelled.".into()),
-            Err(err) => self.status = Status::Error(err.to_string()),
+            Err(IndexError::Cancelled) => {
+                self.pending_session = None;
+                self.status = Status::Info("Indexing cancelled.".into());
+            }
+            Err(err) => {
+                self.pending_session = None;
+                self.status = Status::Error(err.to_string());
+            }
         }
     }
 
@@ -113,6 +127,7 @@ impl SrcWranglrApp {
         if let Some(job) = self.job.take() {
             job.cancel();
         }
+        self.pending_session = None;
         self.status = Status::Info(
             "Showing the built-in demo. File > Open Project… to index your own code.".into(),
         );
@@ -149,6 +164,8 @@ impl SrcWranglrApp {
         warnings: Vec<String>,
         ctx: &egui::Context,
     ) {
+        // Where you were in the project before, for when it opens again.
+        self.remember_session();
         self.findings = Findings::for_graph(&project.graph, self.dangerous.merged());
         self.reach = Reach::of(&project.graph);
         // Their results belong to the old project.
@@ -166,6 +183,8 @@ impl SrcWranglrApp {
         self.triage_error = triage_error;
         self.refresh_verdicts();
         self.report_notes_on_open();
+        self.load_todos();
+        self.todo_panel.reset();
         // A new project starts with a fresh selection, in the same view mode.
         self.graph_view = GraphView::with_mode(self.graph_view.mode());
         self.code_panel = CodePanel::default();
@@ -175,6 +194,7 @@ impl SrcWranglrApp {
         self.warnings = warnings;
         self.is_project_open = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{APP_NAME} — {name}")));
+        self.restore_session_on_open();
         self.apply_pending_symbol();
         self.apply_pending_triage(ctx);
     }

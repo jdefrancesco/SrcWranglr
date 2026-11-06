@@ -6,6 +6,8 @@ use std::ops::Range;
 
 use egui::Color32;
 
+use super::scheme::SourceColors;
+
 const CPP_KEYWORDS: &[&str] = &[
     "class",
     "struct",
@@ -69,7 +71,7 @@ pub(super) fn tokenize_line(line: &str) -> Vec<Token<'_>> {
 }
 
 /// Each token's byte range in `line` and its colour.
-pub(super) fn colored_ranges(line: &str) -> Vec<(Range<usize>, Color32)> {
+pub(super) fn colored_ranges(line: &str, colors: &SourceColors) -> Vec<(Range<usize>, Color32)> {
     let mut start = 0;
     tokenize_line(line)
         .iter()
@@ -77,7 +79,7 @@ pub(super) fn colored_ranges(line: &str) -> Vec<(Range<usize>, Color32)> {
             let end = start + token_text(token).len();
             let range = start..end;
             start = end;
-            (range, token_color(token))
+            (range, token_color(token, colors))
         })
         .collect()
 }
@@ -111,14 +113,14 @@ fn classify(first: char, word: &str) -> Token<'_> {
     }
 }
 
-fn token_color(token: &Token) -> Color32 {
+fn token_color(token: &Token, colors: &SourceColors) -> Color32 {
     match token {
-        Token::Keyword(_) => Color32::from_rgb(0xCC, 0x7A, 0xD9),
-        Token::StringLit(_) => Color32::from_rgb(0x9E, 0xC9, 0x6B),
-        Token::Comment(_) => Color32::from_rgb(0x6A, 0x6A, 0x6A),
-        Token::Number(_) => Color32::from_rgb(0xD9, 0xA6, 0x4A),
-        Token::Preproc(_) => Color32::from_rgb(0x6A, 0x9E, 0xD9),
-        Token::Plain(_) => Color32::from_gray(210),
+        Token::Keyword(_) => colors.keyword,
+        Token::StringLit(_) => colors.string,
+        Token::Comment(_) => colors.comment,
+        Token::Number(_) => colors.number,
+        Token::Preproc(_) => colors.preproc,
+        Token::Plain(_) => colors.text,
     }
 }
 
@@ -174,7 +176,7 @@ mod tests {
     #[test]
     fn colored_ranges_tile_the_line() {
         let line = "int naïve = f(1); // é";
-        let ranges = colored_ranges(line);
+        let ranges = colored_ranges(line, &SourceColors::default());
         assert_eq!(ranges.first().map(|(r, _)| r.start), Some(0));
         assert_eq!(ranges.last().map(|(r, _)| r.end), Some(line.len()));
         assert!(ranges.windows(2).all(|w| w[0].0.end == w[1].0.start));

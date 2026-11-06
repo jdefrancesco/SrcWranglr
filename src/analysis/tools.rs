@@ -1,4 +1,4 @@
-//! External analyzers (semgrep, cppcheck): the command that runs each on a
+//! External analyzers (semgrep, cppcheck, flawfinder): the command that runs each on a
 //! project, and reading its report into findings. Commands run without a
 //! shell; the project path is passed as an argument.
 
@@ -12,6 +12,7 @@ use super::{Finding, Severity};
 pub enum Tool {
     Semgrep,
     Cppcheck,
+    Flawfinder,
 }
 
 /// semgrep rules to use instead of the default `p/c`.
@@ -41,6 +42,16 @@ impl Tool {
         match self {
             Tool::Semgrep => "semgrep",
             Tool::Cppcheck => "cppcheck",
+            Tool::Flawfinder => super::flawfinder::TOOL,
+        }
+    }
+
+    /// How to install it, for when it isn't found.
+    pub fn install_hint(self) -> &'static str {
+        match self {
+            Tool::Semgrep => "brew install semgrep, or pipx install semgrep",
+            Tool::Cppcheck => "brew install cppcheck, or apt install cppcheck",
+            Tool::Flawfinder => "brew install flawfinder, or pipx install flawfinder",
         }
     }
 
@@ -71,16 +82,26 @@ impl Tool {
                 format!("--template={CPPCHECK_TEMPLATE}"),
                 root,
             ],
+            // Symlinks aren't followed (flawfinder's default); dot folders
+            // are scanned, since untrusted code may hide in any of them.
+            Tool::Flawfinder => vec![
+                "--csv".into(),
+                "--quiet".into(),
+                "--columns".into(),
+                "--followdotdir".into(),
+                root,
+            ],
         };
         (self.name().into(), args)
     }
 
-    /// Findings from the tool's output (stdout for semgrep, stderr for
-    /// cppcheck), with paths made relative to `root`.
+    /// Findings from the tool's output (stdout for semgrep and flawfinder,
+    /// stderr for cppcheck), with paths made relative to `root`.
     pub fn parse(self, stdout: &str, stderr: &str, root: &Path) -> Result<Vec<Finding>, String> {
         match self {
             Tool::Semgrep => parse_semgrep(stdout, root),
             Tool::Cppcheck => Ok(parse_cppcheck(stderr, root)),
+            Tool::Flawfinder => super::flawfinder::parse(stdout, root),
         }
     }
 }
@@ -240,7 +261,7 @@ fn rule_id(check_id: &str) -> &str {
 }
 
 /// `CWE-676: …` → 676.
-fn cwe_number(text: &str) -> Option<u32> {
+pub(super) fn cwe_number(text: &str) -> Option<u32> {
     let digits: String = text
         .strip_prefix("CWE-")?
         .chars()
@@ -250,7 +271,7 @@ fn cwe_number(text: &str) -> Option<u32> {
 }
 
 /// `path` relative to `root` with `/` separators, if it is inside it.
-fn project_relative(path: &str, root: &Path) -> Option<String> {
+pub(super) fn project_relative(path: &str, root: &Path) -> Option<String> {
     let path = Path::new(path);
     let relative = if path.is_absolute() {
         path.strip_prefix(root).ok()?
@@ -475,5 +496,9 @@ void term(const char *s) {
         for offline in ["--metrics=off", "--disable-version-check", "/rules"] {
             assert!(args.contains(&offline.to_string()), "{args:?}");
         }
+        let (program, args) = Tool::Flawfinder.command(Path::new("/p q/r"), "");
+        assert_eq!(program, "flawfinder");
+        assert_eq!(args.last().map(String::as_str), Some("/p q/r"));
+        assert!(args.contains(&"--csv".to_string()));
     }
 }

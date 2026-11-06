@@ -22,11 +22,18 @@ mod notes_panel;
 mod opening;
 mod palette;
 mod project;
+mod session;
+mod session_actions;
+mod settings;
+mod settings_actions;
+mod settings_view;
 mod survey_code;
 mod survey_fuzz;
 mod survey_tabs;
 mod survey_view;
 mod symbol_list;
+mod todo_actions;
+mod todo_panel;
 mod tool_job;
 mod trace_actions;
 mod trace_panel;
@@ -76,6 +83,7 @@ const TRIAGE_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
 const LAYOUT_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::L);
+const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 /// Entry points listed in the Go menu (all of them are reachable with ⌘E).
 const MAX_ENTRY_MENU_ITEMS: usize = 25;
 const APP_NAME: &str = "SrcWranglr";
@@ -124,6 +132,25 @@ pub struct SrcWranglrApp {
     reach: Reach,
     /// The trace shown in the Trace pane, if any.
     trace_panel: trace_panel::TracePanel,
+    /// Your settings (editor, tool folders, source colors).
+    settings: settings::Settings,
+    /// The Settings window, while it is open.
+    settings_view: Option<settings_view::SettingsView>,
+    /// Where you were in each project opened.
+    sessions: session::Sessions,
+    /// A session file's project and session, restored once that project
+    /// is indexed (and dropped if another one opens instead).
+    pending_session: Option<(PathBuf, session::Session)>,
+    /// A session file's project and session, waiting for you to agree to
+    /// index a folder you haven't opened before.
+    session_to_confirm: Option<(PathBuf, session::Session)>,
+    /// The session file dialog, while it is open.
+    session_dialog: Option<session_actions::SessionDialog>,
+    /// The open project's TODO list.
+    todos: crate::notes::todo::Todos,
+    /// Why the TODO file couldn't be read; the list is read-only then.
+    todos_error: Option<String>,
+    todo_panel: todo_panel::TodoPanel,
     /// The Open Project folder dialog, while it is open.
     open_dialog: Option<dialogs::PendingDialog<PathBuf>>,
     /// Project folders opened before; kept between launches.
@@ -158,6 +185,15 @@ impl SrcWranglrApp {
             findings,
             findings_panel: FindingsPanel::default(),
             trace_panel: trace_panel::TracePanel::default(),
+            settings: settings::Settings::default(),
+            settings_view: None,
+            sessions: session::Sessions::load(storage),
+            pending_session: None,
+            session_to_confirm: None,
+            session_dialog: None,
+            todos: Default::default(),
+            todos_error: None,
+            todo_panel: todo_panel::TodoPanel::default(),
             tool_jobs: Vec::new(),
             finding_view: None,
             dangerous_editor: None,
@@ -187,6 +223,7 @@ impl SrcWranglrApp {
             is_triage_pending: options.triage,
         };
         app.graph_view.set_mode(options.view);
+        app.load_settings();
         match options.project {
             Some(root) => app.start_indexing(root, ctx),
             // `--symbol` or `--triage` without a folder: look in the demo.
@@ -218,6 +255,9 @@ impl SrcWranglrApp {
         }
         if can_use && ctx.input_mut(|i| i.consume_shortcut(&LAYOUT_SHORTCUT)) {
             self.run_command(Command::SwapSourcePane, ctx);
+        }
+        if can_use && ctx.input_mut(|i| i.consume_shortcut(&SETTINGS_SHORTCUT)) {
+            self.open_settings();
         }
         if panel {
             self.run_command(Command::ShowNotes, ctx);
@@ -260,7 +300,9 @@ impl SrcWranglrApp {
             line: at.line,
             column: at.column,
         };
-        self.status = match editor::open_in_editor(&position) {
+        let search = self.settings.search_path();
+        let setting = self.settings.editor.as_deref();
+        self.status = match editor::open_in_editor(&position, setting, &search) {
             Ok(program) => Status::Info(format!("Opened {}:{} with {program}", at.file, at.line)),
             Err(error) => Status::Error(error),
         };
@@ -299,17 +341,22 @@ impl eframe::App for SrcWranglrApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.layout.save(storage);
         self.recent.save(storage);
+        self.remember_session();
+        self.sessions.save(storage);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_open_dialog(&ctx);
+        self.poll_session_dialog(&ctx);
         self.poll_job(&ctx);
         self.poll_tool_jobs();
         // Global shortcuts pause while the palette or a dialog is open.
         let is_dialog_open = self.note_editor.is_some()
             || self.finding_view.is_some()
-            || self.dangerous_editor.is_some();
+            || self.dangerous_editor.is_some()
+            || self.settings_view.is_some()
+            || self.session_to_confirm.is_some();
         if !self.palette.is_open() && !is_dialog_open {
             self.handle_global_shortcuts(&ctx);
         }
@@ -329,6 +376,8 @@ impl eframe::App for SrcWranglrApp {
         self.show_note_editor(&ctx);
         self.show_finding_view(&ctx);
         self.show_dangerous_editor(&ctx);
+        self.show_settings_view(&ctx);
+        self.show_session_confirm(&ctx);
         let survey = self
             .survey_view
             .show(&ctx, &self.project.name, &self.project.graph);
@@ -370,6 +419,7 @@ impl SrcWranglrApp {
             Some(NotesPanelAction::Edit(target)) => self.edit_note(target),
             None => {}
         }
+        self.show_todo_panel(ui);
         let finding = self
             .findings_panel
             .show(
@@ -441,6 +491,11 @@ impl SrcWranglrApp {
             Command::TrustProject => self.trust_project_files(),
             Command::RunSemgrep => self.run_tool(analysis::tools::Tool::Semgrep, ctx),
             Command::RunCppcheck => self.run_tool(analysis::tools::Tool::Cppcheck, ctx),
+            Command::RunFlawfinder => self.run_tool(analysis::tools::Tool::Flawfinder, ctx),
+            Command::Settings => self.open_settings(),
+            Command::SaveSession => self.save_session_dialog(ctx),
+            Command::OpenSession => self.open_session_dialog(ctx),
+            Command::ShowTodos => self.todo_panel.toggle(),
             Command::EditNote => {
                 if let Some(target) = self.selected_target() {
                     self.edit_note(target);
@@ -555,6 +610,7 @@ impl SrcWranglrApp {
                 Some(PanelAction::EditNote(target)) => self.edit_note(target),
                 Some(PanelAction::ShowFinding(id)) => self.explain_finding(id),
                 Some(PanelAction::MarkDangerous(name)) => self.mark_dangerous(&name),
+                Some(PanelAction::AddTodo { file, line }) => self.todo_panel.add_here(file, line),
                 Some(PanelAction::Trace { file, line, column }) => {
                     self.trace_variable(&file, line, column);
                 }

@@ -1,7 +1,8 @@
 //! "Open in Editor": the command line that opens a file at a line in the
 //! user's editor, and launching it.
 //!
-//! The editor is, in order: the `SRCWRANGLR_EDITOR` template (e.g.
+//! The editor is, in order: the one picked in Settings, the
+//! `SRCWRANGLR_EDITOR` template (e.g.
 //! `code -g {file}:{line}:{column}`), `$VISUAL`, `$EDITOR`, VS Code if
 //! `code` is on the PATH, else the system's default opener. Terminal
 //! editors (vim, nano, …) open in a new terminal window.
@@ -11,6 +12,8 @@
 //! indexed (possibly hostile) source tree.
 
 use std::path::PathBuf;
+
+use crate::programs::SearchPath;
 
 /// A place in a file on disk; `line` and `column` are 1-based.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,9 +36,12 @@ pub enum Os {
     Other,
 }
 
-/// What decides the editor, read once from the environment.
+/// What decides the editor: your setting, then the environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorEnv {
+    /// From Settings: an editor command (`zed`, `vim`) or a template with
+    /// `{file}` in it.
+    pub setting: Option<String>,
     pub template: Option<String>,
     pub visual: Option<String>,
     pub editor: Option<String>,
@@ -92,16 +98,16 @@ const TEMPLATE_VAR: &str = "SRCWRANGLR_EDITOR";
 const VSCODE: &str = "code";
 
 impl EditorEnv {
-    /// Reads the editor settings of this process.
-    pub fn from_process() -> Self {
+    /// `setting`, then this process's environment; programs are looked
+    /// for with `search`.
+    pub fn from_process(setting: Option<&str>, search: &SearchPath) -> Self {
         let var = |name| std::env::var(name).ok();
-        let has_vscode = std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join(VSCODE).is_file()));
         Self {
+            setting: setting.map(String::from),
             template: var(TEMPLATE_VAR),
             visual: var("VISUAL"),
             editor: var("EDITOR"),
-            has_vscode,
+            has_vscode: search.find(VSCODE).is_some(),
             os: if cfg!(target_os = "macos") {
                 Os::MacOs
             } else {
@@ -114,6 +120,12 @@ impl EditorEnv {
 /// The command that opens `position` in the configured editor, or why it
 /// can't be opened safely.
 pub fn editor_launch(env: &EditorEnv, position: &SourcePosition) -> Result<Launch, String> {
+    if let Some(setting) = non_blank(&env.setting) {
+        return match setting.contains("{file}") {
+            true => Ok(from_template(setting, position)),
+            false => from_editor_command(setting, env.os, position),
+        };
+    }
     if let Some(template) = non_blank(&env.template) {
         return Ok(from_template(template, position));
     }
@@ -141,11 +153,19 @@ pub fn editor_launch(env: &EditorEnv, position: &SourcePosition) -> Result<Launc
     })
 }
 
-/// Starts the editor without waiting for it. Returns the program started.
-pub fn open_in_editor(position: &SourcePosition) -> Result<String, String> {
-    let launch = editor_launch(&EditorEnv::from_process(), position)?;
-    let mut child = std::process::Command::new(&launch.program)
+/// Starts the editor (your `setting`, else as the environment says)
+/// without waiting for it, found with `search` and run with it as its
+/// `PATH`. Returns the program started.
+pub fn open_in_editor(
+    position: &SourcePosition,
+    setting: Option<&str>,
+    search: &SearchPath,
+) -> Result<String, String> {
+    let launch = editor_launch(&EditorEnv::from_process(setting, search), position)?;
+    let program = resolve(&launch.program, search)?;
+    let mut child = std::process::Command::new(&program)
         .args(&launch.args)
+        .env("PATH", search.joined())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -159,6 +179,22 @@ pub fn open_in_editor(position: &SourcePosition) -> Result<String, String> {
         Err(e) => eprintln!("waiting for {program} failed: {e}"),
     });
     Ok(launch.program)
+}
+
+/// Where `program` is: found with `search`, else left to the system by
+/// name. A relative path (`bin/x`) is refused: it would depend on the
+/// folder the app happens to run in.
+fn resolve(program: &str, search: &SearchPath) -> Result<PathBuf, String> {
+    if let Some(found) = search.find(program) {
+        return Ok(found);
+    }
+    let path = std::path::Path::new(program);
+    if path.components().count() > 1 && !path.is_absolute() {
+        return Err(format!(
+            "The editor {program} isn't a full path: give its full path, or just its name, in Settings."
+        ));
+    }
+    Ok(path.to_path_buf())
 }
 
 fn non_blank(value: &Option<String>) -> Option<&str> {
@@ -324,6 +360,7 @@ mod tests {
 
     fn bare_env() -> EditorEnv {
         EditorEnv {
+            setting: None,
             template: None,
             visual: None,
             editor: None,
@@ -345,6 +382,38 @@ mod tests {
             program: program.into(),
             args: args.iter().map(|a| a.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn an_editor_at_a_relative_path_is_refused() {
+        let search = SearchPath::new(&[], None, None);
+        assert!(resolve("bin/my-editor", &search).is_err_and(|e| e.contains("full path")));
+        assert_eq!(
+            resolve("srcwranglr-no-such-editor", &search),
+            Ok(PathBuf::from("srcwranglr-no-such-editor"))
+        );
+    }
+
+    #[test]
+    fn your_setting_comes_before_the_environment() {
+        let env = EditorEnv {
+            setting: Some("zed".into()),
+            template: Some("code -g {file}".into()),
+            editor: Some("nvim".into()),
+            ..bare_env()
+        };
+        assert_eq!(
+            editor_launch(&env, &position("/src/a.cc")),
+            Ok(launch("zed", &["/src/a.cc:12:5"]))
+        );
+        let template = EditorEnv {
+            setting: Some("subl --wait {file}:{line}".into()),
+            ..env
+        };
+        assert_eq!(
+            editor_launch(&template, &position("/src/a.cc")),
+            Ok(launch("subl", &["--wait", "/src/a.cc:12"]))
+        );
     }
 
     #[test]

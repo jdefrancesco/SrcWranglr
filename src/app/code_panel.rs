@@ -8,6 +8,7 @@ use egui::RichText;
 use super::findings::Findings;
 use super::locations::LocationCursor;
 use super::notebook::Notebook;
+use crate::code_view::scheme::{Scheme, SourceColors};
 use crate::code_view::{CodeEvent, CodeView, Focus, LineAction, LineMark, LineWarning, RiskSpan};
 use crate::model::{CodeGraph, Location, OccurrenceRole, Span, Symbol, SymbolId};
 use crate::notes::NoteTarget;
@@ -39,6 +40,8 @@ pub enum PanelAction {
     ShowFinding(usize),
     /// Add this function to the dangerous-functions list.
     MarkDangerous(String),
+    /// Write a TODO about `file:line`.
+    AddTodo { file: String, line: u32 },
     /// Trace where the variable at `file:line`, byte `column`, gets its value.
     Trace {
         file: String,
@@ -73,9 +76,16 @@ pub struct CodePanel {
     /// The focus moved since the last frame, so scroll it into view.
     should_scroll: bool,
     reveal: Option<Reveal>,
+    /// The colors the source is drawn in.
+    scheme: Scheme,
 }
 
 impl CodePanel {
+    /// Draws the source in `scheme`'s colors from now on.
+    pub fn set_scheme(&mut self, scheme: Scheme) {
+        self.scheme = scheme;
+    }
+
     /// Shows the selected symbol's current location, with its note and
     /// the notes of the lines shown. Returns what the user asked for.
     pub fn show(
@@ -130,13 +140,14 @@ impl CodePanel {
             CodeEvent::Line(line, LineAction::Trace(column)) => {
                 Some(PanelAction::Trace { file, line, column })
             }
+            CodeEvent::Line(line, LineAction::AddTodo) => Some(PanelAction::AddTodo { file, line }),
             CodeEvent::Line(line, action) => {
                 let target = NoteTarget::Line { file, line };
                 Some(match action {
                     LineAction::EditNote => PanelAction::EditNote(target),
                     LineAction::ToggleBookmark => PanelAction::ToggleBookmark(target),
                     LineAction::MarkDangerous(name) => PanelAction::MarkDangerous(name),
-                    LineAction::Trace(_) => return None,
+                    LineAction::Trace(_) | LineAction::AddTodo => return None,
                 })
             }
             CodeEvent::Risk(id) => Some(PanelAction::ShowFinding(id)),
@@ -203,8 +214,13 @@ impl CodePanel {
                 should_scroll: self.should_scroll,
                 line_marks: &line_marks,
                 risks: &risks,
+                colors: SourceColors::default(),
             },
             None => focus_for(symbol, location, self.should_scroll, &line_marks, &risks),
+        };
+        let focus = Focus {
+            colors: self.scheme.colors(),
+            ..focus
         };
         let event = self.view.show(ui, graph, &focus);
         let file = focus.file.to_string();
@@ -418,6 +434,7 @@ fn focus_for<'a>(
             should_scroll,
             line_marks,
             risks,
+            colors: SourceColors::default(),
         },
         None => Focus {
             file: &symbol.file,
@@ -427,6 +444,7 @@ fn focus_for<'a>(
             should_scroll,
             line_marks,
             risks,
+            colors: SourceColors::default(),
         },
     }
 }

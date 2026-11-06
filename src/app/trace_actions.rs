@@ -1,6 +1,7 @@
 //! What the app does with traces: running one from a finding or from a
 //! variable picked in the source, and showing its steps.
 
+use super::session::TraceStart;
 use super::trace_panel::TracePanelAction;
 use super::{SrcWranglrApp, Status};
 use crate::analysis::trace::{self, Step, Trace};
@@ -9,30 +10,61 @@ use crate::analysis::Finding;
 impl SrcWranglrApp {
     /// Traces where `finding`'s call gets its values, into the Trace pane.
     pub(super) fn trace_finding(&mut self, finding: &Finding) {
-        let found = trace::trace_finding(&self.project.graph, finding);
-        self.show_trace(
-            found,
-            "No call was found where this finding is, so nothing was traced.",
-        );
+        let column = finding.columns.map_or(0, |(start, _)| start);
+        self.run_trace(TraceStart::Call {
+            file: finding.file.clone(),
+            line: finding.line,
+            column,
+        });
     }
 
     /// Traces where the variable at `file:line`, byte `column`, gets its
     /// value, into the Trace pane.
     pub(super) fn trace_variable(&mut self, file: &str, line: u32, column: u32) {
-        let found = trace::trace_variable(&self.project.graph, file, line, column);
-        self.show_trace(
-            found,
-            "That isn't a variable inside a function, so nothing was traced.",
-        );
+        self.run_trace(TraceStart::Variable {
+            file: file.to_string(),
+            line,
+            column,
+        });
     }
 
-    fn show_trace(&mut self, found: Option<Trace>, missing: &str) {
-        match found {
-            Some(trace) => {
-                self.status = Status::Info(format!("Traced {} in the Trace pane.", trace.subject));
-                self.trace_panel.open(trace);
+    fn run_trace(&mut self, start: TraceStart) {
+        match self.traced(&start) {
+            Some(found) => {
+                self.status = Status::Info(format!("Traced {} in the Trace pane.", found.subject));
+                self.trace_panel.open(found, start);
             }
-            None => self.status = Status::Info(missing.to_string()),
+            None => {
+                let missing = match start {
+                    TraceStart::Call { .. } => {
+                        "No call was found where this finding is, so nothing was traced."
+                    }
+                    TraceStart::Variable { .. } => {
+                        "That isn't a variable inside a function, so nothing was traced."
+                    }
+                };
+                self.status = Status::Info(missing.to_string());
+            }
+        }
+    }
+
+    /// Runs the trace `start` again (when a session is restored), without
+    /// a word in the status bar.
+    pub(super) fn rerun_trace(&mut self, start: &TraceStart) {
+        if let Some(found) = self.traced(start) {
+            self.trace_panel.open(found, start.clone());
+        }
+    }
+
+    fn traced(&self, start: &TraceStart) -> Option<Trace> {
+        let graph = &self.project.graph;
+        match start {
+            TraceStart::Call { file, line, column } => {
+                trace::trace_call(graph, file, *line, *column)
+            }
+            TraceStart::Variable { file, line, column } => {
+                trace::trace_variable(graph, file, *line, *column)
+            }
         }
     }
 

@@ -4,6 +4,7 @@
 use egui::RichText;
 
 use super::layout::Layout;
+use super::session::TraceStart;
 use crate::analysis::trace::{Step, Trace, TracePath};
 use crate::style::INPUT_COLOR;
 
@@ -25,20 +26,29 @@ pub enum TracePanelAction {
 #[derive(Default)]
 pub struct TracePanel {
     trace: Option<Trace>,
+    /// What the trace was started from, to run it again.
+    start: Option<TraceStart>,
     /// The step last shown: path, then step, by index.
     selected: Option<(usize, usize)>,
 }
 
 impl TracePanel {
-    /// Shows `trace`, replacing the one shown.
-    pub fn open(&mut self, trace: Trace) {
+    /// Shows `trace` (started from `start`), replacing the one shown.
+    pub fn open(&mut self, trace: Trace, start: TraceStart) {
         self.trace = Some(trace);
+        self.start = Some(start);
         self.selected = None;
     }
 
     pub fn close(&mut self) {
         self.trace = None;
+        self.start = None;
         self.selected = None;
+    }
+
+    /// What the trace shown was started from.
+    pub fn start(&self) -> Option<&TraceStart> {
+        self.start.as_ref()
     }
 
     #[cfg(test)]
@@ -205,7 +215,12 @@ mod tests {
     fn harness(trace: Option<Trace>) -> Harness<'static, State> {
         let mut panel = TracePanel::default();
         if let Some(trace) = trace {
-            panel.open(trace);
+            let start = TraceStart::Call {
+                file: "user.c".into(),
+                line: 8,
+                column: 0,
+            };
+            panel.open(trace, start);
         }
         let mut harness = Harness::new_ui_state(
             |ui, state: &mut State| {

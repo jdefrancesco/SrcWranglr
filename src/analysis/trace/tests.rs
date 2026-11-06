@@ -1,6 +1,6 @@
 use super::*;
 use crate::analysis::reach::COMMAND_LINE;
-use crate::analysis::Severity;
+use crate::analysis::{Finding, Severity};
 use crate::index::graph_of_files;
 
 /// A finding on the first `needle` in `file`, as the risky-call check

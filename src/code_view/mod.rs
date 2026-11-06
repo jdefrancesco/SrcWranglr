@@ -5,6 +5,7 @@
 //! Syntax colouring uses a small hand-written tokenizer (`tokenize`);
 //! symbol-aware decoration comes from the index's occurrences.
 
+pub mod scheme;
 mod segments;
 mod tokenize;
 mod variables;
@@ -20,19 +21,15 @@ use egui::{Color32, CursorIcon, Response, RichText, Sense, Stroke};
 
 use crate::model::{CodeGraph, EdgeKind, Occurrence, OccurrenceRole, Span, SymbolId};
 use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR};
+use scheme::SourceColors;
 use segments::{merge, overlay_risks, Mark, Segment};
 use tokenize::colored_ranges;
 use variables::variables_in;
 
-const CODE_BACKGROUND: Color32 = Color32::from_gray(18);
-const ACTIVE_LINE_BACKGROUND: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x14);
-const ACTIVE_NAME_BACKGROUND: Color32 = Color32::from_rgb(0x8A, 0x6D, 0x1C);
-const SELECTED_NAME_BACKGROUND: Color32 = Color32::from_rgb(0x2E, 0x45, 0x63);
 const LINK_UNDERLINE_ALPHA: f32 = 0.35;
 /// Risky snippets: a tint of their severity color, underlined.
 const RISK_BACKGROUND_ALPHA: f32 = 0.22;
 const RISK_UNDERLINE_WIDTH: f32 = 1.5;
-const LINE_NUMBER_COLOR: Color32 = Color32::from_gray(90);
 const GUTTER_WIDTH: f32 = 52.0;
 /// Gutter marker for a line with a note or bookmark.
 const MARKER_RADIUS: f32 = 3.5;
@@ -62,6 +59,8 @@ pub struct Focus<'a> {
     pub line_marks: &'a BTreeMap<u32, LineMark<'a>>,
     /// Risky snippets (findings) of `file`, by line.
     pub risks: &'a BTreeMap<u32, Vec<RiskSpan<'a>>>,
+    /// The color scheme to draw with.
+    pub colors: SourceColors,
 }
 
 /// A finding's snippet on one line: byte columns `start..end`, drawn in
@@ -102,6 +101,8 @@ pub enum LineAction {
     MarkDangerous(String),
     /// Trace where the variable at this byte column gets its value.
     Trace(u32),
+    /// Add a TODO about this line.
+    AddTodo,
 }
 
 /// Something the user did in the code view.
@@ -172,7 +173,7 @@ impl CodeView {
 
         let lines = &self.lines;
         let (clicked, visible_rows) = egui::Frame::NONE
-            .fill(CODE_BACKGROUND)
+            .fill(focus.colors.background)
             .show(ui, |ui| {
                 area.show_rows(ui, rows.row_height, lines.len(), |ui, visible| {
                     // Rows must be exactly `row_height` tall, or the
@@ -228,19 +229,20 @@ impl Rows<'_> {
             .collect();
         let segments = overlay_risks(
             &shown,
-            merge(&shown, &colored_ranges(&shown), &marks),
+            merge(&shown, &colored_ranges(&shown, &self.focus.colors), &marks),
             &risk_ranges,
         );
-        let galley = ui
-            .painter()
-            .layout_job(layout(&shown, &segments, &self.font));
+        let galley =
+            ui.painter()
+                .layout_job(layout(&shown, &segments, &self.font, &self.focus.colors));
 
         ui.horizontal(|ui| {
             if line_no == self.focus.line {
                 // Painted before the labels, so it sits underneath them.
                 let size = egui::vec2(ui.available_width().max(GUTTER_WIDTH), self.row_height);
                 let row = egui::Rect::from_min_size(ui.cursor().min, size);
-                ui.painter().rect_filled(row, 0.0, ACTIVE_LINE_BACKGROUND);
+                ui.painter()
+                    .rect_filled(row, 0.0, self.focus.colors.active_line);
             }
             let mark = self.focus.line_marks.get(&line_no);
             let gutter = ui.add_sized(
@@ -248,7 +250,7 @@ impl Rows<'_> {
                 egui::Label::new(
                     RichText::new(format!("{line_no:>5} "))
                         .font(self.font.clone())
-                        .color(LINE_NUMBER_COLOR),
+                        .color(self.focus.colors.line_number),
                 )
                 .sense(Sense::click()),
             );
@@ -283,7 +285,7 @@ impl Rows<'_> {
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, line.shown));
         ui.painter()
-            .galley(rect.min, Arc::clone(line.galley), Color32::from_gray(210));
+            .galley(rect.min, Arc::clone(line.galley), self.focus.colors.text);
         let line = DrawnLine { rect, ..*line };
         (self.hit(ui, &response, &line), response)
     }
@@ -458,19 +460,11 @@ fn line_menu(
         if ui.button(star).clicked() {
             action = Some(LineAction::ToggleBookmark);
         }
-        let variables = variables_in(shown);
-        if !variables.is_empty() {
-            ui.separator();
-            ui.menu_button("Trace Value Of", |ui| {
-                for (name, column) in &variables {
-                    let item = ui.button(name.as_str()).on_hover_text(format!(
-                        "Follow where `{name}` gets its value, back to outside input"
-                    ));
-                    if item.clicked() {
-                        action = u32::try_from(*column).ok().map(LineAction::Trace);
-                    }
-                }
-            });
+        if ui.button("Add TODO Here…").clicked() {
+            action = Some(LineAction::AddTodo);
+        }
+        if let Some(traced) = trace_menu(ui, shown) {
+            action = Some(traced);
         }
         if !calls.is_empty() {
             ui.separator();
@@ -487,6 +481,26 @@ fn line_menu(
         }
     });
     action
+}
+
+/// The line menu's Trace Value Of submenu: the variables on the line.
+fn trace_menu(ui: &mut egui::Ui, shown: &str) -> Option<LineAction> {
+    let variables = variables_in(shown);
+    if variables.is_empty() {
+        return None;
+    }
+    ui.separator();
+    ui.menu_button("Trace Value Of", |ui| {
+        variables.iter().find_map(|(name, column)| {
+            let hint = format!("Follow where `{name}` gets its value, back to outside input");
+            let item = ui.button(name.as_str()).on_hover_text(hint);
+            item.clicked()
+                .then(|| u32::try_from(*column).ok().map(LineAction::Trace))
+                .flatten()
+        })
+    })
+    .inner
+    .flatten()
 }
 
 fn byte_range(span: Span, visible_len: usize) -> Range<usize> {
@@ -508,7 +522,12 @@ fn occurrence_at_x(
     })
 }
 
-fn layout(line: &str, segments: &[Segment], font: &egui::FontId) -> LayoutJob {
+fn layout(
+    line: &str,
+    segments: &[Segment],
+    font: &egui::FontId,
+    colors: &SourceColors,
+) -> LayoutJob {
     let mut job = LayoutJob::default();
     for segment in segments {
         let (background, underline) = match segment.mark {
@@ -517,8 +536,8 @@ fn layout(line: &str, segments: &[Segment], font: &egui::FontId) -> LayoutJob {
                 Color32::TRANSPARENT,
                 Stroke::new(1.0, segment.color.gamma_multiply(LINK_UNDERLINE_ALPHA)),
             ),
-            Some(Mark::Selected) => (SELECTED_NAME_BACKGROUND, Stroke::NONE),
-            Some(Mark::Active) => (ACTIVE_NAME_BACKGROUND, Stroke::NONE),
+            Some(Mark::Selected) => (colors.selected_name, Stroke::NONE),
+            Some(Mark::Active) => (colors.active_name, Stroke::NONE),
         };
         // A risky snippet is underlined in its color, and tinted unless the
         // selection already colors it.
@@ -628,8 +647,13 @@ mod tests {
     #[test]
     fn layout_keeps_the_text_and_decorates_links() {
         let font = egui::FontId::monospace(12.0);
-        let segments = merge("f(x)", &colored_ranges("f(x)"), &[(0..1, Mark::Link)]);
-        let job = layout("f(x)", &segments, &font);
+        let colors = SourceColors::default();
+        let segments = merge(
+            "f(x)",
+            &colored_ranges("f(x)", &colors),
+            &[(0..1, Mark::Link)],
+        );
+        let job = layout("f(x)", &segments, &font, &colors);
         assert_eq!(job.text, "f(x)");
         assert_ne!(job.sections[0].format.underline, Stroke::NONE);
         assert_eq!(job.sections[1].format.underline, Stroke::NONE);

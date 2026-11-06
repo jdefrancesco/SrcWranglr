@@ -34,6 +34,14 @@ pub struct Filter {
 }
 
 impl FindingsPanel {
+    pub fn is_open(&self) -> bool {
+        self.is_open
+    }
+
+    pub fn set_open(&mut self, is_open: bool) {
+        self.is_open = is_open;
+    }
+
     pub fn toggle(&mut self) {
         self.is_open = !self.is_open;
     }

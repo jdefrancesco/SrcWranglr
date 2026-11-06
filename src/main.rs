@@ -6,6 +6,7 @@ mod graph;
 mod index;
 mod model;
 mod notes;
+mod programs;
 mod safe_fs;
 mod style;
 mod survey;
