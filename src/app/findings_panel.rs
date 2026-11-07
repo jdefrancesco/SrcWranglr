@@ -6,6 +6,7 @@ use egui::RichText;
 
 use super::findings::Findings;
 use super::layout::Layout;
+use super::pane_bar::{self, Edge};
 use crate::analysis::reach::{describe, Reach};
 use crate::analysis::{Finding, Severity};
 use crate::model::CodeGraph;
@@ -42,11 +43,8 @@ impl FindingsPanel {
         self.is_open = is_open;
     }
 
-    pub fn toggle(&mut self) {
-        self.is_open = !self.is_open;
-    }
-
-    /// Draws the panel (if open). Returns the finding the user picked.
+    /// Draws the panel (while open, sliding in and out). Returns the
+    /// finding the user picked.
     pub fn show<'f>(
         &mut self,
         ui: &mut egui::Ui,
@@ -55,14 +53,14 @@ impl FindingsPanel {
         reach: &Reach,
         layout: Layout,
     ) -> Option<&'f Finding> {
-        if !self.is_open {
-            return None;
-        }
-        egui::Panel::right(layout.pane_id("findings_panel"))
-            .resizable(true)
-            .default_size(DEFAULT_WIDTH)
-            .show(ui, |ui| self.contents(ui, findings, graph, reach))
-            .inner
+        let mut is_open = self.is_open;
+        let shown = pane_bar::right_pane(layout.pane_id("findings_panel"), DEFAULT_WIDTH)
+            .show_collapsible(ui, &mut is_open, |ui| {
+                self.contents(ui, findings, graph, reach)
+            });
+        // Shut by dragging, or by its hide arrow.
+        self.is_open = is_open && self.is_open;
+        shown.and_then(|shown| shown.inner)
     }
 
     fn contents<'f>(
@@ -72,7 +70,10 @@ impl FindingsPanel {
         graph: &CodeGraph,
         reach: &Reach,
     ) -> Option<&'f Finding> {
-        ui.heading(format!("Findings ({})", findings.all().len()));
+        let title = format!("Findings ({})", findings.all().len());
+        if pane_bar::heading(ui, title, Edge::Right) {
+            self.is_open = false;
+        }
         let filter = &mut self.filter;
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut filter.severity, None, "All");
@@ -245,7 +246,7 @@ mod tests {
         let graph = crate::index::graph_of_files(&[("x.c", source)]);
         let findings = Findings::for_graph(&graph, &Default::default());
         let reach = Reach::of(&graph);
-        let harness = egui_kittest::Harness::new_ui(|ui| {
+        let harness = crate::app::fonts::test_harness().build_ui(|ui| {
             let mut panel = FindingsPanel {
                 is_open: true,
                 filter: Filter::default(),
@@ -372,7 +373,6 @@ mod tests {
     #[test]
     fn clicking_a_row_picks_its_finding() {
         use egui_kittest::kittest::Queryable;
-        use egui_kittest::Harness;
 
         struct State {
             panel: FindingsPanel,
@@ -382,14 +382,14 @@ mod tests {
         }
         let graph = graph();
         let mut panel = FindingsPanel::default();
-        panel.toggle();
+        panel.set_open(true);
         let state = State {
             panel,
             findings: Findings::for_graph(&graph, &Default::default()),
             graph,
             picked: None,
         };
-        let mut harness = Harness::new_ui_state(
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
             |ui, state: &mut State| {
                 let picked = state.panel.show(
                     ui,

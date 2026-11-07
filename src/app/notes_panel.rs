@@ -6,6 +6,7 @@ use egui::RichText;
 
 use super::notebook::Notebook;
 use super::notes_actions::target_label;
+use super::pane_bar::{self, Edge};
 use crate::notes::store::{NOTES_DIR, NOTES_FILE};
 use crate::notes::{Note, NoteTarget, Notes};
 
@@ -67,29 +68,27 @@ impl NotesPanel {
         self.is_open = is_open;
     }
 
-    pub fn toggle(&mut self) {
-        self.is_open = !self.is_open;
-    }
-
-    /// Draws the panel (if open) at the right of `ui`.
+    /// Draws the panel (while open, sliding in and out) at the right of
+    /// `ui`.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         notebook: &Notebook,
         layout: Layout,
     ) -> Option<NotesPanelAction> {
-        if !self.is_open {
-            return None;
-        }
-        egui::Panel::right(layout.pane_id("notes_panel"))
-            .resizable(true)
-            .default_size(DEFAULT_WIDTH)
-            .show(ui, |ui| self.contents(ui, notebook))
-            .inner
+        let mut is_open = self.is_open;
+        let shown = pane_bar::right_pane(layout.pane_id("notes_panel"), DEFAULT_WIDTH)
+            .show_collapsible(ui, &mut is_open, |ui| self.contents(ui, notebook));
+        // Shut by dragging, or by its hide arrow.
+        self.is_open = is_open && self.is_open;
+        shown.and_then(|shown| shown.inner)
     }
 
     fn contents(&mut self, ui: &mut egui::Ui, notebook: &Notebook) -> Option<NotesPanelAction> {
-        ui.heading(format!("Notes & Bookmarks ({})", notebook.notes().len()));
+        let title = format!("Notes & Bookmarks ({})", notebook.notes().len());
+        if pane_bar::heading(ui, title, Edge::Right) {
+            self.is_open = false;
+        }
         storage_line(ui, notebook);
         ui.horizontal(|ui| {
             for filter in NotesFilter::ALL {

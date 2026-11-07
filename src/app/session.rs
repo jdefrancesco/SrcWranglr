@@ -67,6 +67,10 @@ pub struct Panes {
     pub findings: bool,
     #[serde(default)]
     pub todos: bool,
+    /// Whether the Trace pane was shown; `None` in sessions saved before
+    /// this was kept (the pane then shows if there is a trace).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<bool>,
 }
 
 /// What a trace was started from.
@@ -247,6 +251,7 @@ mod tests {
                 notes: true,
                 findings: false,
                 todos: true,
+                trace: Some(false),
             },
             trace: Some(TraceStart::Variable {
                 file: "db/db_impl.cc".into(),

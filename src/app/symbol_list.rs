@@ -3,7 +3,9 @@
 
 use std::cmp::Reverse;
 
+use super::fonts::SymbolFont;
 use super::notebook::Notebook;
+use super::pane_bar::{self, Edge};
 use super::project::Project;
 use crate::model::{Symbol, SymbolId, SymbolKind};
 
@@ -129,6 +131,14 @@ fn kind_rank(kind: SymbolKind) -> u8 {
     }
 }
 
+/// What the user did in the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolListAction {
+    Select(SymbolId),
+    /// Its hide arrow was clicked.
+    Hide,
+}
+
 /// The left panel's state: the query and the rows computed for it.
 #[derive(Default)]
 pub struct SymbolList {
@@ -136,6 +146,8 @@ pub struct SymbolList {
     rows: Vec<SymbolId>,
     /// The query `rows` were computed for; `None` means stale.
     rows_for: Option<ListQuery>,
+    /// The font the rows are drawn in.
+    font: SymbolFont,
 }
 
 impl SymbolList {
@@ -145,21 +157,34 @@ impl SymbolList {
         self.rows_for = None;
     }
 
-    /// Draws the controls and rows; returns the symbol the user clicked.
+    #[cfg(test)]
+    pub fn font(&self) -> SymbolFont {
+        self.font
+    }
+
+    pub fn set_font(&mut self, font: SymbolFont) {
+        self.font = font;
+    }
+
+    /// Draws the controls and rows; returns the symbol the user clicked,
+    /// or that they hid the list.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         project: &Project,
         selected: Option<SymbolId>,
         notebook: &Notebook,
-    ) -> Option<SymbolId> {
-        self.controls(ui);
+    ) -> Option<SymbolListAction> {
+        if self.controls(ui) {
+            return Some(SymbolListAction::Hide);
+        }
         if self.refresh(project) {
             // The heading above showed the old count.
             ui.ctx().request_repaint();
         }
         ui.separator();
         let row_height = ui.spacing().interact_size.y;
+        let family = self.font.family();
         let mut clicked = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -175,17 +200,20 @@ impl SymbolList {
                         mark_prefix(notebook, *id),
                         row_label(symbol, self.query.sort, project)
                     );
+                    let label = egui::RichText::new(label).family(family.clone());
                     if ui.selectable_label(selected == Some(*id), label).clicked() {
                         clicked = Some(*id);
                     }
                 }
             });
-        clicked
+        clicked.map(SymbolListAction::Select)
     }
 
-    fn controls(&mut self, ui: &mut egui::Ui) {
+    /// The heading, filter and sort controls. Returns whether the hide
+    /// arrow was clicked.
+    fn controls(&mut self, ui: &mut egui::Ui) -> bool {
         let count = self.rows.len();
-        ui.heading(format!("Symbols ({count})"));
+        let should_hide = pane_bar::heading(ui, format!("Symbols ({count})"), Edge::Left);
         let filter = egui::TextEdit::singleline(&mut self.query.text)
             .hint_text("Filter symbols…")
             .desired_width(f32::INFINITY);
@@ -212,6 +240,7 @@ impl SymbolList {
                 .response
                 .labelled_by(show.id);
         });
+        should_hide
     }
 
     /// Recomputes the rows if the query changed. Returns whether it did.
@@ -375,15 +404,12 @@ mod tests {
                 project,
                 clicked: None,
             };
-            // ★ comes from the system fonts in the app; the harness only
-            // has egui's bundled ones.
-            let mut harness = Harness::builder()
-                .allow_missing_glyphs()
+            let mut harness = crate::app::fonts::test_harness()
                 .with_size(egui::vec2(420.0, 600.0))
                 .build_ui_state(
                     |ui, state: &mut State| {
-                        let clicked = state.list.show(ui, &state.project, None, &state.notebook);
-                        if let Some(id) = clicked {
+                        let action = state.list.show(ui, &state.project, None, &state.notebook);
+                        if let Some(SymbolListAction::Select(id)) = action {
                             state.clicked = Some(id);
                         }
                     },

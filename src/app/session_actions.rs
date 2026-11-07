@@ -47,6 +47,7 @@ impl SrcWranglrApp {
                 notes: self.notes_panel.is_open(),
                 findings: self.findings_panel.is_open(),
                 todos: self.todo_panel.is_open(),
+                trace: Some(self.trace_panel.is_open()),
             },
             trace: self.trace_panel.start().cloned(),
         }
@@ -81,11 +82,14 @@ impl SrcWranglrApp {
                 .as_ref()
                 .filter(|p| self.project.graph.file_contents.contains_key(&p.file));
             if let Some(place) = place {
-                self.go_to_place(Some(id), &place.file, place.line);
+                self.place_source_at(Some(id), &place.file, place.line);
             }
         }
         if let Some(start) = &session.trace {
             self.rerun_trace(start);
+        }
+        if let Some(is_shown) = session.panes.trace {
+            self.trace_panel.set_open(is_shown);
         }
     }
 
@@ -284,6 +288,57 @@ mod tests {
         assert!(fresh.todo_panel.is_open());
         assert_eq!(fresh.trace_panel.start(), session.trace.as_ref());
         assert_eq!(fresh.capture_session(), session);
+    }
+
+    #[test]
+    fn a_hidden_trace_pane_stays_hidden_with_its_trace_kept() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut app = app_with_project(dir.path());
+        app.trace_variable("a.c", 3, "  strcpy(b, ".len() as u32);
+        app.trace_panel.set_open(false);
+        let session = app.capture_session();
+        let mut fresh = app_with_project(dir.path());
+        fresh.restore_session(&session);
+        assert!(!fresh.trace_panel.is_open());
+        assert_eq!(fresh.trace_panel.start(), session.trace.as_ref());
+    }
+
+    #[test]
+    fn a_session_saved_before_trace_visibility_shows_its_trace() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut app = app_with_project(dir.path());
+        app.trace_variable("a.c", 3, "  strcpy(b, ".len() as u32);
+        let old = Session {
+            panes: Panes {
+                trace: None,
+                ..app.capture_session().panes
+            },
+            ..app.capture_session()
+        };
+        let mut fresh = app_with_project(dir.path());
+        fresh.restore_session(&old);
+        assert!(fresh.trace_panel.is_open());
+        let untraced = Session::default();
+        let mut other = app_with_project(dir.path());
+        other.restore_session(&untraced);
+        assert!(!other.trace_panel.is_open());
+    }
+
+    #[test]
+    fn restoring_a_session_leaves_a_hidden_source_pane_hidden() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut app = app_with_project(dir.path());
+        app.layout = app.layout.with_source_shown(false);
+        let session = Session {
+            symbol: Some("helper".into()),
+            place: Some(Place {
+                file: "a.c".into(),
+                line: 3,
+            }),
+            ..Session::default()
+        };
+        app.restore_session(&session);
+        assert!(!app.layout.is_source_shown);
     }
 
     #[test]

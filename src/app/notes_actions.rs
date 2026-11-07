@@ -93,13 +93,21 @@ impl SrcWranglrApp {
                     self.status = Status::Info(format!("{name} is not in this index any more."))
                 }
             },
-            NoteTarget::Line { file, line } => self.go_to_line(file, *line),
+            NoteTarget::Line { file, line } => self.go_to_place(None, file, *line),
         }
     }
 
     /// Shows `file:line` with `symbol` selected (if known; else as
-    /// `go_to_line` picks one).
+    /// `go_to_line` picks one), bringing back the source pane if it was
+    /// hidden: you asked to see the line.
     pub(super) fn go_to_place(&mut self, symbol: Option<SymbolId>, file: &str, line: u32) {
+        self.layout = self.layout.with_source_shown(true);
+        self.place_source_at(symbol, file, line);
+    }
+
+    /// Like `go_to_place`, but leaves the panes as they are (to restore
+    /// where you were).
+    pub(super) fn place_source_at(&mut self, symbol: Option<SymbolId>, file: &str, line: u32) {
         match symbol.filter(|id| self.project.graph.symbols.contains_key(id)) {
             Some(id) => {
                 self.graph_view.select(id);

@@ -4,6 +4,7 @@ use egui::RichText;
 
 use super::layout::SourcePlacement;
 use super::palette::{self, Command, OPEN_COMMAND_SHORTCUT, OPEN_SYMBOL_SHORTCUT};
+use super::pane_bar::Pane;
 use super::survey_view::SurveyTab;
 use super::{
     SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
@@ -33,7 +34,8 @@ impl SrcWranglrApp {
                             .or(help.inner.flatten());
                         ui.separator();
                         ui.label(RichText::new(&self.project.name).strong());
-                        action
+                        let toggled = self.show_pane_toggles(ui);
+                        action.or(toggled)
                     })
                     .inner
             })
@@ -133,13 +135,15 @@ impl SrcWranglrApp {
         if ui.add(note).clicked() {
             return Some(Command::EditNote);
         }
-        let panel = egui::Button::new(Command::ShowNotes.label())
+        let notes = Command::TogglePane(Pane::Notes);
+        let panel = egui::Button::new(notes.label())
             .shortcut_text(ui.ctx().format_shortcut(&NOTES_PANEL_SHORTCUT));
         if ui.add(panel).clicked() {
-            return Some(Command::ShowNotes);
+            return Some(notes);
         }
-        if ui.button(Command::ShowTodos.label()).clicked() {
-            return Some(Command::ShowTodos);
+        let todos = Command::TogglePane(Pane::Todos);
+        if ui.button(todos.label()).clicked() {
+            return Some(todos);
         }
 
         ui.separator();
@@ -178,10 +182,11 @@ impl SrcWranglrApp {
     }
 
     pub(super) fn analyze_menu(&self, ui: &mut egui::Ui) -> Option<Command> {
-        let findings = egui::Button::new(Command::ShowFindings.label())
+        let command = Command::TogglePane(Pane::Findings);
+        let findings = egui::Button::new(command.label())
             .shortcut_text(ui.ctx().format_shortcut(&FINDINGS_SHORTCUT));
         if ui.add(findings).clicked() {
-            return Some(Command::ShowFindings);
+            return Some(command);
         }
         ui.separator();
         [

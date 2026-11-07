@@ -31,6 +31,8 @@ PREFIX        ?= /usr/local
 ICON_SVG      := assets/icon.svg
 ICON_1024     := assets/icon-1024.png
 ICON_256      := assets/icon-256.png
+# The bundled fonts' licenses (SIL OFL), which ship with the binary.
+FONT_LICENSES := assets/fonts/LICENSE-SourceCodePro.md assets/fonts/LICENSE-Iosevka.md
 
 ifeq ($(OS),Windows_NT)
   PLATFORM := windows
@@ -86,6 +88,7 @@ app: build $(ICNS)
 	mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources"
 	cp "$(RELEASE)/$(APP)" "$(APP_BUNDLE)/Contents/MacOS/$(APP)"
 	cp "$(ICNS)" "$(APP_BUNDLE)/Contents/Resources/$(APP).icns"
+	cp $(FONT_LICENSES) "$(APP_BUNDLE)/Contents/Resources/"
 	sed -e 's/@VERSION@/$(VERSION)/g' -e 's/@BUNDLE_ID@/$(BUNDLE_ID)/g' \
 		packaging/macos/Info.plist > "$(APP_BUNDLE)/Contents/Info.plist"
 	plutil -lint "$(APP_BUNDLE)/Contents/Info.plist"
@@ -130,7 +133,7 @@ uninstall-macos:
 package-linux: build
 	rm -rf "dist/$(LINUX_NAME)"
 	mkdir -p "dist/$(LINUX_NAME)"
-	cp "$(RELEASE)/$(APP)" LICENSE README.md "dist/$(LINUX_NAME)/"
+	cp "$(RELEASE)/$(APP)" LICENSE README.md $(FONT_LICENSES) "dist/$(LINUX_NAME)/"
 	cp packaging/linux/$(APP).desktop "dist/$(LINUX_NAME)/"
 	cp $(ICON_256) "dist/$(LINUX_NAME)/$(APP).png"
 	cp $(ICON_SVG) "dist/$(LINUX_NAME)/$(APP).svg"
@@ -144,12 +147,14 @@ install-linux: build
 		"$(DESTDIR)$(PREFIX)/share/applications/$(APP).desktop"
 	install -Dm644 $(ICON_256) "$(DESTDIR)$(PREFIX)/share/icons/hicolor/256x256/apps/$(APP).png"
 	install -Dm644 $(ICON_SVG) "$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP).svg"
+	install -Dm644 -t "$(DESTDIR)$(PREFIX)/share/doc/$(APP)" $(FONT_LICENSES)
 
 uninstall-linux:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/$(APP)" \
 		"$(DESTDIR)$(PREFIX)/share/applications/$(APP).desktop" \
 		"$(DESTDIR)$(PREFIX)/share/icons/hicolor/256x256/apps/$(APP).png" \
 		"$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP).svg"
+	rm -rf "$(DESTDIR)$(PREFIX)/share/doc/$(APP)"
 
 install: install-$(PLATFORM)
 
@@ -161,7 +166,7 @@ package-windows: build
 	rm -rf "dist/$(WINDOWS_NAME)"
 	rm -f "dist/$(WINDOWS_NAME).zip"
 	mkdir -p "dist/$(WINDOWS_NAME)"
-	cp "$(RELEASE)/$(APP).exe" LICENSE README.md "dist/$(WINDOWS_NAME)/"
+	cp "$(RELEASE)/$(APP).exe" LICENSE README.md $(FONT_LICENSES) "dist/$(WINDOWS_NAME)/"
 	cd dist && tar -a -cf "$(WINDOWS_NAME).zip" "$(WINDOWS_NAME)"
 	rm -rf "dist/$(WINDOWS_NAME)"
 	@echo "Built dist/$(WINDOWS_NAME).zip"

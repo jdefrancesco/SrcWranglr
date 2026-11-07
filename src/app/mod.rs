@@ -11,6 +11,7 @@ mod finding_view;
 mod findings;
 mod findings_actions;
 mod findings_panel;
+mod fonts;
 mod harness_view;
 pub mod launch;
 mod layout;
@@ -22,6 +23,7 @@ mod notes_actions;
 mod notes_panel;
 mod opening;
 mod palette;
+mod pane_bar;
 mod project;
 mod session;
 mod session_actions;
@@ -64,9 +66,10 @@ use note_editor::NoteEditor;
 use notebook::Notebook;
 use notes_panel::{NotesPanel, NotesPanelAction};
 use palette::{Command, Entry, Palette};
+use pane_bar::{Edge, Pane};
 use project::Project;
 use survey_view::{SurveyAction, SurveyTab, SurveyView};
-use symbol_list::SymbolList;
+use symbol_list::{SymbolList, SymbolListAction};
 use tool_job::ToolJob;
 use welcome::RecentProjects;
 
@@ -85,6 +88,8 @@ const TRIAGE_SHORTCUT: KeyboardShortcut =
 const LAYOUT_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::L);
 const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+/// The symbol list's width until you drag it.
+const SYMBOL_LIST_WIDTH: f32 = 260.0;
 /// Entry points listed in the Go menu (all of them are reachable with ⌘E).
 const MAX_ENTRY_MENU_ITEMS: usize = 25;
 const APP_NAME: &str = "SrcWranglr";
@@ -178,6 +183,7 @@ impl SrcWranglrApp {
         storage: Option<&dyn eframe::Storage>,
         options: LaunchOptions,
     ) -> Self {
+        fonts::install(ctx);
         let project = Project::empty();
         let status = Status::Info("Open a project folder to get started.".into());
         let notebook = Notebook::open(&project);
@@ -252,7 +258,7 @@ impl SrcWranglrApp {
             )
         });
         if can_use && ctx.input_mut(|i| i.consume_shortcut(&FINDINGS_SHORTCUT)) {
-            self.run_command(Command::ShowFindings, ctx);
+            self.run_command(Command::TogglePane(Pane::Findings), ctx);
         }
         if can_use && ctx.input_mut(|i| i.consume_shortcut(&TRIAGE_SHORTCUT)) {
             self.run_command(Command::Triage(SurveyTab::Overview), ctx);
@@ -264,7 +270,7 @@ impl SrcWranglrApp {
             self.open_settings();
         }
         if panel {
-            self.run_command(Command::ShowNotes, ctx);
+            self.run_command(Command::TogglePane(Pane::Notes), ctx);
         }
         if bookmark {
             self.run_command(Command::ToggleBookmark, ctx);
@@ -490,8 +496,7 @@ impl SrcWranglrApp {
                     self.toggle_bookmark(target);
                 }
             }
-            Command::ShowNotes => self.notes_panel.toggle(),
-            Command::ShowFindings => self.findings_panel.toggle(),
+            Command::TogglePane(pane) => self.toggle_pane(pane),
             Command::MarkDangerous => self.mark_selected_dangerous(),
             Command::TrustProject => self.trust_project_files(),
             Command::RunSemgrep => self.run_tool(analysis::tools::Tool::Semgrep, ctx),
@@ -500,7 +505,6 @@ impl SrcWranglrApp {
             Command::Settings => self.open_settings(),
             Command::SaveSession => self.save_session_dialog(ctx),
             Command::OpenSession => self.open_session_dialog(ctx),
-            Command::ShowTodos => self.todo_panel.toggle(),
             Command::About => self.is_about_open = true,
             Command::EditNote => {
                 if let Some(target) = self.selected_target() {
@@ -583,33 +587,47 @@ impl SrcWranglrApp {
         });
     }
 
+    /// The symbol list, sliding in and out at the left.
     fn show_symbol_list(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::left(self.layout.pane_id("symbol_list"))
+        let mut is_shown = self.layout.is_symbols_shown;
+        let shown = egui::Panel::left(self.layout.pane_id("symbol_list"))
             .resizable(true)
-            .default_size(260.0)
-            .show(ui, |ui| {
+            .default_size(SYMBOL_LIST_WIDTH)
+            .show_collapsible(ui, &mut is_shown, |ui| {
                 let selected = self.graph_view.selected();
-                let clicked = self
-                    .symbol_list
-                    .show(ui, &self.project, selected, &self.notebook);
-                if let Some(id) = clicked {
-                    self.graph_view.select(id);
-                }
+                self.symbol_list
+                    .show(ui, &self.project, selected, &self.notebook)
             });
+        // Dragged shut, or hidden from its arrow.
+        let action = shown.and_then(|shown| shown.inner);
+        let is_hidden = !is_shown || action == Some(SymbolListAction::Hide);
+        self.layout = self.layout.with_symbols_shown(!is_hidden);
+        if let Some(SymbolListAction::Select(id)) = action {
+            self.graph_view.select(id);
+        }
     }
 
     fn show_code_panel(&mut self, ui: &mut egui::Ui) {
+        if !self.layout.is_source_shown {
+            return;
+        }
         let layout = self.layout;
         let (layout, ()) = layout.show_source_pane(ui, |ui| {
             let selected = self.graph_view.selected();
+            let edge = match layout.source {
+                SourcePlacement::Beside => Edge::Right,
+                SourcePlacement::Below => Edge::Bottom,
+            };
             let action = self.code_panel.show(
                 ui,
                 &self.project.graph,
                 selected,
                 &self.notebook,
                 &self.findings,
+                edge,
             );
             match action {
+                Some(PanelAction::Hide) => self.layout = self.layout.with_source_shown(false),
                 Some(PanelAction::Explore(id)) => self.graph_view.select(id),
                 Some(PanelAction::OpenInEditor) => self.open_in_editor(),
                 Some(PanelAction::ToggleBookmark(target)) => self.toggle_bookmark(target),
@@ -626,7 +644,8 @@ impl SrcWranglrApp {
                 None => {}
             }
         });
-        self.layout = layout;
+        // Kept hidden if its arrow was clicked.
+        self.layout = layout.with_source_shown(self.layout.is_source_shown);
     }
 
     fn show_warnings_window(&mut self, ctx: &egui::Context) {
@@ -662,10 +681,10 @@ mod tests {
     fn the_source_pane_can_be_swapped_and_the_layout_reset() {
         let (mut app, ctx) = demo_app();
         app.run_command(Command::SwapSourcePane, &ctx);
-        assert_eq!(app.layout.source, SourcePlacement::Beside);
+        assert_eq!(app.layout.source, SourcePlacement::Below);
         let before_reset = app.layout;
         app.run_command(Command::ResetLayout, &ctx);
-        assert_eq!(app.layout.source, SourcePlacement::Below);
+        assert_eq!(app.layout.source, SourcePlacement::Beside);
         assert_ne!(app.layout.generation, before_reset.generation);
     }
 

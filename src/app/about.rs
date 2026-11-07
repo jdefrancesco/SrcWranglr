@@ -8,6 +8,9 @@ use crate::version::version_line;
 /// Where the project lives, from Cargo.toml.
 pub const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 const LICENSE: &str = env!("CARGO_PKG_LICENSE");
+/// The bundled fonts and their license (the license files ship alongside).
+pub const FONTS: &str = "Fonts: Source Code Pro © Adobe, Iosevka © Renzhi Li \
+    (SIL Open Font License 1.1)";
 const NAME_SIZE: f32 = 24.0;
 const GAP: f32 = 8.0;
 
@@ -30,6 +33,7 @@ pub fn show(ctx: &egui::Context, is_open: &mut bool) {
                 ui.label("Explore and audit C/C++ source code.");
                 ui.hyperlink(REPOSITORY);
                 ui.weak(format!("{LICENSE} License"));
+                ui.weak(FONTS);
                 ui.add_space(GAP);
                 ui.button("Close").clicked()
             })
@@ -68,6 +72,13 @@ mod tests {
             "{version}"
         );
         assert!(harness.query_by_label_contains(REPOSITORY).is_some());
+    }
+
+    #[test]
+    fn credits_the_bundled_fonts_and_their_license() {
+        let harness = window();
+        harness.get_by_label(FONTS);
+        assert!(FONTS.contains("Open Font License"), "{FONTS}");
     }
 
     #[test]

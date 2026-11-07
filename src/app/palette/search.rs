@@ -7,6 +7,7 @@ use std::cmp::Reverse;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher};
 
+use crate::app::pane_bar::Pane;
 use crate::app::survey_view::SurveyTab;
 use crate::model::SymbolId;
 
@@ -27,8 +28,8 @@ pub enum Command {
     OpenInEditor,
     ToggleBookmark,
     EditNote,
-    ShowNotes,
-    ShowFindings,
+    /// Shows the pane if hidden, hides it if shown.
+    TogglePane(Pane),
     MarkDangerous,
     TrustProject,
     RunSemgrep,
@@ -37,7 +38,6 @@ pub enum Command {
     Settings,
     SaveSession,
     OpenSession,
-    ShowTodos,
     About,
     Back,
     Fit,
@@ -51,7 +51,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 34] = [
+    pub const ALL: [Command; 37] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -60,8 +60,8 @@ impl Command {
         Command::OpenInEditor,
         Command::ToggleBookmark,
         Command::EditNote,
-        Command::ShowNotes,
-        Command::ShowFindings,
+        Command::TogglePane(Pane::Notes),
+        Command::TogglePane(Pane::Findings),
         Command::MarkDangerous,
         Command::TrustProject,
         Command::RunSemgrep,
@@ -70,13 +70,16 @@ impl Command {
         Command::Settings,
         Command::SaveSession,
         Command::OpenSession,
-        Command::ShowTodos,
+        Command::TogglePane(Pane::Todos),
+        Command::TogglePane(Pane::Trace),
         Command::About,
         Command::Back,
         Command::Fit,
         Command::TrailView,
         Command::CallHierarchy,
         Command::SwapSourcePane,
+        Command::TogglePane(Pane::Symbols),
+        Command::TogglePane(Pane::Source),
         Command::ResetLayout,
         Command::Triage(SurveyTab::Overview),
         Command::Triage(SurveyTab::Languages),
@@ -99,8 +102,7 @@ impl Command {
             Command::OpenInEditor => "Open in Editor",
             Command::ToggleBookmark => "Toggle Bookmark on Symbol",
             Command::EditNote => "Note on Symbol…",
-            Command::ShowNotes => "Notes & Bookmarks",
-            Command::ShowFindings => "Findings (risky calls)",
+            Command::TogglePane(pane) => pane.title(),
             Command::MarkDangerous => "Mark Selected Function as Dangerous…",
             Command::TrustProject => "Trust This Project's Verdicts and List",
             Command::RunSemgrep => "Run semgrep",
@@ -109,7 +111,6 @@ impl Command {
             Command::Settings => "Settings…",
             Command::SaveSession => "Save Session As…",
             Command::OpenSession => "Open Session…",
-            Command::ShowTodos => "TODO List",
             Command::About => "About SrcWranglr",
             Command::Back => "Go Back",
             Command::Fit => "Fit Graph to Window",

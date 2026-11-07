@@ -8,6 +8,7 @@ use egui::RichText;
 use super::findings::Findings;
 use super::locations::LocationCursor;
 use super::notebook::Notebook;
+use super::pane_bar::{self, Edge};
 use crate::code_view::scheme::{Scheme, SourceColors};
 use crate::code_view::{CodeEvent, CodeView, Focus, LineAction, LineMark, LineWarning, RiskSpan};
 use crate::model::{CodeGraph, Location, OccurrenceRole, Span, Symbol, SymbolId};
@@ -18,6 +19,7 @@ use crate::style::severity_color;
 const NOTE_MAX_HEIGHT: f32 = 72.0;
 
 enum HeaderAction {
+    Hide,
     Step(isize),
     Select(SymbolId),
     OpenInEditor,
@@ -55,6 +57,8 @@ pub enum PanelAction {
         line: u32,
         column: u32,
     },
+    /// Its hide arrow was clicked.
+    Hide,
 }
 
 /// A line to show instead of the selected symbol's current location
@@ -104,16 +108,22 @@ impl CodePanel {
         selected: Option<SymbolId>,
         notebook: &Notebook,
         findings: &Findings,
+        edge: Edge,
     ) -> Option<PanelAction> {
         self.sync(graph, selected);
         let Some(symbol) = selected.and_then(|id| graph.symbols.get(&id)) else {
+            let should_hide = ui
+                .with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    pane_bar::hide_button(ui, edge)
+                })
+                .inner;
             ui.centered_and_justified(|ui| ui.label("Select a symbol to view its source."));
-            return None;
+            return should_hide.then_some(PanelAction::Hide);
         };
         let symbol_target = NoteTarget::Symbol(symbol.qualified_name.clone());
         let note = notebook.notes().get(&symbol_target);
         let is_starred = note.is_some_and(|n| n.is_starred);
-        let header_action = self.show_header(ui, graph, symbol, is_starred);
+        let header_action = self.show_header(ui, graph, symbol, is_starred, edge);
         if let Some(text) = note.map(|n| n.text.as_str()).filter(|t| !t.is_empty()) {
             show_note(ui, text);
         }
@@ -125,6 +135,7 @@ impl CodePanel {
         }
         let event = self.show_code(ui, graph, symbol, notebook, findings);
         match header_action {
+            Some(HeaderAction::Hide) => return Some(PanelAction::Hide),
             Some(HeaderAction::Select(id)) => return Some(PanelAction::Explore(id)),
             Some(HeaderAction::OpenInEditor) => return Some(PanelAction::OpenInEditor),
             Some(HeaderAction::ToggleBookmark) => {
@@ -308,44 +319,68 @@ impl CodePanel {
         graph: &CodeGraph,
         symbol: &Symbol,
         is_starred: bool,
+        edge: Edge,
+    ) -> Option<HeaderAction> {
+        // The arrow first, at the right; the items wrap in the room left,
+        // so a narrow pane never gets a header wider than itself.
+        let (action, should_hide) = egui::Sides::new().shrink_left().show(
+            ui,
+            |ui| {
+                ui.horizontal_wrapped(|ui| self.header_items(ui, graph, symbol, is_starred))
+                    .inner
+            },
+            |ui| pane_bar::hide_button(ui, edge),
+        );
+        if should_hide {
+            Some(HeaderAction::Hide)
+        } else {
+            action
+        }
+    }
+
+    /// The file, its buttons, and where this location is among the
+    /// symbol's others.
+    fn header_items(
+        &self,
+        ui: &mut egui::Ui,
+        graph: &CodeGraph,
+        symbol: &Symbol,
+        is_starred: bool,
     ) -> Option<HeaderAction> {
         let cursor = self.cursor.as_ref();
         let location = cursor.and_then(LocationCursor::current);
         let file = location.map_or(symbol.file.as_str(), |l| l.file.as_str());
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(file).strong().monospace());
-            let open = ui.small_button("Open in Editor");
-            if open
-                .on_hover_text("Open this location in your editor")
-                .clicked()
-            {
-                return Some(HeaderAction::OpenInEditor);
-            }
-            let star = ui.small_button(if is_starred { "★" } else { "☆" });
-            if star.on_hover_text("Bookmark this symbol").clicked() {
-                return Some(HeaderAction::ToggleBookmark);
-            }
-            let note = ui.small_button("Note…");
-            if note.on_hover_text("Write a note on this symbol").clicked() {
-                return Some(HeaderAction::EditNote);
-            }
-            let cursor = cursor.filter(|c| c.len() > 0)?;
-            ui.separator();
-            let mut action = None;
-            let can_step = cursor.len() > 1;
-            let previous = ui.add_enabled(can_step, egui::Button::new("◀"));
-            if previous.on_hover_text("Previous location").clicked() {
-                action = Some(HeaderAction::Step(-1));
-            }
-            ui.label(format!("{} / {}", cursor.position(), cursor.len()));
-            let next = ui.add_enabled(can_step, egui::Button::new("▶"));
-            if next.on_hover_text("Next location").clicked() {
-                action = Some(HeaderAction::Step(1));
-            }
-            let context = location.and_then(|l| describe(ui, graph, l));
-            action.or(context)
-        })
-        .inner
+        ui.label(RichText::new(file).strong().monospace());
+        let open = ui.small_button("Open in Editor");
+        if open
+            .on_hover_text("Open this location in your editor")
+            .clicked()
+        {
+            return Some(HeaderAction::OpenInEditor);
+        }
+        let star = ui.small_button(if is_starred { "★" } else { "☆" });
+        if star.on_hover_text("Bookmark this symbol").clicked() {
+            return Some(HeaderAction::ToggleBookmark);
+        }
+        let note = ui.small_button("Note…");
+        if note.on_hover_text("Write a note on this symbol").clicked() {
+            return Some(HeaderAction::EditNote);
+        }
+        let cursor = cursor.filter(|c| c.len() > 0)?;
+        ui.separator();
+        let mut action = None;
+        let can_step = cursor.len() > 1;
+        let previous = ui.add_enabled(can_step, egui::Button::new("◀"));
+        if previous.on_hover_text("Previous location").clicked() {
+            action = Some(HeaderAction::Step(-1));
+        }
+        ui.label(format!("{} / {}", cursor.position(), cursor.len()));
+        let next = ui.add_enabled(can_step, egui::Button::new("▶"));
+        if next.on_hover_text("Next location").clicked() {
+            action = Some(HeaderAction::Step(1));
+        }
+        let context = location.and_then(|l| describe(ui, graph, l));
+        action.or(context)
     }
 }
 

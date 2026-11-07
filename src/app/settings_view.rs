@@ -1,12 +1,14 @@
 //! The Settings window: which editor Open in Editor uses, the folders
-//! tools are looked for in (with where each tool was found), and the
-//! source color scheme.
+//! tools are looked for in (with where each tool was found), the source
+//! color scheme, and the symbol list's font. Each change is used and saved
+//! as it is made; typed text once you leave its field.
 
 use std::path::PathBuf;
 
 use egui::{Id, RichText};
 
 use super::dialogs::{self, DialogState, PendingDialog};
+use super::fonts::SymbolFont;
 use super::settings::Settings;
 use crate::analysis::tools::Tool;
 use crate::code_view::scheme::{show_sample, Scheme};
@@ -29,12 +31,17 @@ const EDITORS: &[(&str, &str)] = &[
 ];
 const AUTOMATIC: &str = "Automatic: SRCWRANGLR_EDITOR, $VISUAL, $EDITOR, or VS Code";
 const CUSTOM: &str = "Custom command…";
+/// Shown in the font picked for the symbol list.
+const FONT_SAMPLE: &str = "★ png_read_chunk  [function]   Parser::next_token  [method]";
 
 /// What the user did in the window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsAction {
-    Save(Settings),
-    Cancel,
+    /// Use and save these now; the window stays open.
+    Apply(Settings),
+    /// The window was closed: the settings as left (to save if they
+    /// changed), or why they can't be saved.
+    Close(Result<Settings, String>),
 }
 
 /// How the editor is picked.
@@ -46,14 +53,22 @@ enum EditorChoice {
     Custom,
 }
 
-/// Settings being edited; nothing changes until Save.
+/// Settings being edited; each valid change is applied as it is made.
 pub struct SettingsView {
     editor: EditorChoice,
     custom: String,
     /// One folder per line.
     tool_dirs: String,
     scheme: Scheme,
+    symbol_font: SymbolFont,
+    /// The settings in use; edits that differ from them are applied.
+    applied: Settings,
+    /// Why the last change couldn't be saved, or a folder couldn't be
+    /// picked.
     error: Option<String>,
+    /// Whether a text field is being typed in: its edits wait until you
+    /// leave it, so a half-typed folder isn't saved.
+    is_typing: bool,
     folder_dialog: Option<PendingDialog<PathBuf>>,
     /// Where each tool was found, for the folders as last typed.
     found: Option<Found>,
@@ -89,13 +104,16 @@ impl SettingsView {
             custom,
             tool_dirs,
             scheme: settings.scheme,
+            symbol_font: settings.symbol_font,
+            applied: settings.clone(),
             error: None,
+            is_typing: false,
             folder_dialog: None,
             found: None,
         }
     }
 
-    /// Shows why the last Save didn't go through.
+    /// Shows why the last change couldn't be saved.
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
     }
@@ -118,9 +136,22 @@ impl SettingsView {
             editor,
             tool_dirs,
             scheme: self.scheme,
+            symbol_font: self.symbol_font,
         };
         settings.check()?;
         Ok(settings)
+    }
+
+    /// The edits to apply now: valid, different from what is in use, and
+    /// not still being typed.
+    fn change_to_apply(&mut self) -> Option<Settings> {
+        if self.is_typing {
+            return None;
+        }
+        let settings = self.draft().ok().filter(|s| *s != self.applied)?;
+        self.applied = settings.clone();
+        self.error = None;
+        Some(settings)
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> Option<SettingsAction> {
@@ -129,21 +160,29 @@ impl SettingsView {
             ui.set_width(WIDTH);
             ui.heading("Settings");
             ui.separator();
-            self.editor_section(ui);
+            let is_typing_command = self.editor_section(ui);
             ui.separator();
-            self.tools_section(ui, ctx);
+            let is_typing_folders = self.tools_section(ui, ctx);
             ui.separator();
             self.colors_section(ui);
             ui.separator();
-            self.buttons(ui)
+            self.font_section(ui);
+            ui.separator();
+            self.is_typing = is_typing_command || is_typing_folders;
+            // Before the footer, so it doesn't show an error this clears.
+            let change = self.change_to_apply();
+            (change, self.footer(ui))
         });
         let should_close = response.should_close();
-        response
-            .inner
-            .or_else(|| should_close.then_some(SettingsAction::Cancel))
+        let (change, is_done) = response.inner;
+        if is_done || should_close {
+            return Some(SettingsAction::Close(self.draft()));
+        }
+        change.map(SettingsAction::Apply)
     }
 
-    fn editor_section(&mut self, ui: &mut egui::Ui) {
+    /// Returns whether the custom command is being typed.
+    fn editor_section(&mut self, ui: &mut egui::Ui) -> bool {
         ui.strong("Editor");
         let caption = ui.label("Open in Editor uses:");
         let label = match self.editor {
@@ -163,19 +202,22 @@ impl SettingsView {
             })
             .response
             .labelled_by(caption.id);
-        if self.editor == EditorChoice::Custom {
-            let field = egui::TextEdit::singleline(&mut self.custom)
-                .hint_text("code -g {file}:{line}:{column}")
-                .desired_width(f32::INFINITY);
-            ui.add(field);
-            ui.weak(
-                "{file}, {line} and {column} are filled in. Without {file} it is a program \
-                 and its options, and the file and line are added the way that editor takes them.",
-            );
+        if self.editor != EditorChoice::Custom {
+            return false;
         }
+        let field = egui::TextEdit::singleline(&mut self.custom)
+            .hint_text("code -g {file}:{line}:{column}")
+            .desired_width(f32::INFINITY);
+        let is_typing = ui.add(field).has_focus();
+        ui.weak(
+            "{file}, {line} and {column} are filled in. Without {file} it is a program \
+             and its options, and the file and line are added the way that editor takes them.",
+        );
+        is_typing
     }
 
-    fn tools_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    /// Returns whether the folders are being typed.
+    fn tools_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         ui.strong("Tools");
         ui.label(
             "Folders to look for semgrep, cppcheck, flawfinder and your editor in, one per line:",
@@ -184,7 +226,7 @@ impl SettingsView {
             .hint_text("/opt/homebrew/bin")
             .desired_rows(3)
             .desired_width(f32::INFINITY);
-        ui.add(field);
+        let is_typing = ui.add(field).has_focus();
         ui.horizontal(|ui| {
             let can_pick = self.folder_dialog.is_none();
             if ui
@@ -220,6 +262,7 @@ impl SettingsView {
                     ui.end_row();
                 }
             });
+        is_typing
     }
 
     /// Where each tool (and the editor's program) is, for the folders as
@@ -272,23 +315,37 @@ impl SettingsView {
         show_sample(ui, &self.scheme.colors());
     }
 
-    fn buttons(&mut self, ui: &mut egui::Ui) -> Option<SettingsAction> {
-        if let Some(error) = &self.error {
+    fn font_section(&mut self, ui: &mut egui::Ui) {
+        let caption = ui.strong("Symbol list font");
+        egui::ComboBox::from_id_salt("settings_symbol_font")
+            .selected_text(self.symbol_font.label())
+            .show_ui(ui, |ui| {
+                for font in SymbolFont::ALL {
+                    let label = RichText::new(font.label()).family(font.family());
+                    ui.selectable_value(&mut self.symbol_font, font, label);
+                }
+            })
+            .response
+            .labelled_by(caption.id);
+        ui.label(RichText::new(FONT_SAMPLE).family(self.symbol_font.family()));
+    }
+
+    /// Why the settings as edited can't be saved, and Done. Returns
+    /// whether Done was clicked.
+    fn footer(&mut self, ui: &mut egui::Ui) -> bool {
+        let error = match self.draft() {
+            Err(error) => Some(format!("Not saved: {error}")),
+            Ok(_) => self.error.clone(),
+        };
+        if let Some(error) = error {
             ui.label(RichText::new(error).color(ERROR_COLOR));
         }
-        let mut action = None;
         ui.horizontal(|ui| {
-            if ui.button("Save").clicked() {
-                match self.draft() {
-                    Ok(settings) => action = Some(SettingsAction::Save(settings)),
-                    Err(error) => self.error = Some(error),
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                action = Some(SettingsAction::Cancel);
-            }
-        });
-        action
+            let is_done = ui.button("Done").clicked();
+            ui.weak("Changes are saved as you make them.");
+            is_done
+        })
+        .inner
     }
 
     fn pick_folder(&mut self, ctx: &egui::Context) {
@@ -332,24 +389,29 @@ mod tests {
 
     struct State {
         view: SettingsView,
-        action: Option<SettingsAction>,
+        actions: Vec<SettingsAction>,
     }
 
-    fn harness(settings: &Settings) -> Harness<'static, State> {
-        let mut harness = Harness::new_ui_state(
+    fn harness_for(view: SettingsView) -> Harness<'static, State> {
+        // The fonts the app installs at launch, which the font picker uses.
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
             |ui, state: &mut State| {
                 let ctx = ui.ctx().clone();
                 if let Some(action) = state.view.show(&ctx) {
-                    state.action = Some(action);
+                    state.actions.push(action);
                 }
             },
             State {
-                view: SettingsView::new(settings),
-                action: None,
+                view,
+                actions: Vec::new(),
             },
         );
         harness.run();
         harness
+    }
+
+    fn harness(settings: &Settings) -> Harness<'static, State> {
+        harness_for(SettingsView::new(settings))
     }
 
     #[test]
@@ -358,6 +420,7 @@ mod tests {
         harness.get_by_label("Editor");
         harness.get_by_label("Tools");
         harness.get_by_label("Source colors");
+        harness.get_by_label("Symbol list font");
         for tool in ["semgrep", "cppcheck", "flawfinder"] {
             harness.get_by_label(tool);
         }
@@ -365,16 +428,102 @@ mod tests {
     }
 
     #[test]
-    fn saving_returns_the_settings_as_edited() {
+    fn nothing_is_applied_until_something_changes() {
+        let mut harness = harness(&Settings::default());
+        harness.run_steps(3);
+        assert_eq!(harness.state().actions, []);
+    }
+
+    #[test]
+    fn picking_a_font_applies_it_at_once() {
+        let mut harness = harness(&Settings::default());
+        harness
+            .get_by_role_and_label(egui::Role::ComboBox, "Symbol list font")
+            .click();
+        harness.run();
+        harness.get_by_label("Iosevka").click();
+        harness.run();
+        let expected = Settings {
+            symbol_font: SymbolFont::Iosevka,
+            ..Settings::default()
+        };
+        assert_eq!(harness.state().actions, [SettingsAction::Apply(expected)]);
+    }
+
+    #[test]
+    fn typed_text_is_applied_once_you_leave_the_field() {
+        let custom = Settings {
+            editor: Some("subl".into()),
+            ..Settings::default()
+        };
+        let mut view = SettingsView::new(&custom);
+        view.editor = EditorChoice::Custom;
+        view.custom = "subl".into();
+        let mut harness = harness_for(view);
+        harness.get_by_role(egui::Role::TextInput).focus();
+        harness.run();
+        harness
+            .get_by_role(egui::Role::TextInput)
+            .type_text(" --wait");
+        harness.run();
+        assert_eq!(harness.state().actions, [], "applied while typing");
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        let expected = Settings {
+            editor: Some("subl --wait".into()),
+            ..Settings::default()
+        };
+        assert_eq!(harness.state().actions, [SettingsAction::Apply(expected)]);
+    }
+
+    #[test]
+    fn done_closes_with_the_settings_as_left() {
         let settings = Settings {
             editor: Some("zed".into()),
             tool_dirs: vec!["/opt/tools".into()],
             scheme: Scheme::Monokai,
+            symbol_font: SymbolFont::SourceCodePro,
         };
         let mut harness = harness(&settings);
-        harness.get_by_label("Save").click();
+        harness.get_by_label("Done").click();
         harness.run();
-        assert_eq!(harness.state().action, Some(SettingsAction::Save(settings)));
+        assert_eq!(
+            harness.state().actions,
+            [SettingsAction::Close(Ok(settings))]
+        );
+    }
+
+    #[test]
+    fn an_invalid_folder_is_shown_and_not_applied() {
+        let view = SettingsView {
+            tool_dirs: "/ok\nnot/absolute".into(),
+            ..SettingsView::new(&Settings::default())
+        };
+        let mut harness = harness_for(view);
+        harness.run_steps(2);
+        assert_eq!(harness.state().actions, []);
+        assert!(harness.query_by_label_contains("full path").is_some());
+        harness.get_by_label("Done").click();
+        harness.run();
+        let closed = harness.state().actions.first().cloned();
+        assert!(
+            matches!(closed, Some(SettingsAction::Close(Err(ref e))) if e.contains("full path")),
+            "{closed:?}"
+        );
+    }
+
+    #[test]
+    fn a_save_error_is_shown_until_the_next_change_applies() {
+        let mut harness = harness(&Settings::default());
+        harness
+            .state_mut()
+            .view
+            .set_error("Could not save settings.toml: disk full".into());
+        harness.run();
+        assert!(harness.query_by_label_contains("disk full").is_some());
+        harness.state_mut().view.scheme = Scheme::Monokai;
+        harness.run();
+        assert!(harness.query_by_label_contains("disk full").is_none());
     }
 
     #[test]
@@ -391,13 +540,5 @@ mod tests {
             ..SettingsView::new(&Settings::default())
         };
         assert!(relative.draft().is_err_and(|e| e.contains("full path")));
-    }
-
-    #[test]
-    fn cancel_changes_nothing() {
-        let mut harness = harness(&Settings::default());
-        harness.get_by_label("Cancel").click();
-        harness.run();
-        assert_eq!(harness.state().action, Some(SettingsAction::Cancel));
     }
 }

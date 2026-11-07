@@ -5,6 +5,7 @@
 use egui::RichText;
 
 use super::layout::Layout;
+use super::pane_bar::{self, Edge};
 use crate::notes::todo::{Todo, Todos};
 
 const DEFAULT_WIDTH: f32 = 300.0;
@@ -44,10 +45,6 @@ impl TodoPanel {
         self.is_open = is_open;
     }
 
-    pub fn toggle(&mut self) {
-        self.is_open = !self.is_open;
-    }
-
     /// Forgets what belonged to the project before: what was being typed
     /// or edited, and the line it was about. Stays open or closed.
     pub fn reset(&mut self) {
@@ -71,7 +68,7 @@ impl TodoPanel {
         self.should_focus = true;
     }
 
-    /// Draws the pane (if open) at the right of `ui`. `storage` says where
+    /// Draws the pane (while open, sliding in and out) at the right of `ui`. `storage` says where
     /// the list is kept (or why it can't be).
     pub fn show(
         &mut self,
@@ -80,14 +77,12 @@ impl TodoPanel {
         storage: Result<&str, &str>,
         layout: Layout,
     ) -> Option<TodoPanelAction> {
-        if !self.is_open {
-            return None;
-        }
-        egui::Panel::right(layout.pane_id("todo_panel"))
-            .resizable(true)
-            .default_size(DEFAULT_WIDTH)
-            .show(ui, |ui| self.contents(ui, todos, storage))
-            .inner
+        let mut is_open = self.is_open;
+        let shown = pane_bar::right_pane(layout.pane_id("todo_panel"), DEFAULT_WIDTH)
+            .show_collapsible(ui, &mut is_open, |ui| self.contents(ui, todos, storage));
+        // Shut by dragging, or by its hide arrow.
+        self.is_open = is_open && self.is_open;
+        shown.and_then(|shown| shown.inner)
     }
 
     fn contents(
@@ -96,7 +91,10 @@ impl TodoPanel {
         todos: &Todos,
         storage: Result<&str, &str>,
     ) -> Option<TodoPanelAction> {
-        ui.heading(format!("TODO ({} open)", todos.open_count()));
+        let title = format!("TODO ({} open)", todos.open_count());
+        if pane_bar::heading(ui, title, Edge::Right) {
+            self.is_open = false;
+        }
         match storage {
             Ok(place) => ui.weak(place),
             Err(error) => ui.label(RichText::new(error).color(ERROR_COLOR)),
@@ -266,7 +264,7 @@ mod tests {
     }
 
     fn harness(todos: Todos, panel: TodoPanel) -> Harness<'static, State> {
-        let mut harness = Harness::new_ui_state(
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
             |ui, state: &mut State| {
                 let todos = state.todos.clone();
                 let storage = Ok("Saved in .srcwranglr/todo.json");

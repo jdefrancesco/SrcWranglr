@@ -1,5 +1,5 @@
-//! What the app does with your settings: reading them at launch, the
-//! Settings window, and applying what it saves.
+//! What the app does with your settings: reading them at launch, and
+//! using and saving each change made in the Settings window.
 
 use super::settings::{settings_path, Settings};
 use super::settings_view::{SettingsAction, SettingsView};
@@ -27,15 +27,33 @@ impl SrcWranglrApp {
             return;
         };
         match action {
-            SettingsAction::Cancel => self.settings_view = None,
-            SettingsAction::Save(settings) => match self.save_settings(settings) {
-                Ok(()) => self.settings_view = None,
-                Err(error) => {
+            SettingsAction::Apply(settings) => {
+                if let Err(error) = self.save_settings(settings) {
                     if let Some(view) = self.settings_view.as_mut() {
                         view.set_error(error);
                     }
                 }
-            },
+            }
+            SettingsAction::Close(left) => {
+                self.settings_view = None;
+                self.close_settings(left);
+            }
+        }
+    }
+
+    /// Saves what the Settings window was closed with, if it wasn't yet
+    /// (typed in a field, then closed), or says why it can't be.
+    fn close_settings(&mut self, left: Result<Settings, String>) {
+        match left {
+            Ok(settings) if settings == self.settings => {}
+            Ok(settings) => {
+                if let Err(error) = self.save_settings(settings) {
+                    self.status = Status::Error(error);
+                }
+            }
+            Err(error) => {
+                self.status = Status::Error(format!("Settings not saved: {error}"));
+            }
         }
     }
 
@@ -50,6 +68,7 @@ impl SrcWranglrApp {
 
     fn use_settings(&mut self, settings: Settings) {
         self.code_panel.set_scheme(settings.scheme);
+        self.symbol_list.set_font(settings.symbol_font);
         self.settings = settings;
     }
 }
@@ -57,20 +76,41 @@ impl SrcWranglrApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::fonts::SymbolFont;
     use crate::app::launch::LaunchOptions;
     use crate::code_view::scheme::Scheme;
 
+    fn app() -> SrcWranglrApp {
+        SrcWranglrApp::new(&egui::Context::default(), None, LaunchOptions::default())
+    }
+
     #[test]
-    fn using_settings_recolors_the_source_and_keeps_them() {
-        let ctx = egui::Context::default();
-        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
+    fn using_settings_recolors_the_source_sets_the_font_and_keeps_them() {
+        let mut app = app();
         let settings = Settings {
             scheme: Scheme::PaperLight,
+            symbol_font: SymbolFont::SourceCodePro,
             ..Settings::default()
         };
         app.use_settings(settings.clone());
         assert_eq!(app.settings, settings);
+        assert_eq!(app.symbol_list.font(), SymbolFont::SourceCodePro);
         app.open_settings();
         assert!(app.settings_view.is_some());
+    }
+
+    #[test]
+    fn closing_with_nothing_new_saves_nothing() {
+        let mut app = app();
+        app.status = Status::Info("untouched".into());
+        app.close_settings(Ok(app.settings.clone()));
+        assert!(matches!(&app.status, Status::Info(text) if text == "untouched"));
+    }
+
+    #[test]
+    fn closing_with_settings_that_cannot_be_saved_says_why() {
+        let mut app = app();
+        app.close_settings(Err("tool folder bin isn't a full path".into()));
+        assert!(matches!(&app.status, Status::Error(text) if text.contains("Settings not saved")),);
     }
 }

@@ -1,11 +1,13 @@
 //! Your settings, kept in `~/.config/srcwranglr/settings.toml`: the editor
-//! Open in Editor uses, more folders to find tools in, and the source color
-//! scheme. Edited in File > Settings…, or by hand:
+//! Open in Editor uses, more folders to find tools in, the source color
+//! scheme, and the symbol list's font. Edited in File > Settings…, or by
+//! hand:
 //!
 //! ```toml
 //! editor = "zed"                     # or "code -g {file}:{line}:{column}"
 //! tool_paths = ["/opt/homebrew/bin"] # searched before PATH
 //! source_colors = "solarized-dark"
+//! symbol_font = "iosevka"            # or "monospace", "source-code-pro"
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -13,6 +15,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::dangerous_lists::{config_dir, write_user_file};
+use super::fonts::SymbolFont;
 use crate::code_view::scheme::Scheme;
 use crate::programs::{fits_in_path, SearchPath};
 
@@ -34,6 +37,8 @@ pub struct Settings {
     /// Folders searched for programs before `PATH`.
     pub tool_dirs: Vec<PathBuf>,
     pub scheme: Scheme,
+    /// The font the symbol list is drawn in.
+    pub symbol_font: SymbolFont,
 }
 
 impl Settings {
@@ -62,10 +67,15 @@ impl Settings {
                 })?
             }
         };
+        let symbol_font = match doc.get("symbol_font") {
+            None => SymbolFont::default(),
+            Some(item) => symbol_font_of(item)?,
+        };
         let settings = Self {
             editor,
             tool_dirs,
             scheme,
+            symbol_font,
         };
         settings.check()?;
         Ok(settings)
@@ -92,6 +102,7 @@ impl Settings {
             .collect();
         doc["tool_paths"] = value(dirs);
         doc["source_colors"] = value(self.scheme.id());
+        doc["symbol_font"] = value(self.symbol_font.id());
         doc.to_string()
     }
 
@@ -191,6 +202,14 @@ fn tool_dirs_of(item: &Item) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
+fn symbol_font_of(item: &Item) -> Result<SymbolFont, String> {
+    let id = item.as_str().ok_or("symbol_font must be a string")?;
+    SymbolFont::from_id(id).ok_or_else(|| {
+        let known: Vec<&str> = SymbolFont::ALL.iter().map(|f| f.id()).collect();
+        format!("unknown symbol_font {id:?} (one of {})", known.join(", "))
+    })
+}
+
 fn check_text(text: &str, what: &str) -> Result<(), String> {
     if text.chars().count() > MAX_TEXT_CHARS {
         return Err(format!("{what} is longer than {MAX_TEXT_CHARS} characters"));
@@ -210,6 +229,7 @@ mod tests {
             editor: Some("code -g {file}:{line}:{column}".into()),
             tool_dirs: vec!["/opt/homebrew/bin".into(), "/Users/me/.local/bin".into()],
             scheme: Scheme::SolarizedDark,
+            symbol_font: SymbolFont::Iosevka,
         }
     }
 
@@ -225,6 +245,7 @@ mod tests {
             text.contains("source_colors = \"solarized-dark\""),
             "{text}"
         );
+        assert!(text.contains("symbol_font = \"iosevka\""), "{text}");
     }
 
     #[test]
@@ -234,6 +255,7 @@ mod tests {
         assert_eq!(Settings::load_from(&missing), Ok(Settings::default()));
         let only_colors = Settings::parse("source_colors = \"monokai\"\n").expect("parsed");
         assert_eq!(only_colors.scheme, Scheme::Monokai);
+        assert_eq!(only_colors.symbol_font, SymbolFont::Monospace);
         assert_eq!(only_colors.editor, None);
         assert!(only_colors.tool_dirs.is_empty());
     }
@@ -246,6 +268,8 @@ mod tests {
             ("tool_paths = [\"relative/bin\"]", "full path"),
             ("tool_paths = [\"/my:tools\"]", "path separator"),
             ("source_colors = \"neon\"", "unknown source_colors"),
+            ("symbol_font = \"comic-sans\"", "unknown symbol_font"),
+            ("symbol_font = 12", "symbol_font must be a string"),
             ("editor = \"vim\\u0007\"", "control characters"),
             ("= broken", "not valid TOML"),
         ] {

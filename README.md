@@ -142,13 +142,18 @@ A path means the value *may* go that way:
 
 ### Settings
 
-**File → Settings…** (⌘, / Ctrl+,) sets three things, saved to `~/.config/srcwranglr/settings.toml` (edit it by hand if you like):
+**File → Settings…** (⌘, / Ctrl+,) sets four things. Each change is used and saved to `~/.config/srcwranglr/settings.toml` as you make it (typed text once you leave its field), for every project. Edit the file by hand if you like.
 - **Editor:** what **Open in Editor** uses. Pick VS Code, Cursor, Zed, Sublime Text, Emacs, CLion, or Vim, Neovim or Helix in a terminal. Or write a custom command: `{file}`, `{line}` and `{column}` are filled in (`code -g {file}:{line}:{column}`). **Automatic** keeps the old behavior: `SRCWRANGLR_EDITOR`, `$VISUAL`, `$EDITOR`, then VS Code.
 - **Tools:** extra folders to look for semgrep, cppcheck, flawfinder and your editor in. Each tool shows where it was found, or how to install it.
   - Tools are looked for in your folders first, then `PATH`, then the usual install places: Homebrew, `/usr/local/bin`, `~/.local/bin` (pipx), `~/Library/Python/*/bin`.
   - An app opened from the Dock or Finder gets a short `PATH` without those folders, which is why a tool can work in a terminal but not in the app. With these places searched, it usually just works.
   - Tools run with the same search as their `PATH`.
 - **Source colors:** SrcWranglr Dark, Solarized Dark or Light, Monokai, Gruvbox Dark or Paper Light, with a preview.
+- **Symbol list font:** Monospace (Hack, as in the source), Source Code Pro, or Iosevka, with a preview.
+
+### Panes
+
+The source pane sits beside the graph; **⌘⇧L / Ctrl+Shift+L** moves it below. Show or hide any pane with the buttons at the top right of the window (**Symbols**, **Source**, **Notes**, **Findings**, **TODO**, **Trace**), or hide one with the arrow in its heading. Side panes slide in and out, and dragging one shut hides it too.
 
 ### Sessions
 
@@ -162,7 +167,7 @@ Reopening a project puts you back where you were:
 
 ### TODO list
 
-**Go → TODO List** opens a lightweight list for the project, saved next to its notes in `.srcwranglr/todo.json`:
+**TODO** at the top right (or **Go → TODO List**) opens a lightweight list for the project, saved next to its notes in `.srcwranglr/todo.json`:
 - Type a TODO and press Enter. Tick it when done, double-click it to edit, and **Clear Done** to tidy up.
 - Right-click a line of code, then **Add TODO Here…**, to write one about that line. Its `file:line` link takes you back there.
 
@@ -247,10 +252,11 @@ srcwranglr --version
 | Frame everything | **Fit**, or double-click the background |
 | Filter symbols | Type in **Search** |
 | Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
-| Put the source beside the graph, or back below it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
-| Settings (editor, tool folders, source colors) | **⌘, / Ctrl+,**, or **File → Settings…** |
+| Put the source below the graph, or back beside it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
+| Show or hide a pane | The buttons at the top right, or the arrow in a pane's heading; **⌘B / Ctrl+B** for Notes, **⌘⇧R / Ctrl+Shift+R** for Findings |
+| Settings (editor, tool folders, source colors, symbol list font) | **⌘, / Ctrl+,**, or **File → Settings…** |
 | Save or reopen where you were | **File → Save Session As… / Open Session…** (reopening a project restores it too) |
-| TODO list | **Go → TODO List**; right-click a line, then **Add TODO Here…** |
+| TODO list | **TODO** at the top right, or **Go → TODO List**; right-click a line, then **Add TODO Here…** |
 | Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Where It Comes From** |
 | Trace where a value goes | Right-click a line, then **Trace Where It Goes**; click a step to mark its path in the source |
 | Undo dragged pane sizes | **View → Reset Layout** |
@@ -335,6 +341,7 @@ Until v0.2.0 this project was called *slurcetrail*, a working title that sat too
 
 - Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. SrcWranglr is an independent implementation and shares no code with it.
 - Screenshots show [LevelDB](https://github.com/google/leveldb) (BSD-3-Clause, © The LevelDB Authors).
+- Bundles the fonts [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) (© Adobe) and [Iosevka](https://github.com/be5invis/Iosevka) (© Renzhi Li), both under the SIL Open Font License 1.1; see [assets/fonts](assets/fonts).
 - Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), [rfd](https://github.com/PolyMeilleur/rfd), and [nucleo-matcher](https://github.com/helix-editor/nucleo).
 
 ## License

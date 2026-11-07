@@ -4,6 +4,7 @@
 use egui::RichText;
 
 use super::layout::Layout;
+use super::pane_bar::{self, Edge};
 use super::session::TraceStart;
 use crate::analysis::trace::{Direction, Endpoint, Step, Trace, TracePath};
 use crate::analysis::Severity;
@@ -13,6 +14,8 @@ const DEFAULT_WIDTH: f32 = 380.0;
 /// Paths to outside input or a risky call start open; this many others do
 /// too.
 const OPEN_OTHER_PATHS: usize = 1;
+const NOTHING_TRACED: &str = "Nothing traced yet. Right-click a variable in the source: \
+    Trace Where It Comes From, or Trace Where It Goes.";
 const LIMITS: &str = "Follows assignments, copies, calls, returns and the buffers a function \
     fills, as written. Writes through other pointers to the same memory, calls through function \
     pointers, and checks that limit the value aren't seen, so a path means it may go that way.";
@@ -27,6 +30,8 @@ pub enum TracePanelAction {
 
 #[derive(Default)]
 pub struct TracePanel {
+    /// Whether the pane is shown; hiding it keeps the trace.
+    is_open: bool,
     trace: Option<Trace>,
     /// What the trace was started from, to run it again.
     start: Option<TraceStart>,
@@ -37,15 +42,19 @@ pub struct TracePanel {
 impl TracePanel {
     /// Shows `trace` (started from `start`), replacing the one shown.
     pub fn open(&mut self, trace: Trace, start: TraceStart) {
+        self.is_open = true;
         self.trace = Some(trace);
         self.start = Some(start);
         self.selected = None;
     }
 
+    /// Drops the trace and hides the pane.
     pub fn close(&mut self) {
-        self.trace = None;
-        self.start = None;
-        self.selected = None;
+        *self = Self::default();
+    }
+
+    pub fn set_open(&mut self, is_open: bool) {
+        self.is_open = is_open;
     }
 
     /// What the trace shown was started from.
@@ -59,32 +68,40 @@ impl TracePanel {
         self.trace.as_ref()?.paths.get(path)
     }
 
-    #[cfg(test)]
     pub fn is_open(&self) -> bool {
-        self.trace.is_some()
+        self.is_open
     }
 
-    /// Draws the pane (when a trace is open) at the right of `ui`.
+    /// Draws the pane (while open, sliding in and out) at the right of
+    /// `ui`.
     pub fn show(&mut self, ui: &mut egui::Ui, layout: Layout) -> Option<TracePanelAction> {
-        self.trace.as_ref()?;
-        egui::Panel::right(layout.pane_id("trace_panel"))
-            .resizable(true)
-            .default_size(DEFAULT_WIDTH)
-            .show(ui, |ui| self.contents(ui))
-            .inner
+        let mut is_open = self.is_open;
+        let shown = pane_bar::right_pane(layout.pane_id("trace_panel"), DEFAULT_WIDTH)
+            .show_collapsible(ui, &mut is_open, |ui| self.contents(ui));
+        // Shut by dragging, or by its hide arrow.
+        self.is_open = is_open && self.is_open;
+        shown.and_then(|shown| shown.inner)
     }
 
     fn contents(&mut self, ui: &mut egui::Ui) -> Option<TracePanelAction> {
-        let trace = self.trace.as_ref()?;
         let mut picked = None;
         ui.horizontal(|ui| {
             ui.heading("Trace");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Close").clicked() {
+                if pane_bar::hide_button(ui, Edge::Right) {
+                    self.is_open = false;
+                }
+                let can_close = self.trace.is_some();
+                let close = ui.add_enabled(can_close, egui::Button::new("Close"));
+                if close.on_hover_text("Drop this trace").clicked() {
                     picked = Some(TracePanelAction::Close);
                 }
             });
         });
+        let Some(trace) = self.trace.as_ref() else {
+            ui.weak(NOTHING_TRACED);
+            return picked;
+        };
         let direction = match trace.direction {
             Direction::Back => "Traced back: where it comes from",
             Direction::Forward => "Traced forward: where it goes",
@@ -263,7 +280,7 @@ mod tests {
             };
             panel.open(trace, start);
         }
-        let mut harness = Harness::new_ui_state(
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
             |ui, state: &mut State| {
                 if let Some(action) = state.panel.show(ui, Layout::default()) {
                     state.action = Some(action);

@@ -65,10 +65,7 @@ fn harness_for(source: &str, selected: &str) -> Harness<'static, State> {
         notebook,
         last_action: None,
     };
-    // ◀ ▶ come from the system font in the app; the harness only has
-    // egui's bundled fonts.
-    let mut harness = Harness::builder()
-        .allow_missing_glyphs()
+    let mut harness = crate::app::fonts::test_harness()
         .with_size(egui::vec2(800.0, HARNESS_HEIGHT))
         .build_ui_state(
             |ui, state: &mut State| {
@@ -78,6 +75,7 @@ fn harness_for(source: &str, selected: &str) -> Harness<'static, State> {
                     state.selected,
                     &state.notebook,
                     &state.findings,
+                    crate::app::pane_bar::Edge::Right,
                 );
                 match &action {
                     Some(PanelAction::Explore(id)) => state.clicked = Some(*id),
@@ -92,6 +90,32 @@ fn harness_for(source: &str, selected: &str) -> Harness<'static, State> {
         );
     harness.run();
     harness
+}
+
+#[test]
+fn a_narrow_pane_wraps_its_header_instead_of_spilling_out_of_it() {
+    const NARROW: f32 = 300.0;
+    let mut harness = harness("helper");
+    harness.set_size(egui::vec2(NARROW, HARNESS_HEIGHT));
+    harness.run();
+    let file = harness.get_by_label("a.cpp").rect();
+    let note = harness.get_by_label("Note…").rect();
+    let arrow = harness.get_by_label("▸").rect();
+    assert!(file.left() >= 0.0, "spilled left: {file:?}");
+    assert!(arrow.right() <= NARROW, "spilled right: {arrow:?}");
+    assert!(note.top() > file.top(), "didn't wrap: {file:?} {note:?}");
+    assert!(
+        (arrow.center().y - file.center().y).abs() < file.height(),
+        "{arrow:?}"
+    );
+}
+
+#[test]
+fn its_arrow_hides_the_pane() {
+    let mut harness = harness("helper");
+    harness.get_by_label("▸").click();
+    harness.run();
+    assert_eq!(harness.state().last_action, Some(PanelAction::Hide));
 }
 
 fn click_at(harness: &mut Harness<State>, pos: Pos2) {

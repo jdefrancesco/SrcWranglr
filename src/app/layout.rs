@@ -1,7 +1,8 @@
-//! The main window's layout: where the source pane sits (below the graph
-//! or beside it) and how much of the room it takes, plus a way to reset
-//! pane sizes. Kept between launches, along with the window's size and the
-//! other panes' sizes (eframe and egui remember those).
+//! The main window's layout: where the source pane sits (beside the graph
+//! or below it) and how much of the room it takes, whether the symbol list
+//! and source pane are shown, plus a way to reset pane sizes. Kept between
+//! launches, along with the window's size and the other panes' sizes
+//! (eframe and egui remember those).
 //!
 //! The source pane's size is a share of the room it has with the graph,
 //! not a pixel size, so it follows the window (including one that is
@@ -18,14 +19,17 @@ const MAX_SHARE: f32 = 0.75;
 const MIN_SOURCE_SIZE: f32 = 240.0;
 /// A pane size this close to the one asked for wasn't dragged.
 const DRAG_TOLERANCE: f32 = 0.5;
+/// Layouts saved before this had the source pane below the graph by
+/// default; they are moved beside it once.
+const BESIDE_BY_DEFAULT_VERSION: u32 = 1;
 
 /// Where the source pane sits relative to the graph.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourcePlacement {
     /// Under the graph, the full width of the room beside the symbol list.
-    #[default]
     Below,
     /// To the right of the graph, the full height.
+    #[default]
     Beside,
 }
 
@@ -40,6 +44,12 @@ pub struct Layout {
     /// Part of the other panes' ids: Reset Layout bumps it, so they forget
     /// the sizes they were dragged to and start at their defaults again.
     pub generation: u32,
+    pub is_symbols_shown: bool,
+    pub is_source_shown: bool,
+    /// Which defaults the layout was saved under: 0 for one saved before
+    /// layouts had a version (missing in the file).
+    #[serde(default)]
+    version: u32,
 }
 
 impl Default for Layout {
@@ -49,6 +59,9 @@ impl Default for Layout {
             below_share: DEFAULT_SHARE,
             beside_share: DEFAULT_SHARE,
             generation: 0,
+            is_symbols_shown: true,
+            is_source_shown: true,
+            version: BESIDE_BY_DEFAULT_VERSION,
         }
     }
 }
@@ -63,7 +76,21 @@ impl Layout {
         storage
             .and_then(|s| eframe::get_value::<Self>(s, Self::STORAGE_KEY))
             .map(Self::sanitized)
+            .map(Self::migrated)
             .unwrap_or_default()
+    }
+
+    /// A layout saved when the source pane sat below the graph by default,
+    /// moved beside it (the default now). Later layouts are kept as saved.
+    fn migrated(self) -> Self {
+        if self.version >= BESIDE_BY_DEFAULT_VERSION {
+            return self;
+        }
+        Self {
+            source: SourcePlacement::Beside,
+            version: BESIDE_BY_DEFAULT_VERSION,
+            ..self
+        }
     }
 
     /// Keeps the layout in `storage` for the next launch.
@@ -78,6 +105,20 @@ impl Layout {
             SourcePlacement::Beside => SourcePlacement::Below,
         };
         Self { source, ..self }
+    }
+
+    pub fn with_symbols_shown(self, is_symbols_shown: bool) -> Self {
+        Self {
+            is_symbols_shown,
+            ..self
+        }
+    }
+
+    pub fn with_source_shown(self, is_source_shown: bool) -> Self {
+        Self {
+            is_source_shown,
+            ..self
+        }
     }
 
     /// The default layout, with panes forgetting their sizes.
@@ -211,24 +252,65 @@ mod tests {
         fn flush(&mut self) {}
     }
 
+    /// The layout with the source pane under the graph.
+    fn below() -> Layout {
+        Layout {
+            source: SourcePlacement::Below,
+            ..Layout::default()
+        }
+    }
+
     #[test]
-    fn the_source_pane_starts_below_the_graph() {
-        assert_eq!(Layout::load(None).source, SourcePlacement::Below);
+    fn the_source_pane_starts_beside_the_graph() {
+        assert_eq!(Layout::load(None).source, SourcePlacement::Beside);
     }
 
     #[test]
     fn swapping_moves_the_source_pane_and_back() {
         let layout = Layout::default();
-        assert_eq!(layout.swapped().source, SourcePlacement::Beside);
+        assert_eq!(layout.swapped().source, SourcePlacement::Below);
         assert_eq!(layout.swapped().swapped(), layout);
     }
 
     #[test]
-    fn resetting_puts_it_back_below_with_fresh_pane_ids() {
+    fn resetting_puts_it_back_beside_with_fresh_pane_ids() {
         let moved = Layout::default().swapped();
         let reset = moved.reset();
-        assert_eq!(reset.source, SourcePlacement::Below);
+        assert_eq!(reset.source, SourcePlacement::Beside);
         assert_ne!(reset.pane_id("code_panel"), moved.pane_id("code_panel"));
+    }
+
+    #[test]
+    fn a_layout_saved_when_below_was_the_default_moves_beside_once() {
+        let mut storage = MemoryStorage::default();
+        storage.set_string(
+            Layout::STORAGE_KEY,
+            "(source: Below, below_share: 0.5, beside_share: 0.45, generation: 2)".into(),
+        );
+        let moved = Layout::load(Some(&storage));
+        assert_eq!(moved.source, SourcePlacement::Beside);
+        assert_eq!((moved.below_share, moved.generation), (0.5, 2));
+        // Moved back below on purpose, it stays there.
+        moved.swapped().save(&mut storage);
+        assert_eq!(Layout::load(Some(&storage)).source, SourcePlacement::Below);
+    }
+
+    #[test]
+    fn the_symbol_list_and_source_pane_can_be_hidden_and_reset_shows_them() {
+        let layout = Layout::default();
+        assert!(layout.is_symbols_shown && layout.is_source_shown);
+        let hidden = layout.with_symbols_shown(false).with_source_shown(false);
+        assert!(!hidden.is_symbols_shown && !hidden.is_source_shown);
+        let reset = hidden.reset();
+        assert!(reset.is_symbols_shown && reset.is_source_shown);
+    }
+
+    #[test]
+    fn hidden_panes_are_kept_hidden_between_launches() {
+        let mut storage = MemoryStorage::default();
+        let layout = Layout::default().with_source_shown(false);
+        layout.save(&mut storage);
+        assert_eq!(Layout::load(Some(&storage)), layout);
     }
 
     #[test]
@@ -294,7 +376,7 @@ mod tests {
             crate::app::launch::LaunchOptions::default(),
         );
         app.layout = layout;
-        let mut harness = egui_kittest::Harness::builder()
+        let mut harness = crate::app::fonts::test_harness()
             .with_size(size)
             .build_ui_state(
                 |ui, app: &mut SrcWranglrApp| {
@@ -321,7 +403,7 @@ mod tests {
 
     #[test]
     fn the_source_pane_follows_the_window_size() {
-        let mut harness = panes(Layout::default(), egui::vec2(1200.0, 800.0));
+        let mut harness = panes(below(), egui::vec2(1200.0, 800.0));
         let small = source_pane_rect(&harness).height();
         harness.set_size(egui::vec2(1200.0, 1400.0));
         harness.run();
@@ -332,7 +414,7 @@ mod tests {
     /// Drags the source pane's top edge (below the graph, in a 1200×800
     /// window) up to `to_y`, and returns the share it ends up with.
     fn share_after_dragging_to(to_y: f32) -> f32 {
-        let mut harness = panes(Layout::default(), egui::vec2(1200.0, 800.0));
+        let mut harness = panes(below(), egui::vec2(1200.0, 800.0));
         let edge = egui::pos2(700.0, 800.0 - source_size(DEFAULT_SHARE, 800.0));
         harness.hover_at(edge);
         harness.step();
@@ -368,9 +450,22 @@ mod tests {
 
     #[test]
     fn the_source_pane_sits_below_or_beside_the_graph() {
-        let below = source_pane_center(Layout::default());
-        assert!(below.y > 500.0, "{below:?}");
-        let beside = source_pane_center(Layout::default().swapped());
+        let under = source_pane_center(below());
+        assert!(under.y > 500.0, "{under:?}");
+        let beside = source_pane_center(Layout::default());
         assert!(beside.x > 700.0 && beside.y < 500.0, "{beside:?}");
+    }
+
+    #[test]
+    fn hidden_panes_are_not_drawn() {
+        let layout = Layout::default()
+            .with_symbols_shown(false)
+            .with_source_shown(false);
+        let harness = panes(layout, egui::vec2(1200.0, 800.0));
+        assert!(harness
+            .query_by_label("Select a symbol to view its source.")
+            .is_none());
+        assert!(harness.query_by_label_contains("Symbols (").is_none());
+        harness.get_by_label("graph");
     }
 }
