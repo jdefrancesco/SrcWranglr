@@ -1,12 +1,19 @@
-# URGENT
+# FIXES
 
-1. Fix default window sizes and layout on launch. It is too small
-2. Make source bar navigator a bit larger.. We need to add a mode to swap panes
-so it can be on the side etc..
+## UI
 
+I like the simple, GUI for the most part. I just need to make some changes to the fonts used for:
 
-# TODO:
+1. The list of functions on the left
+2. The top buttons like 'Back' and such. Not a big change but a font that separates it from regular text. 
+3. Default layout should be the code listing on the right instead of the bottom.
+4. Be able to toggle GUI elements without hotkeys. Like if i want to TODO to hide, i want a button at the top so I can hit and hide it.
+5. Settings menu. When changes are made they should be saved. These will apply to the program not a specific session,
 
-1. Computer cyclomatic complexity of a function
-2. Allow generation of a  fuzz harness.
+## Features
 
+1. When you click a variable maybe highlight and then have an arrow showing where itr last camee from, differnt selected vars
+need different colors.
+2. Git history visualizer. Don't need all the the revision info just the info for code currently checked out.
+3. Code to heuristically guess any software patterns in use.
+4. Quick "README" popup feature for the project
