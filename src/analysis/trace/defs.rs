@@ -5,7 +5,8 @@
 use tree_sitter::Node;
 
 use super::calls::{library_name, method_write, write_of};
-use super::flows::{flows, name_of, refers_to, Flow};
+use super::files::parameters;
+use super::flows::{access_path, flows, name_of, refers_to, Flow};
 use super::scope::{binding, contains, is_exclusive, loop_around, Declaration, Jumps};
 use crate::analysis::reach::{input_source, Lands};
 use crate::index::syntax::{clean_name, declarator_name, field_children, named_children, text};
@@ -16,6 +17,7 @@ const MAX_DEFS: usize = 6;
 const MAX_SCAN_NODES: usize = 100_000;
 
 /// One place that sets the variable.
+#[derive(Clone)]
 pub(super) struct Def<'t> {
     /// The node that sets it: a declaration, declarator, assignment or call.
     pub node: Node<'t>,
@@ -28,6 +30,7 @@ pub(super) struct Def<'t> {
     pub is_declaration: bool,
 }
 
+#[derive(Clone)]
 pub(super) enum DefKind<'t> {
     /// From an expression: `T x = v`, `x = v`, `for (T x : v)`.
     Set(Node<'t>),
@@ -82,6 +85,40 @@ impl Def<'_> {
     }
 }
 
+/// Whether `def` (a write to a struct) can be to `field` of it: to the
+/// whole struct, to a field holding it, or to the field itself. Any write
+/// is, when no field is wanted.
+pub(super) fn is_to_field(field: &[String], def: &Def, source: &str) -> bool {
+    if field.is_empty() {
+        return true;
+    }
+    let (_, written) = access_path(def.name, source);
+    written.is_empty() || field.starts_with(&written) || written.starts_with(field)
+}
+
+/// Whether `def` writes all of `field` (the field, a field holding it, or
+/// the struct through a pointer: `*p = …`), so what it held before is gone.
+pub(super) fn replaces_field(field: &[String], def: &Def, source: &str) -> bool {
+    if field.is_empty()
+        || !matches!(
+            def.kind,
+            DefKind::Part(_) | DefKind::Copied { .. } | DefKind::Read(_)
+        )
+    {
+        return false;
+    }
+    let (_, written) = access_path(def.name, source);
+    let is_deref = def.name.kind() == "pointer_expression"
+        && def
+            .name
+            .child_by_field_name("operator")
+            .is_some_and(|o| text(o, source) == "*");
+    match written.is_empty() {
+        true => is_deref,
+        false => field.starts_with(&written),
+    }
+}
+
 /// What sets a variable before a use.
 pub(super) struct Reaching<'t> {
     /// Latest first; then writes later in a loop around the use, which
@@ -124,52 +161,106 @@ pub(super) struct Query<'a, 't> {
 /// the same name (in a closed block, or a lambda's parameter) or in the
 /// other arm of an `if` doesn't count.
 pub(super) fn reaching<'t>(function: Node<'t>, source: &str, q: &Query<'_, 't>) -> Reaching<'t> {
-    let (all, parameters) = all_defs(function, source, q.name, q.is_project_call);
+    Writes::of(function, source, q.name, q.is_project_call).reaching(function, source, q)
+}
+
+/// Every write to one name in a function, read once for many lookups.
+pub(super) struct Writes<'t> {
+    all: Vec<Def<'t>>,
+    /// The declarations of the name: which variable it means where.
+    declarations: Vec<Declaration>,
+    jumps: Jumps<'t>,
+}
+
+impl<'t> Writes<'t> {
+    /// The writes to `name` in `function`.
+    pub(super) fn of(
+        function: Node<'t>,
+        source: &str,
+        name: &str,
+        is_project_call: &dyn Fn(Node<'t>) -> bool,
+    ) -> Self {
+        let (all, parameters) = all_defs(function, source, name, is_project_call);
+        let declarations = all
+            .iter()
+            .filter(|d| d.is_declaration)
+            .map(|d| d.name)
+            .chain(parameters)
+            .map(Declaration::of)
+            .collect();
+        Self {
+            all,
+            declarations,
+            jumps: Jumps::of(function, source),
+        }
+    }
+
+    /// Those that reach `q.at`, as `reaching` says.
+    pub(super) fn reaching(
+        &self,
+        function: Node<'t>,
+        source: &str,
+        q: &Query<'_, 't>,
+    ) -> Reaching<'t> {
+        let meant = binding(&self.declarations, q.at);
+        let counts = |d: &Def<'t>| {
+            (!q.is_through || d.is_through())
+                && (q.keeps)(d)
+                && binding(&self.declarations, d.name.start_byte()) == meant
+                && !is_exclusive(d.node, q.at, function)
+        };
+        let counted: Vec<Def> = self.all.iter().filter(|d| counts(d)).cloned().collect();
+        let around = loop_around(function, q.at, meant).filter(|_| q.has_later);
+        let (before, later) = before_and_later(counted, around, q.at);
+        let mut found = Reaching {
+            defs: Vec::new(),
+            is_complete: false,
+            is_truncated: false,
+            has_certain_write: false,
+        };
+        // Back to the first write that replaces the value; earlier ones are
+        // gone by `at`. Then the loop's later writes.
+        let is_certain = |d: &Def| {
+            is_unconditional(d.node, function, q.at) && !self.jumps.can_skip(d.node, q.at)
+        };
+        let replacing = before
+            .iter()
+            .position(|d| !q.is_through && (d.is_replacing() || (q.replaces)(d)) && is_certain(d));
+        found.has_certain_write = before
+            .iter()
+            .take(replacing.map_or(before.len(), |i| i + 1))
+            .any(|d| !d.is_placeholder(source) && is_certain(d));
+        found.is_complete = replacing.is_some();
+        let kept = replacing.map_or(before.len(), |i| i + 1);
+        for def in before.into_iter().take(kept).chain(later) {
+            if found.defs.len() >= MAX_DEFS {
+                found.is_truncated = true;
+                break;
+            }
+            found.defs.push(def);
+        }
+        found
+    }
+}
+
+/// Whether `name` at byte `at` of `function` is one of its own variables,
+/// declared in it or a parameter, rather than a global or a member.
+pub(super) fn is_own(function: Node, source: &str, name: &str, at: usize) -> bool {
+    let is_parameter = parameters(function)
+        .iter()
+        .any(|p| p.is_some_and(|p| text(p, source) == name));
+    if is_parameter {
+        return true;
+    }
+    let (all, lambda_parameters) = all_defs(function, source, name, &|_| false);
     let declarations: Vec<Declaration> = all
         .iter()
         .filter(|d| d.is_declaration)
         .map(|d| d.name)
-        .chain(parameters)
+        .chain(lambda_parameters)
         .map(Declaration::of)
         .collect();
-    let meant = binding(&declarations, q.at);
-    let counts = |d: &Def<'t>| {
-        (!q.is_through || d.is_through())
-            && (q.keeps)(d)
-            && binding(&declarations, d.name.start_byte()) == meant
-            && !is_exclusive(d.node, q.at, function)
-    };
-    let counted: Vec<Def> = all.into_iter().filter(|d| counts(d)).collect();
-    let around = loop_around(function, q.at, meant).filter(|_| q.has_later);
-    let (before, later) = before_and_later(counted, around, q.at);
-    let mut found = Reaching {
-        defs: Vec::new(),
-        is_complete: false,
-        is_truncated: false,
-        has_certain_write: false,
-    };
-    // Back to the first write that replaces the value; earlier ones are
-    // gone by `at`. Then the loop's later writes.
-    let jumps = Jumps::of(function, source);
-    let is_certain =
-        |d: &Def| is_unconditional(d.node, function, q.at) && !jumps.can_skip(d.node, q.at);
-    let replacing = before
-        .iter()
-        .position(|d| !q.is_through && (d.is_replacing() || (q.replaces)(d)) && is_certain(d));
-    found.has_certain_write = before
-        .iter()
-        .take(replacing.map_or(before.len(), |i| i + 1))
-        .any(|d| !d.is_placeholder(source) && is_certain(d));
-    found.is_complete = replacing.is_some();
-    let kept = replacing.map_or(before.len(), |i| i + 1);
-    for def in before.into_iter().take(kept).chain(later) {
-        if found.defs.len() >= MAX_DEFS {
-            found.is_truncated = true;
-            break;
-        }
-        found.defs.push(def);
-    }
-    found
+    binding(&declarations, at).is_some()
 }
 
 /// `defs` split into those finished before `at`, latest first, and those

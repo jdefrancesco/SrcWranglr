@@ -1,5 +1,5 @@
 //! The names on a line of code that may be variables, for the line's
-//! "Trace Value Of" menu. Lexical and quick: the trace itself reads the
+//! trace menus. Lexical and quick: the trace itself reads the
 //! syntax and says when a name isn't a variable after all.
 
 /// Entries past this many aren't listed.

@@ -143,8 +143,9 @@ pub(super) fn loop_around<'t>(
 /// Where control can jump in a function: its `break`, `continue` and
 /// `goto` statements, and where its labels are.
 pub(super) struct Jumps<'t> {
-    /// `break` and `continue` statements.
-    exits: Vec<Node<'t>>,
+    /// `break` and `continue` statements, with what each jumps out of (if
+    /// found).
+    exits: Vec<(Node<'t>, Option<Node<'t>>)>,
     /// `goto` statements, with where their label is (if found).
     gotos: Vec<(Node<'t>, Option<usize>)>,
 }
@@ -158,6 +159,7 @@ impl<'t> Jumps<'t> {
         ]
         .iter()
         .flat_map(|(word, kind)| find(word, kind))
+        .map(|jump| (jump, target_of(jump, jump.kind() == "break_statement")))
         .collect();
         let goto_nodes = find("goto", "goto_statement");
         let labels: HashMap<&str, usize> = if goto_nodes.is_empty() {
@@ -180,11 +182,13 @@ impl<'t> Jumps<'t> {
     /// `at`, or a `goto` to a label between them.
     pub(super) fn can_skip(&self, node: Node, at: usize) -> bool {
         let before = |jump: &Node| jump.start_byte() < node.start_byte();
-        let exits_past = self.exits.iter().filter(|j| before(j)).any(|jump| {
-            let is_break = jump.kind() == "break_statement";
-            target_of(*jump, is_break)
-                .is_some_and(|t| contains(t, node.start_byte()) && !contains(t, at))
-        });
+        let exits_past = self
+            .exits
+            .iter()
+            .filter(|(jump, _)| before(jump))
+            .any(|(_, target)| {
+                target.is_some_and(|t| contains(t, node.start_byte()) && !contains(t, at))
+            });
         let jumps_past = self
             .gotos
             .iter()

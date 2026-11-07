@@ -294,7 +294,7 @@ mod tests {
         }
         let from_input: Vec<_> = traces
             .iter()
-            .filter(|t| t.paths.iter().any(|p| p.origin.is_input()))
+            .filter(|t| t.paths.iter().any(|p| p.endpoint.is_input()))
             .collect();
         let cut_short = traces.iter().filter(|t| t.is_cut_short).count();
         println!(
@@ -316,14 +316,14 @@ mod tests {
             let path = trace
                 .paths
                 .iter()
-                .find(|p| p.origin.is_input())
+                .find(|p| p.endpoint.is_input())
                 .expect("one");
             println!(
                 "  {} at {}:{} {}",
                 trace.subject,
                 trace.file,
                 trace.line,
-                path.origin.label()
+                path.endpoint.label()
             );
             for step in &path.steps {
                 println!(
@@ -332,6 +332,83 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Traces every `main`'s `argv` forward to the risky calls it reaches;
+    /// prints how many it reaches, the slowest trace, and the paths.
+    fn print_forward_traces(graph: &CodeGraph, findings: &[crate::analysis::Finding]) {
+        use crate::analysis::trace::{trace_forward, Sink};
+        let sinks: Vec<Sink> = findings.iter().map(Sink::of).collect();
+        let start = std::time::Instant::now();
+        let mut slowest = std::time::Duration::ZERO;
+        let mains = graph.functions.iter().filter(|f| {
+            graph
+                .symbols
+                .get(&f.symbol)
+                .is_some_and(|s| s.name == "main")
+        });
+        for main in mains {
+            let source = &graph.file_contents[&main.file];
+            let from_line: usize = source
+                .split('\n')
+                .take(main.line.saturating_sub(1) as usize)
+                .map(|l| l.len() + 1)
+                .sum();
+            let Some(found) = source[from_line..].find("argv") else {
+                continue;
+            };
+            let at = from_line + found;
+            let line = source[..at].matches('\n').count() as u32 + 1;
+            let column = (at - source[..at].rfind('\n').map_or(0, |i| i + 1)) as u32;
+            let one = std::time::Instant::now();
+            let Some(trace) = trace_forward(graph, &sinks, &main.file, line, column) else {
+                continue;
+            };
+            slowest = slowest.max(one.elapsed());
+            let to_sinks: Vec<_> = trace
+                .paths
+                .iter()
+                .filter(|p| p.endpoint.is_sink())
+                .collect();
+            println!(
+                "forward from {}:{} argv ({:?}): {} paths to risky calls, {} stop{}",
+                main.file,
+                line,
+                one.elapsed(),
+                to_sinks.len(),
+                trace.paths.len() - to_sinks.len(),
+                if trace.is_cut_short {
+                    ", cut short"
+                } else {
+                    ""
+                }
+            );
+            if std::env::var("SRCWRANGLR_STOPS").is_ok() {
+                for path in trace.paths.iter().filter(|p| !p.endpoint.is_sink()).take(8) {
+                    let last = path.steps.last().map_or(0, |s| s.line);
+                    println!("    STOP at {last}: {}", path.endpoint.label());
+                    for step in path.steps.iter().rev().take(3).rev() {
+                        println!(
+                            "        {}:{} {} — {}",
+                            step.file, step.line, step.code, step.note
+                        );
+                    }
+                }
+            }
+            for path in to_sinks.iter().take(8) {
+                println!("    {}", path.endpoint.label());
+                for step in &path.steps {
+                    println!(
+                        "      {}:{}  {}  — {}",
+                        step.file, step.line, step.code, step.note
+                    );
+                }
+            }
+        }
+        println!(
+            "forward traces took {:?} (slowest {slowest:?})",
+            start.elapsed()
+        );
     }
 
     /// Manual smoke test against a real project:
@@ -404,6 +481,7 @@ mod tests {
             }
         }
         print_traces(graph, &findings);
+        print_forward_traces(graph, &findings);
         let scoring = std::time::Instant::now();
         let targets = crate::analysis::fuzz::fuzz_targets(graph, &findings);
         println!(

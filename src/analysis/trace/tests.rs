@@ -22,7 +22,7 @@ fn finding_at(graph: &CodeGraph, file: &str, needle: &str) -> Finding {
 }
 
 /// 1-based line and byte column of the first `needle` in `file`.
-fn position(graph: &CodeGraph, file: &str, needle: &str) -> (u32, u32) {
+pub(super) fn position(graph: &CodeGraph, file: &str, needle: &str) -> (u32, u32) {
     let source = &graph.file_contents[file];
     let at = source.find(needle).unwrap_or_else(|| panic!("no {needle}"));
     let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
@@ -47,9 +47,9 @@ fn stopped(trace: &Trace) -> Vec<&str> {
     trace
         .paths
         .iter()
-        .filter_map(|p| match &p.origin {
-            Origin::Stopped(why) => Some(why.as_str()),
-            Origin::Input(_) => None,
+        .filter_map(|p| match &p.endpoint {
+            Endpoint::Stopped(why) => Some(why.as_str()),
+            Endpoint::Input(_) | Endpoint::Sink(_) => None,
         })
         .collect()
 }
@@ -74,7 +74,7 @@ fn follows_argv_through_a_call_and_a_return_into_strcpy() {
     assert_eq!(trace.subject, "strcpy(buf, name)");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
     let path = &trace.paths[0];
-    assert_eq!(path.origin, Origin::Input(COMMAND_LINE.into()));
+    assert_eq!(path.endpoint, Endpoint::Input(COMMAND_LINE.into()));
     assert_eq!(lines(path), [10, 11, 7, 3, 7, 8]);
     assert_eq!(
         notes(path),
@@ -110,7 +110,7 @@ fn a_buffer_fgets_filled_is_input() {
     }\n";
     let trace = trace_of(&[("g.c", source)], "g.c", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input("fgets()".into()));
+    assert_eq!(trace.paths[0].endpoint, Endpoint::Input("fgets()".into()));
     assert_eq!(lines(&trace.paths[0]), [3, 4]);
     assert_eq!(
         trace.paths[0].steps[0].note,
@@ -126,7 +126,7 @@ fn what_getenv_returns_is_input_and_format_strings_are_skipped() {
     }\n";
     let trace = trace_of(&[("h.c", source)], "h.c", "sprintf");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input("getenv()".into()));
+    assert_eq!(trace.paths[0].endpoint, Endpoint::Input("getenv()".into()));
     assert_eq!(lines(&trace.paths[0]), [2, 3]);
 }
 
@@ -171,7 +171,10 @@ fn an_assignment_in_a_branch_keeps_the_earlier_one() {
     }\n";
     let trace = trace_of(&[("m.c", source)], "m.c", "strcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input(COMMAND_LINE.into()));
+    assert_eq!(
+        trace.paths[0].endpoint,
+        Endpoint::Input(COMMAND_LINE.into())
+    );
     assert_eq!(lines(&trace.paths[0]), [1, 4, 5]);
     assert_eq!(stopped(&trace), ["set to a constant"]);
 }
@@ -189,7 +192,7 @@ fn follows_a_buffer_into_the_function_that_fills_it() {
     let trace = trace_of(&[("r.c", source)], "r.c", "strcpy(g");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
     let path = &trace.paths[0];
-    assert_eq!(path.origin, Origin::Input("fgets()".into()));
+    assert_eq!(path.endpoint, Endpoint::Input("fgets()".into()));
     assert_eq!(lines(path), [2, 6, 7]);
     assert_eq!(
         path.steps[1].note,
@@ -208,7 +211,7 @@ fn follows_a_struct_its_field_is_filled_through() {
     }\n";
     let trace = trace_of(&[("s.c", source)], "s.c", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input("fgets()".into()));
+    assert_eq!(trace.paths[0].endpoint, Endpoint::Input("fgets()".into()));
     assert_eq!(lines(&trace.paths[0]), [2, 5, 6]);
 }
 
@@ -232,7 +235,7 @@ fn what_a_library_call_returns_carries_its_arguments() {
     }\n";
     let trace = trace_of(&[("a.c", source)], "a.c", "memcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert!(trace.paths.iter().all(|p| p.origin.is_input()));
+    assert!(trace.paths.iter().all(|p| p.endpoint.is_input()));
     assert_eq!(lines(&trace.paths[1]), [1, 3, 4]);
 }
 
@@ -246,7 +249,7 @@ fn a_method_result_comes_from_its_object() {
     }\n";
     let trace = trace_of(&[("s.cpp", source)], "s.cpp", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
     assert_eq!(lines(&trace.paths[0]), [1, 3, 4]);
 }
 
@@ -260,7 +263,7 @@ fn a_read_in_an_if_condition_always_happens() {
     }\n";
     let trace = trace_of(&[("n.c", source)], "n.c", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input("read()".into()));
+    assert_eq!(trace.paths[0].endpoint, Endpoint::Input("read()".into()));
     assert_eq!(lines(&trace.paths[0]), [4, 5]);
 }
 
@@ -273,7 +276,7 @@ fn std_cin_is_input() {
     }\n";
     let trace = trace_of(&[("q.cpp", source)], "q.cpp", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input("std::cin".into()));
+    assert_eq!(trace.paths[0].endpoint, Endpoint::Input("std::cin".into()));
 }
 
 #[test]
@@ -296,7 +299,7 @@ fn recursion_ends() {
         walk(d, p);\n\
     }\n";
     let trace = trace_of(&[("w.c", source)], "w.c", "strcpy");
-    assert!(trace.paths.iter().all(|p| !p.origin.is_input()));
+    assert!(trace.paths.iter().all(|p| !p.endpoint.is_input()));
 }
 
 #[test]
@@ -346,8 +349,8 @@ fn input_paths_come_first() {
         memcpy(d, argv[1], n);\n\
     }\n";
     let trace = trace_of(&[("o.c", source)], "o.c", "memcpy");
-    assert!(trace.paths[0].origin.is_input(), "{trace:#?}");
-    assert!(!trace.paths[1].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input(), "{trace:#?}");
+    assert!(!trace.paths[1].endpoint.is_input());
 }
 
 #[test]
@@ -392,7 +395,10 @@ fn a_default_set_in_a_branch_keeps_the_callers_value() {
     int main(int argc, char **argv) { use_name(argv[1]); return 0; }\n";
     let trace = trace_of(&[("d.c", source)], "d.c", "strcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input(COMMAND_LINE.into()));
+    assert_eq!(
+        trace.paths[0].endpoint,
+        Endpoint::Input(COMMAND_LINE.into())
+    );
     assert_eq!(stopped(&trace), ["set to a constant"]);
 }
 
@@ -420,7 +426,7 @@ fn the_other_arm_does_reach_on_the_next_pass_of_a_loop() {
     }\n";
     let trace = trace_of(&[("l.c", source)], "l.c", "strcpy");
     assert!(
-        trace.paths.iter().any(|p| p.origin.is_input()),
+        trace.paths.iter().any(|p| p.endpoint.is_input()),
         "{trace:#?}"
     );
 }
@@ -435,7 +441,10 @@ fn a_variable_in_a_closed_block_is_another_variable() {
     int main(int argc, char **argv) { f(argv[1]); }\n";
     let trace = trace_of(&[("b.c", source)], "b.c", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input(COMMAND_LINE.into()));
+    assert_eq!(
+        trace.paths[0].endpoint,
+        Endpoint::Input(COMMAND_LINE.into())
+    );
 }
 
 #[test]
@@ -450,7 +459,7 @@ fn a_later_write_in_a_loop_reaches_an_earlier_use() {
     }\n";
     let trace = trace_of(&[("w.c", source)], "w.c", "strcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
     assert_eq!(stopped(&trace), ["set to a constant"]);
 }
 
@@ -514,7 +523,7 @@ fn a_write_to_another_field_is_not_the_traced_field() {
     }\n";
     let trace = trace_of(&[("v.c", source)], "v.c", "strcpy");
     assert!(
-        trace.paths.iter().all(|p| !p.origin.is_input()),
+        trace.paths.iter().all(|p| !p.endpoint.is_input()),
         "{trace:#?}"
     );
     let mut why = stopped(&trace);
@@ -538,7 +547,10 @@ fn a_field_set_by_the_caller_is_found_through_the_struct() {
     }\n";
     let trace = trace_of(&[("u.c", source)], "u.c", "strcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input(COMMAND_LINE.into()));
+    assert_eq!(
+        trace.paths[0].endpoint,
+        Endpoint::Input(COMMAND_LINE.into())
+    );
     assert!(trace.paths[0]
         .steps
         .iter()
@@ -560,7 +572,7 @@ fn a_break_can_skip_an_assignment() {
     }\n";
     let trace = trace_of(&[("j.c", source)], "j.c", "strcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
 }
 
 #[test]
@@ -575,7 +587,7 @@ fn a_goto_can_skip_an_assignment() {
     }\n";
     let trace = trace_of(&[("g.c", source)], "g.c", "strcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
 }
 
 #[test]
@@ -590,7 +602,7 @@ fn a_whole_struct_write_replaces_its_fields() {
     }\n";
     let trace = trace_of(&[("s.c", source)], "s.c", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
 }
 
 #[test]
@@ -625,7 +637,7 @@ fn an_outer_loop_carries_a_later_write_too() {
     }\n";
     let trace = trace_of(&[("o.c", source)], "o.c", "strcpy");
     assert_eq!(trace.paths.len(), 2, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
 }
 
 #[test]
@@ -648,7 +660,7 @@ fn a_declaration_in_a_condition_has_its_value() {
     }\n";
     let trace = trace_of(&[("i.cpp", source)], "i.cpp", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert_eq!(trace.paths[0].origin, Origin::Input("getenv()".into()));
+    assert_eq!(trace.paths[0].endpoint, Endpoint::Input("getenv()".into()));
 }
 
 #[test]
@@ -659,7 +671,7 @@ fn a_field_written_in_between_replaces_the_callers() {
     int main(int argc, char **v) { T t; char dd[8]; t.name = \"zz\"; h(&t, dd, v); }\n";
     let trace = trace_of(&[("h.c", source)], "h.c", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
 }
 
 #[test]
@@ -671,7 +683,7 @@ fn a_lambdas_parameter_is_another_variable() {
     int main(int argc, char **argv) { char d[8]; f(d, argv[1]); }\n";
     let trace = trace_of(&[("l.cpp", source)], "l.cpp", "strcpy");
     assert_eq!(trace.paths.len(), 1, "{trace:#?}");
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
 }
 
 #[test]
@@ -689,7 +701,7 @@ fn each_write_into_a_buffer_is_its_own_path() {
     assert!(!trace.is_cut_short, "{:?}", lines_of(&trace));
     // From input, and the three constants, each once.
     assert_eq!(trace.paths.len(), 4, "{:?}", lines_of(&trace));
-    assert!(trace.paths[0].origin.is_input());
+    assert!(trace.paths[0].endpoint.is_input());
 }
 
 #[test]

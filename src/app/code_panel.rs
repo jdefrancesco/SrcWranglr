@@ -48,6 +48,13 @@ pub enum PanelAction {
         line: u32,
         column: u32,
     },
+    /// Trace where the value of the variable at `file:line`, byte
+    /// `column`, goes.
+    TraceForward {
+        file: String,
+        line: u32,
+        column: u32,
+    },
 }
 
 /// A line to show instead of the selected symbol's current location
@@ -78,6 +85,8 @@ pub struct CodePanel {
     reveal: Option<Reveal>,
     /// The colors the source is drawn in.
     scheme: Scheme,
+    /// Where the steps of the trace path shown are, by file.
+    trail: Vec<(String, Span)>,
 }
 
 impl CodePanel {
@@ -140,6 +149,9 @@ impl CodePanel {
             CodeEvent::Line(line, LineAction::Trace(column)) => {
                 Some(PanelAction::Trace { file, line, column })
             }
+            CodeEvent::Line(line, LineAction::TraceForward(column)) => {
+                Some(PanelAction::TraceForward { file, line, column })
+            }
             CodeEvent::Line(line, LineAction::AddTodo) => Some(PanelAction::AddTodo { file, line }),
             CodeEvent::Line(line, action) => {
                 let target = NoteTarget::Line { file, line };
@@ -147,7 +159,9 @@ impl CodePanel {
                     LineAction::EditNote => PanelAction::EditNote(target),
                     LineAction::ToggleBookmark => PanelAction::ToggleBookmark(target),
                     LineAction::MarkDangerous(name) => PanelAction::MarkDangerous(name),
-                    LineAction::Trace(_) | LineAction::AddTodo => return None,
+                    LineAction::Trace(_) | LineAction::TraceForward(_) | LineAction::AddTodo => {
+                        return None
+                    }
                 })
             }
             CodeEvent::Risk(id) => Some(PanelAction::ShowFinding(id)),
@@ -179,6 +193,21 @@ impl CodePanel {
         self.should_scroll = true;
     }
 
+    /// Marks the steps of a trace path (where each is, by file); empty
+    /// clears them.
+    pub fn set_trail(&mut self, trail: Vec<(String, Span)>) {
+        self.trail = trail;
+    }
+
+    /// Where the trace path's steps are in `file`.
+    pub fn trail_in(&self, file: &str) -> Vec<Span> {
+        self.trail
+            .iter()
+            .filter(|(f, _)| f == file)
+            .map(|(_, span)| *span)
+            .collect()
+    }
+
     /// Highlights `span` on the revealed line (if it is on that line).
     pub fn highlight(&mut self, span: Option<Span>) {
         if let Some(reveal) = self.reveal.as_mut() {
@@ -205,6 +234,7 @@ impl CodePanel {
         };
         let line_marks = line_marks_for(file, notebook, findings);
         let risks = risks_for(file, findings);
+        let trail = self.trail_in(file);
         let focus = match reveal {
             Some(r) => Focus {
                 file: &r.file,
@@ -214,12 +244,14 @@ impl CodePanel {
                 should_scroll: self.should_scroll,
                 line_marks: &line_marks,
                 risks: &risks,
+                trail: &[],
                 colors: SourceColors::default(),
             },
             None => focus_for(symbol, location, self.should_scroll, &line_marks, &risks),
         };
         let focus = Focus {
             colors: self.scheme.colors(),
+            trail: &trail,
             ..focus
         };
         let event = self.view.show(ui, graph, &focus);
@@ -434,6 +466,7 @@ fn focus_for<'a>(
             should_scroll,
             line_marks,
             risks,
+            trail: &[],
             colors: SourceColors::default(),
         },
         None => Focus {
@@ -444,6 +477,7 @@ fn focus_for<'a>(
             should_scroll,
             line_marks,
             risks,
+            trail: &[],
             colors: SourceColors::default(),
         },
     }

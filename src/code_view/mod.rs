@@ -20,7 +20,7 @@ use egui::text::{CCursor, Galley, LayoutJob, TextFormat};
 use egui::{Color32, CursorIcon, Response, RichText, Sense, Stroke};
 
 use crate::model::{CodeGraph, EdgeKind, Occurrence, OccurrenceRole, Span, SymbolId};
-use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR};
+use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR, TRAIL_COLOR};
 use scheme::SourceColors;
 use segments::{merge, overlay_risks, Mark, Segment};
 use tokenize::colored_ranges;
@@ -39,6 +39,10 @@ const WARNING_BAR_WIDTH: f32 = 3.0;
 /// Longer lines (minified/generated code) are clipped for display; shaping a
 /// multi-megabyte line every frame would freeze the UI.
 const MAX_DISPLAY_CHARS: usize = 2_000;
+/// A trace path's steps are underlined in `TRAIL_COLOR` this thick, over
+/// a tint of it this strong.
+const TRAIL_UNDERLINE_WIDTH: f32 = 2.0;
+const TRAIL_BACKGROUND_ALPHA: f32 = 0.22;
 /// After jumping to the focused line, this fraction of the viewport sits above it.
 const FOCUS_LINE_VIEW_FRACTION: f32 = 0.3;
 /// A focused line this close to the top or bottom edge counts as off screen.
@@ -59,6 +63,8 @@ pub struct Focus<'a> {
     pub line_marks: &'a BTreeMap<u32, LineMark<'a>>,
     /// Risky snippets (findings) of `file`, by line.
     pub risks: &'a BTreeMap<u32, Vec<RiskSpan<'a>>>,
+    /// Where the steps of the trace path shown are in `file`.
+    pub trail: &'a [Span],
     /// The color scheme to draw with.
     pub colors: SourceColors,
 }
@@ -101,6 +107,8 @@ pub enum LineAction {
     MarkDangerous(String),
     /// Trace where the variable at this byte column gets its value.
     Trace(u32),
+    /// Trace where the value of the variable at this byte column goes.
+    TraceForward(u32),
     /// Add a TODO about this line.
     AddTodo,
 }
@@ -206,18 +214,7 @@ impl Rows<'_> {
         let line_no = u32::try_from(idx + 1).unwrap_or(u32::MAX);
         let (shown, visible_len) = display_text(text);
         let occurrences = self.graph.occurrences_on_line(self.focus.file, line_no);
-        // The focused span may be a name the index doesn't know (a local
-        // variable a trace stepped to), so it is marked on its own too.
-        let focused = self
-            .focus
-            .span
-            .filter(|s| s.line == line_no)
-            .map(|s| (byte_range(s, visible_len), Mark::Active));
-        let marks: Vec<(Range<usize>, Mark)> = occurrences
-            .iter()
-            .map(|o| (byte_range(o.span, visible_len), self.mark_for(o)))
-            .chain(focused)
-            .collect();
+        let marks = self.marks_on(line_no, occurrences, visible_len);
         let risks = self
             .focus
             .risks
@@ -365,6 +362,37 @@ impl Rows<'_> {
         names
     }
 
+    /// How the names on line `line_no` are marked: its occurrences, the
+    /// trace path's steps, and the focused name.
+    fn marks_on(
+        &self,
+        line_no: u32,
+        occurrences: &[Occurrence],
+        visible_len: usize,
+    ) -> Vec<(Range<usize>, Mark)> {
+        let on_line = |s: &&Span| s.line == line_no;
+        // The focused span may be a name the index doesn't know (a local
+        // variable a trace stepped to), so it is marked on its own too.
+        let focused = self
+            .focus
+            .span
+            .iter()
+            .filter(on_line)
+            .map(|s| (byte_range(*s, visible_len), Mark::Active));
+        let traced = self
+            .focus
+            .trail
+            .iter()
+            .filter(on_line)
+            .map(|s| (byte_range(*s, visible_len), Mark::Trail));
+        occurrences
+            .iter()
+            .map(|o| (byte_range(o.span, visible_len), self.mark_for(o)))
+            .chain(traced)
+            .chain(focused)
+            .collect()
+    }
+
     fn mark_for(&self, occurrence: &Occurrence) -> Mark {
         if Some(occurrence.span) == self.focus.span {
             Mark::Active
@@ -483,19 +511,44 @@ fn line_menu(
     action
 }
 
-/// The line menu's Trace Value Of submenu: the variables on the line.
+/// The line menu's trace submenus: the variables on the line, to trace
+/// back to where each gets its value or forward to where it goes.
 fn trace_menu(ui: &mut egui::Ui, shown: &str) -> Option<LineAction> {
     let variables = variables_in(shown);
     if variables.is_empty() {
         return None;
     }
     ui.separator();
-    ui.menu_button("Trace Value Of", |ui| {
+    let back = variable_menu(
+        ui,
+        "Trace Where It Comes From",
+        &variables,
+        |name| format!("Follow where `{name}` gets its value, back to outside input"),
+        LineAction::Trace,
+    );
+    let forward = variable_menu(
+        ui,
+        "Trace Where It Goes",
+        &variables,
+        |name| format!("Follow where the value of `{name}` goes, on to risky calls"),
+        LineAction::TraceForward,
+    );
+    back.or(forward)
+}
+
+/// A submenu listing `variables`; picking one is `action` at its column.
+fn variable_menu(
+    ui: &mut egui::Ui,
+    title: &str,
+    variables: &[(String, usize)],
+    hint: fn(&str) -> String,
+    action: fn(u32) -> LineAction,
+) -> Option<LineAction> {
+    ui.menu_button(title, |ui| {
         variables.iter().find_map(|(name, column)| {
-            let hint = format!("Follow where `{name}` gets its value, back to outside input");
-            let item = ui.button(name.as_str()).on_hover_text(hint);
+            let item = ui.button(name.as_str()).on_hover_text(hint(name));
             item.clicked()
-                .then(|| u32::try_from(*column).ok().map(LineAction::Trace))
+                .then(|| u32::try_from(*column).ok().map(action))
                 .flatten()
         })
     })
@@ -537,11 +590,17 @@ fn layout(
                 Stroke::new(1.0, segment.color.gamma_multiply(LINK_UNDERLINE_ALPHA)),
             ),
             Some(Mark::Selected) => (colors.selected_name, Stroke::NONE),
+            Some(Mark::Trail) => (
+                TRAIL_COLOR.gamma_multiply(TRAIL_BACKGROUND_ALPHA),
+                Stroke::new(TRAIL_UNDERLINE_WIDTH, TRAIL_COLOR),
+            ),
             Some(Mark::Active) => (colors.active_name, Stroke::NONE),
         };
         // A risky snippet is underlined in its color, and tinted unless the
-        // selection already colors it.
-        let (background, underline) = match segment.risk {
+        // selection already colors it. A trace path's step keeps its own
+        // marks there: it is what is being followed.
+        let risk = segment.risk.filter(|_| segment.mark != Some(Mark::Trail));
+        let (background, underline) = match risk {
             Some(risk) => (
                 match background {
                     Color32::TRANSPARENT => risk.gamma_multiply(RISK_BACKGROUND_ALPHA),

@@ -109,6 +109,8 @@ pub(super) fn refers_to(arg: Node, source: &str, name: &str) -> Option<bool> {
         node = match node.kind() {
             "cast_expression" => node.child_by_field_name("value")?,
             "parenthesized_expression" => node.named_child(0)?,
+            // `p++` is `p`, moved on after.
+            "update_expression" => node.child_by_field_name("argument")?,
             "pointer_expression" => {
                 is_whole &= operator == "&";
                 node.child_by_field_name("argument")?
@@ -141,7 +143,9 @@ pub(super) fn access_path<'t>(node: Node<'t>, source: &str) -> (Node<'t>, Vec<St
             }
             "cast_expression" => field("value"),
             "parenthesized_expression" => current.named_child(0),
-            "pointer_expression" | "subscript_expression" => field("argument"),
+            "pointer_expression" | "subscript_expression" | "update_expression" => {
+                field("argument")
+            }
             "binary_expression" => field("left"),
             _ => None,
         };

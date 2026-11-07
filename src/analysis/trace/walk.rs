@@ -1,22 +1,23 @@
 //! The search behind a trace: from a value back through what sets it, a
 //! depth-first walk that records a path each time it reaches an origin.
 
-use std::collections::HashMap;
-
 use tree_sitter::Node;
 
 use super::calls::{library_name, risky_args};
-use super::defs::{arguments, reaching, Def, DefKind, Query, Reaching};
+use super::defs::{
+    arguments, is_to_field, reaching, replaces_field, Def, DefKind, Query, Reaching,
+};
 use super::files::{
     call_at, call_name_node, call_named_at, call_starting_at, called_name, callee, definitions,
     function_around, function_name, function_on_line, may_call, parameters, snippet, step,
     symbol_of, variable_at, Files,
 };
 use super::flows::{access_path, carries_data, field_base, fields_of, flows, name_of, Flow};
-use super::{Origin, Step, Trace, TracePath};
+use super::sites::{stepped_into, CallRef, CallSite, CallSites};
+use super::{Endpoint, Step, Trace, TracePath};
 use crate::analysis::reach::{input_source, COMMAND_LINE, MAIN_NAMES};
 use crate::index::syntax::{line_of, text};
-use crate::model::{CodeGraph, EdgeKind, OccurrenceRole, Span, SymbolId};
+use crate::model::{CodeGraph, SymbolId};
 
 /// Paths kept per trace.
 const MAX_PATHS: usize = 24;
@@ -85,57 +86,21 @@ impl Want {
         }
     }
 
-    /// Whether `def` (a write to `name`) can be to the field wanted: to
-    /// the whole struct, to a field holding it, or to the field itself.
+    /// Whether `def` (a write to `name`) can be to the field wanted.
     fn keeps(&self, def: &Def, source: &str) -> bool {
-        if self.field.is_empty() {
-            return true;
-        }
-        let (_, written) = access_path(def.name, source);
-        let wanted = self.field.as_slice();
-        written.is_empty() || wanted.starts_with(&written) || written.starts_with(wanted)
+        is_to_field(&self.field, def, source)
     }
 
-    /// Whether `def` writes all of the field wanted (the field, a field
-    /// holding it, or the struct through a pointer: `*p = …`), so what it
-    /// held before is gone.
+    /// Whether `def` writes all of the field wanted.
     fn replaces(&self, def: &Def, source: &str) -> bool {
-        if self.field.is_empty()
-            || !matches!(
-                def.kind,
-                DefKind::Part(_) | DefKind::Copied { .. } | DefKind::Read(_)
-            )
-        {
-            return false;
-        }
-        let (_, written) = access_path(def.name, source);
-        let is_deref = def.name.kind() == "pointer_expression"
-            && def
-                .name
-                .child_by_field_name("operator")
-                .is_some_and(|o| text(o, source) == "*");
-        match written.is_empty() {
-            true => is_deref,
-            false => self.field.starts_with(&written),
-        }
+        replaces_field(&self.field, def, source)
     }
 }
-
-/// A call, by where it starts.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CallRef {
-    file: String,
-    at: usize,
-}
-
-/// A place a function is called from: file, the name's span, and the
-/// function the call is in.
-type CallSite = (String, Span, Option<SymbolId>);
 
 pub(super) struct Tracer<'g> {
     files: Files<'g>,
-    /// Where each project function is called from, built when first needed.
-    call_sites: Option<HashMap<SymbolId, Vec<CallSite>>>,
+    /// Where each project function is called from.
+    call_sites: CallSites,
     /// The current path, from the subject back.
     trail: Vec<Step>,
     /// The values being traced along the current path, to stop cycles.
@@ -153,7 +118,7 @@ impl<'g> Tracer<'g> {
     pub(super) fn new(graph: &'g CodeGraph) -> Self {
         Self {
             files: Files::new(graph),
-            call_sites: None,
+            call_sites: CallSites::default(),
             trail: Vec::new(),
             wants: Vec::new(),
             paths: Vec::new(),
@@ -215,6 +180,7 @@ impl<'g> Tracer<'g> {
             subject,
             file: file.to_string(),
             line,
+            direction: super::Direction::Back,
             paths: super::ordered(self.paths),
             is_cut_short: self.is_cut_short,
         }
@@ -224,18 +190,18 @@ impl<'g> Tracer<'g> {
         function_around(root, at).and_then(|f| symbol_of(self.files.graph(), file, f))
     }
 
-    /// Records the current path as one that starts at `origin`.
-    fn end(&mut self, origin: Origin) {
+    /// Records the current path as one that starts at `endpoint`.
+    fn end(&mut self, endpoint: Endpoint) {
         if self.paths.len() >= MAX_PATHS {
             self.is_cut_short = true;
             return;
         }
         let steps = self.trail.iter().rev().cloned().collect();
-        self.paths.push(TracePath { origin, steps });
+        self.paths.push(TracePath { endpoint, steps });
     }
 
     fn stop(&mut self, why: String) {
-        self.end(Origin::Stopped(why));
+        self.end(Endpoint::Stopped(why));
     }
 
     fn is_over_budget(&mut self) -> bool {
@@ -347,7 +313,7 @@ impl<'g> Tracer<'g> {
                     self.follow_value(file, *value, &want.returns_to);
                 }
             }
-            DefKind::Read(source) => self.end(Origin::Input(source.clone())),
+            DefKind::Read(source) => self.end(Endpoint::Input(source.clone())),
             DefKind::Passed { call, index } => self.follow_into_callee(want, *call, *index),
         }
     }
@@ -393,7 +359,7 @@ impl<'g> Tracer<'g> {
         let called = called_name(function, source);
         let is_method = function.kind() == "field_expression";
         if let Some((label, _)) = input_source(&called).filter(|_| !is_method) {
-            return self.end(Origin::Input(format!("{label}()")));
+            return self.end(Endpoint::Input(format!("{label}()")));
         }
         let project = callee(self.files.graph(), file, function);
         if let Some(symbol) = project {
@@ -502,7 +468,7 @@ impl<'g> Tracer<'g> {
                 let note = format!("`{}` is the command line", want.name);
                 self.trail
                     .push(step(source, &want.file, *param, symbol, note));
-                self.end(Origin::Input(COMMAND_LINE.to_string()));
+                self.end(Endpoint::Input(COMMAND_LINE.to_string()));
                 self.trail.pop();
             }
             return;
@@ -632,45 +598,8 @@ impl<'g> Tracer<'g> {
     }
 
     fn call_sites_of(&mut self, symbol: SymbolId) -> Vec<CallSite> {
-        let graph = self.files.graph();
-        self.call_sites
-            .get_or_insert_with(|| call_sites(graph))
-            .get(&symbol)
-            .cloned()
-            .unwrap_or_default()
+        self.call_sites.of(self.files.graph(), symbol)
     }
-}
-
-/// `returns_to` with `call` (in `file`) stepped into, innermost.
-fn stepped_into(returns_to: &[CallRef], file: &str, call: Node) -> Vec<CallRef> {
-    returns_to
-        .iter()
-        .cloned()
-        .chain([CallRef {
-            file: file.to_string(),
-            at: call.start_byte(),
-        }])
-        .collect()
-}
-
-/// Where every project function is called from, files in name order.
-fn call_sites(graph: &CodeGraph) -> HashMap<SymbolId, Vec<CallSite>> {
-    let mut files: Vec<&String> = graph.occurrences.keys().collect();
-    files.sort_unstable();
-    let mut sites: HashMap<SymbolId, Vec<CallSite>> = HashMap::new();
-    for file in files {
-        let calls = graph.occurrences[file]
-            .iter()
-            .filter(|o| o.role == OccurrenceRole::Reference(EdgeKind::Calls));
-        for occurrence in calls {
-            sites.entry(occurrence.symbol).or_default().push((
-                file.clone(),
-                occurrence.span,
-                occurrence.context,
-            ));
-        }
-    }
-    sites
 }
 
 /// The values `function` returns, in source order.
@@ -697,7 +626,7 @@ fn returned_values(function: Node) -> Vec<Node> {
 
 /// The write `node` is the target of, when it is: `name = …`,
 /// `char *name = …`, `name[i] = …`, `for (auto name : …)`.
-fn set_by(node: Node) -> Option<Node> {
+pub(super) fn set_by(node: Node) -> Option<Node> {
     let mut child = node;
     for _ in 0..8 {
         let parent = child.parent()?;

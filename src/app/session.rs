@@ -85,12 +85,20 @@ pub enum TraceStart {
         line: u32,
         column: u32,
     },
+    /// A variable picked in the source, traced forward to where it goes.
+    Forward {
+        file: String,
+        line: u32,
+        column: u32,
+    },
 }
 
 impl TraceStart {
     fn place(&self) -> (&str, u32) {
         match self {
-            Self::Call { file, line, .. } | Self::Variable { file, line, .. } => (file, *line),
+            Self::Call { file, line, .. }
+            | Self::Variable { file, line, .. }
+            | Self::Forward { file, line, .. } => (file, *line),
         }
     }
 }

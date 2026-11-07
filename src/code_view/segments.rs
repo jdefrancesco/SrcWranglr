@@ -13,6 +13,8 @@ pub enum Mark {
     Link,
     /// An occurrence of the selected symbol.
     Selected,
+    /// A step of the trace path shown: where the traced value is.
+    Trail,
     /// The location the code view is focused on.
     Active,
 }
@@ -165,6 +167,16 @@ mod tests {
             (0..3, Mark::Selected),
         ];
         let segments = merge("abc", &[(0..3, RED)], &marks);
+        assert_eq!(summary(&segments), [(0, 3, Some(Mark::Active))]);
+    }
+
+    #[test]
+    fn a_traced_path_shows_over_the_selection_but_under_the_focus() {
+        let traced = [(0..3, Mark::Selected), (0..3, Mark::Trail)];
+        let segments = merge("abc", &[(0..3, RED)], &traced);
+        assert_eq!(summary(&segments), [(0, 3, Some(Mark::Trail))]);
+        let focused = [(0..3, Mark::Trail), (0..3, Mark::Active)];
+        let segments = merge("abc", &[(0..3, RED)], &focused);
         assert_eq!(summary(&segments), [(0, 3, Some(Mark::Active))]);
     }
 

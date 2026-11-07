@@ -620,6 +620,9 @@ impl SrcWranglrApp {
                 Some(PanelAction::Trace { file, line, column }) => {
                     self.trace_variable(&file, line, column);
                 }
+                Some(PanelAction::TraceForward { file, line, column }) => {
+                    self.trace_forward(&file, line, column);
+                }
                 None => {}
             }
         });

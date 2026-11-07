@@ -86,7 +86,7 @@ This is a prioritizer, not proof:
 
 **Trace Back** follows a value to where it comes from. It shows that `argv[1]` ends up in `strcpy(buf, name)`, and every line it passes on the way. Start a trace in either of two ways:
 - **Trace Back** in a finding's window traces the arguments that make the call risky: the source and length of a copy, a format's arguments, a command, a size.
-- Right-click a line in the source, then **Trace Value Of** and a variable, to trace that one.
+- Right-click a line in the source, then **Trace Where It Comes From** and a variable, to trace that one.
 
 The **Trace** pane lists each way the value gets there, as a path from where it starts to where it is used. Click a step to show it in the source with the variable highlighted. A path starts at outside input (the command line, `fgets()`, `read()`, `getenv()`, `std::cin`…) or says why it stops: a constant, a global, a struct field set elsewhere, a parameter nothing calls, a function from outside the project.
 
@@ -119,7 +119,23 @@ What a trace follows:
   - Writes to the struct's other fields don't count; a write to the whole struct (`s = …`, `*p = …`, `memset(p, …)`) replaces its fields.
 - **Same-named functions:** a call in a file with its own definition, or to a `static` function, stays in that file.
 
-A path means the value *may* come from there:
+**Trace forward** goes the other way: from a value to the risky calls it reaches. Right-click a line in the source, then **Trace Where It Goes** and a variable: `argv` in `main`, a buffer `fgets()` fills, a parameter. The **Trace** pane lists each path from there to a risky call (a finding, so your dangerous-functions list and the tools' results count too), with the argument it lands in:
+
+```
+Path 1 — reaches `strcpy()` (high)
+ 1. main.c:11   load_user(argv[1]);               `argv` here
+ 2. main.c:11   load_user(argv[1]);               `argv[1]` is passed to `load_user()` as `raw`
+ 3. user.c:7    char *name = trim(raw);           `raw` is passed to `trim()` as `s`
+ 4. user.c:3    return s;                         `trim()` returns `s`
+ 5. user.c:7    char *name = trim(raw);           `trim(raw)` is stored in `name`
+ 6. user.c:8    strcpy(buf, name);                `name` reaches `strcpy()`, argument 2
+```
+
+It follows the value through the same assignments, copies (`strcpy(dst, src)` carries it into `dst`), calls, returns (back to the call it came from, or to every caller when the trace starts inside the function), out-parameters a function writes it into, and struct fields. What is worked out from it counts too: `n = strlen(s)` carries it into `n`, and so into `memcpy(buf, s, n)`'s length. A comparison, a condition or an index uses it without passing it on. A path that stops says why: stored in a global or member, or handed to a function pointer.
+
+Clicking a step marks every step of its path in the source, underlined in blue, so the value's way through the file shows at a glance.
+
+A path means the value *may* go that way:
 - The trace reads syntax, not types.
 - Writes through other pointers to the same memory aren't seen: `strm = &state->strm`, or a library filling a buffer through a pointer it was given. Neither are calls through function pointers, or checks that limit the value.
 - A trace stops after a time limit, or after following many paths; it then says there may be more.
@@ -235,7 +251,8 @@ srcwranglr --version
 | Settings (editor, tool folders, source colors) | **⌘, / Ctrl+,**, or **File → Settings…** |
 | Save or reopen where you were | **File → Save Session As… / Open Session…** (reopening a project restores it too) |
 | TODO list | **Go → TODO List**; right-click a line, then **Add TODO Here…** |
-| Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Value Of** |
+| Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Where It Comes From** |
+| Trace where a value goes | Right-click a line, then **Trace Where It Goes**; click a step to mark its path in the source |
 | Undo dragged pane sizes | **View → Reset Layout** |
 
 The window opens maximized the first time. After that it reopens with the size, position and pane sizes you left it at, and with the source pane where you put it.
@@ -257,7 +274,7 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/index/signature.rs` | Each function definition's prototype and parameters, for fuzz harnesses |
 | `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`) and libFuzzer harness drafting (`harness/`) |
 | `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
-| `src/analysis/trace/` | Tracing a value back to where it comes from, across functions, by syntax |
+| `src/analysis/trace/` | Tracing a value back to where it comes from (`walk.rs`) or forward to the risky calls it reaches (`forward.rs`, `goes.rs`), across functions, by syntax |
 | `src/analysis/tools.rs`, `flawfinder.rs` | Running semgrep, cppcheck and flawfinder, and reading their reports |
 | `src/version.rs`, `build.rs` | Which version this is; `build.rs` records the git commit it was built from |
 | `src/programs.rs` | Finding the programs to run: your folders, `PATH`, then the usual install places |

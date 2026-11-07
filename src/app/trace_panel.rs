@@ -1,19 +1,21 @@
-//! The Trace pane: where a traced value comes from, one path per way it
-//! gets there, each step clickable to show it in the source.
+//! The Trace pane: where a traced value comes from or goes, one path per
+//! way, each step clickable to show it in the source.
 
 use egui::RichText;
 
 use super::layout::Layout;
 use super::session::TraceStart;
-use crate::analysis::trace::{Step, Trace, TracePath};
-use crate::style::INPUT_COLOR;
+use crate::analysis::trace::{Direction, Endpoint, Step, Trace, TracePath};
+use crate::analysis::Severity;
+use crate::style::{severity_color, INPUT_COLOR};
 
 const DEFAULT_WIDTH: f32 = 380.0;
-/// Paths from outside input start open; this many others do too.
+/// Paths to outside input or a risky call start open; this many others do
+/// too.
 const OPEN_OTHER_PATHS: usize = 1;
 const LIMITS: &str = "Follows assignments, copies, calls, returns and the buffers a function \
     fills, as written. Writes through other pointers to the same memory, calls through function \
-    pointers, and checks that limit the value aren't seen, so a path means it may come from there.";
+    pointers, and checks that limit the value aren't seen, so a path means it may go that way.";
 
 /// What the user picked in the pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +53,12 @@ impl TracePanel {
         self.start.as_ref()
     }
 
+    /// The path of the step last shown.
+    pub fn shown_path(&self) -> Option<&TracePath> {
+        let (path, _) = self.selected?;
+        self.trace.as_ref()?.paths.get(path)
+    }
+
     #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.trace.is_some()
@@ -77,6 +85,11 @@ impl TracePanel {
                 }
             });
         });
+        let direction = match trace.direction {
+            Direction::Back => "Traced back: where it comes from",
+            Direction::Forward => "Traced forward: where it goes",
+        };
+        ui.label(direction);
         ui.monospace(&trace.subject);
         ui.weak(format!("{}:{}", trace.file, trace.line));
         ui.label(summary(trace)).on_hover_text(LIMITS);
@@ -98,10 +111,18 @@ impl TracePanel {
     }
 }
 
-/// "3 paths, 1 from outside input", or why there are none.
+/// "3 paths, 1 from outside input", "1 path to a risky call", or why
+/// there are none.
 fn summary(trace: &Trace) -> String {
+    match trace.direction {
+        Direction::Back => back_summary(trace),
+        Direction::Forward => forward_summary(trace),
+    }
+}
+
+fn back_summary(trace: &Trace) -> String {
     let total = trace.paths.len();
-    let from_input = trace.paths.iter().filter(|p| p.origin.is_input()).count();
+    let from_input = trace.paths.iter().filter(|p| p.endpoint.is_input()).count();
     match (total, from_input) {
         (0, _) => {
             "No path found: what it uses is constant, or set where this can't follow.".to_string()
@@ -110,6 +131,22 @@ fn summary(trace: &Trace) -> String {
         (1, _) => "1 path, not from outside input".to_string(),
         (_, 0) => format!("{total} paths, none from outside input"),
         _ => format!("{total} paths, {from_input} from outside input"),
+    }
+}
+
+fn forward_summary(trace: &Trace) -> String {
+    let to_sinks = trace.paths.iter().filter(|p| p.endpoint.is_sink()).count();
+    let stops = trace.paths.len() - to_sinks;
+    let found = match to_sinks {
+        0 => "No path to a risky call found".to_string(),
+        1 => "1 path to a risky call".to_string(),
+        n => format!("{n} paths to risky calls"),
+    };
+    match stops {
+        0 if to_sinks == 0 => format!("{found}: it isn't used in one this can follow."),
+        0 => found,
+        1 => format!("{found}, 1 that stops"),
+        n => format!("{found}, {n} that stop"),
     }
 }
 
@@ -122,16 +159,19 @@ fn paths(
     let mut clicked = None;
     let mut others_open = 0;
     for (index, path) in paths.iter().enumerate() {
-        let is_input = path.origin.is_input();
-        let is_open = is_input || {
+        let color = match path.endpoint {
+            Endpoint::Input(_) => Some(INPUT_COLOR),
+            Endpoint::Sink(_) => Some(severity_color(Severity::High)),
+            Endpoint::Stopped(_) => None,
+        };
+        let is_open = color.is_some() || {
             others_open += 1;
             others_open <= OPEN_OTHER_PATHS
         };
-        let title = format!("Path {} — {}", index + 1, path.origin.label());
-        let title = if is_input {
-            RichText::new(title).color(INPUT_COLOR)
-        } else {
-            RichText::new(title)
+        let title = format!("Path {} — {}", index + 1, path.endpoint.label());
+        let title = match color {
+            Some(color) => RichText::new(title).color(color),
+            None => RichText::new(title),
         };
         egui::CollapsingHeader::new(title)
             .id_salt(("trace_path", index))
@@ -168,7 +208,7 @@ mod tests {
     use egui_kittest::Harness;
 
     use super::*;
-    use crate::analysis::trace::Origin;
+    use crate::analysis::trace::{Direction, Endpoint};
 
     fn step(line: u32, code: &str, note: &str) -> Step {
         Step {
@@ -186,9 +226,10 @@ mod tests {
             subject: "strcpy(buf, name)".into(),
             file: "user.c".into(),
             line: 8,
+            direction: Direction::Back,
             paths: vec![
                 TracePath {
-                    origin: Origin::Input("the command line".into()),
+                    endpoint: Endpoint::Input("the command line".into()),
                     steps: vec![
                         step(
                             10,
@@ -199,7 +240,7 @@ mod tests {
                     ],
                 },
                 TracePath {
-                    origin: Origin::Stopped("set to a constant".into()),
+                    endpoint: Endpoint::Stopped("set to a constant".into()),
                     steps: vec![step(3, "int n = 4;", "`n` set from `4`")],
                 },
             ],
@@ -240,6 +281,7 @@ mod tests {
     #[test]
     fn shows_each_path_with_where_it_starts() {
         let harness = harness(Some(trace()));
+        harness.get_by_label("Traced back: where it comes from");
         harness.get_by_label("strcpy(buf, name)");
         harness.get_by_label("2 paths, 1 from outside input");
         harness.get_by_label_contains("Path 1 — from the command line");
@@ -259,6 +301,62 @@ mod tests {
         };
         assert_eq!(step.line, 10);
         assert_eq!(harness.state().panel.selected, Some((0, 0)));
+    }
+
+    fn forward() -> Trace {
+        Trace {
+            subject: "`argv`".into(),
+            line: 10,
+            direction: Direction::Forward,
+            paths: vec![
+                TracePath {
+                    endpoint: Endpoint::Sink("`strcpy()` (high)".into()),
+                    steps: vec![
+                        step(10, "load_user(argv[1]);", "`argv` here"),
+                        step(
+                            3,
+                            "strcpy(buf, raw);",
+                            "`raw` reaches `strcpy()`, argument 2",
+                        ),
+                    ],
+                },
+                TracePath {
+                    endpoint: Endpoint::Stopped("stored in `g`, a global".into()),
+                    steps: vec![step(4, "g = raw;", "`raw` is stored in `g`")],
+                },
+            ],
+            is_cut_short: false,
+            ..trace()
+        }
+    }
+
+    #[test]
+    fn a_forward_trace_says_where_the_value_goes() {
+        let harness = harness(Some(forward()));
+        harness.get_by_label("Traced forward: where it goes");
+        harness.get_by_label("1 path to a risky call, 1 that stops");
+        harness.get_by_label_contains("Path 1 — reaches `strcpy()` (high)");
+        harness.get_by_label("`raw` reaches `strcpy()`, argument 2");
+    }
+
+    #[test]
+    fn a_forward_trace_that_reaches_nothing_says_so() {
+        let empty = Trace {
+            paths: Vec::new(),
+            ..forward()
+        };
+        let harness = harness(Some(empty));
+        harness.get_by_label_contains("No path to a risky call found");
+    }
+
+    #[test]
+    fn the_path_of_the_step_clicked_is_the_one_shown() {
+        let mut harness = harness(Some(forward()));
+        assert!(harness.state().panel.shown_path().is_none());
+        harness.get_by_label("2. user.c:3").click();
+        harness.run();
+        let path = harness.state().panel.shown_path().cloned();
+        assert_eq!(path.map(|p| p.steps.len()), Some(2));
     }
 
     #[test]

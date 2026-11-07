@@ -174,6 +174,7 @@ impl SrcWranglrApp {
         self.survey_view.reset();
         self.harness_view = None;
         self.trace_panel.close();
+        self.code_panel.set_trail(Vec::new());
         self.report_findings();
         let name = project.name.clone();
         self.project = project;

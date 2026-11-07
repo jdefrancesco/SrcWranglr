@@ -1,11 +1,13 @@
 //! What the app does with traces: running one from a finding or from a
-//! variable picked in the source, and showing its steps.
+//! variable picked in the source (back to where it comes from, or forward
+//! to where it goes), and showing its steps.
 
 use super::session::TraceStart;
 use super::trace_panel::TracePanelAction;
 use super::{SrcWranglrApp, Status};
-use crate::analysis::trace::{self, Step, Trace};
+use crate::analysis::trace::{self, Sink, Step, Trace};
 use crate::analysis::Finding;
+use crate::model::Span;
 
 impl SrcWranglrApp {
     /// Traces where `finding`'s call gets its values, into the Trace pane.
@@ -28,18 +30,35 @@ impl SrcWranglrApp {
         });
     }
 
+    /// Traces where the value of the variable at `file:line`, byte
+    /// `column`, goes: the paths to the risky calls (findings) it reaches,
+    /// into the Trace pane.
+    pub(super) fn trace_forward(&mut self, file: &str, line: u32, column: u32) {
+        self.run_trace(TraceStart::Forward {
+            file: file.to_string(),
+            line,
+            column,
+        });
+    }
+
     fn run_trace(&mut self, start: TraceStart) {
         match self.traced(&start) {
             Some(found) => {
-                self.status = Status::Info(format!("Traced {} in the Trace pane.", found.subject));
+                let subject = &found.subject;
+                let what = match start {
+                    TraceStart::Forward { .. } => format!("where {subject} goes"),
+                    TraceStart::Call { .. } | TraceStart::Variable { .. } => subject.clone(),
+                };
+                self.status = Status::Info(format!("Traced {what} in the Trace pane."));
                 self.trace_panel.open(found, start);
+                self.code_panel.set_trail(Vec::new());
             }
             None => {
                 let missing = match start {
                     TraceStart::Call { .. } => {
                         "No call was found where this finding is, so nothing was traced."
                     }
-                    TraceStart::Variable { .. } => {
+                    TraceStart::Variable { .. } | TraceStart::Forward { .. } => {
                         "That isn't a variable inside a function, so nothing was traced."
                     }
                 };
@@ -65,6 +84,10 @@ impl SrcWranglrApp {
             TraceStart::Variable { file, line, column } => {
                 trace::trace_variable(graph, file, *line, *column)
             }
+            TraceStart::Forward { file, line, column } => {
+                let sinks: Vec<Sink> = self.findings.all().iter().map(Sink::of).collect();
+                trace::trace_forward(graph, &sinks, file, *line, *column)
+            }
         }
     }
 
@@ -76,10 +99,26 @@ impl SrcWranglrApp {
 
     pub(super) fn show_trace_panel(&mut self, ui: &mut egui::Ui) {
         match self.trace_panel.show(ui, self.layout) {
-            Some(TracePanelAction::GoTo(step)) => self.go_to_step(&step),
-            Some(TracePanelAction::Close) => self.trace_panel.close(),
+            Some(TracePanelAction::GoTo(step)) => {
+                self.go_to_step(&step);
+                self.code_panel.set_trail(self.trail_shown());
+            }
+            Some(TracePanelAction::Close) => {
+                self.trace_panel.close();
+                self.code_panel.set_trail(Vec::new());
+            }
             None => {}
         }
+    }
+
+    /// Where the steps of the path shown in the Trace pane are.
+    fn trail_shown(&self) -> Vec<(String, Span)> {
+        let steps = self.trace_panel.shown_path().map(|p| p.steps.as_slice());
+        steps
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| s.span.map(|span| (s.file.clone(), span)))
+            .collect()
     }
 }
 
@@ -120,6 +159,26 @@ mod tests {
             app.project.graph.symbols[&first.symbol.expect("in main")].name,
             "main"
         );
+    }
+
+    #[test]
+    fn tracing_forward_shows_the_paths_to_risky_calls() {
+        let mut app = app();
+        app.findings = crate::app::findings::Findings::for_graph(
+            &app.project.graph,
+            &crate::analysis::dangerous::DangerousList::default(),
+        );
+        let column = "load_user(".len() as u32;
+        app.trace_forward("user.c", 6, column);
+        assert!(app.trace_panel.is_open());
+        assert!(matches!(
+            app.trace_panel.start(),
+            Some(TraceStart::Forward { line: 6, .. })
+        ));
+        let Status::Info(text) = &app.status else {
+            panic!("expected info");
+        };
+        assert!(text.contains("goes"), "{text}");
     }
 
     #[test]

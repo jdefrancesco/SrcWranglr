@@ -386,3 +386,22 @@ fn stepping_to_a_visible_location_does_not_scroll() {
     harness.run();
     assert_eq!(harness.get_by_label(first_line).rect(), before);
 }
+
+#[test]
+fn a_traced_path_is_marked_in_the_file_shown_only() {
+    let mut panel = CodePanel::default();
+    let span = |line, start| Span {
+        line,
+        start,
+        end: start + 3,
+    };
+    panel.set_trail(vec![
+        ("a.c".into(), span(3, 4)),
+        ("b.c".into(), span(9, 0)),
+        ("a.c".into(), span(7, 2)),
+    ]);
+    assert_eq!(panel.trail_in("a.c"), [span(3, 4), span(7, 2)]);
+    assert!(panel.trail_in("c.c").is_empty());
+    panel.set_trail(Vec::new());
+    assert!(panel.trail_in("a.c").is_empty());
+}
