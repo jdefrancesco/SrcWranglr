@@ -1,11 +1,14 @@
-//! The Trace pane: where a traced value comes from or goes, one path per
-//! way, each step clickable to show it in the source.
+//! The Trace pane: where a traced value comes from or goes, or how it
+//! gets from a source to a sink, one path per way, each step clickable to
+//! show it in the source. It also shows the source picked for a trace to a
+//! sink, until a sink is picked or it is cleared.
 
 use egui::RichText;
 
 use super::layout::Layout;
 use super::pane_bar::{self, Edge};
-use super::session::TraceStart;
+use super::session::{TraceSource, TraceStart};
+use super::visible::visible;
 use crate::analysis::trace::{Direction, Endpoint, Step, Trace, TracePath};
 use crate::analysis::Severity;
 use crate::style::{severity_text_color, INPUT_COLOR};
@@ -15,7 +18,8 @@ const DEFAULT_WIDTH: f32 = 380.0;
 /// too.
 const OPEN_OTHER_PATHS: usize = 1;
 const NOTHING_TRACED: &str = "Nothing traced yet. Right-click a variable in the source: \
-    Trace Where It Comes From, or Trace Where It Goes.";
+    Trace Where It Comes From, Trace Where It Goes, or Set as Trace Source (then right-click \
+    the call it should reach).";
 const LIMITS: &str = "Follows assignments, copies, calls, returns and the buffers a function \
     fills, as written. Writes through other pointers to the same memory, calls through function \
     pointers, and checks that limit the value aren't seen, so a path means it may go that way.";
@@ -26,6 +30,8 @@ pub enum TracePanelAction {
     /// Show this step in the source.
     GoTo(Step),
     Close,
+    /// Forget the source picked for a trace to a sink.
+    ClearSource,
 }
 
 #[derive(Default)]
@@ -37,6 +43,8 @@ pub struct TracePanel {
     start: Option<TraceStart>,
     /// The step last shown: path, then step, by index.
     selected: Option<(usize, usize)>,
+    /// The source picked for a trace to a sink.
+    source: Option<TraceSource>,
 }
 
 impl TracePanel {
@@ -48,9 +56,24 @@ impl TracePanel {
         self.selected = None;
     }
 
-    /// Drops the trace and hides the pane.
+    /// Drops the trace and hides the pane; a source picked stays.
     pub fn close(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            source: self.source.take(),
+            ..Self::default()
+        };
+    }
+
+    /// Shows `source` as the source picked for a trace to a sink (`None`:
+    /// none is), opening the pane when one is picked.
+    pub fn set_source(&mut self, source: Option<TraceSource>) {
+        self.is_open |= source.is_some();
+        self.source = source;
+    }
+
+    /// The source picked for a trace to a sink, if any.
+    pub fn source(&self) -> Option<&TraceSource> {
+        self.source.as_ref()
     }
 
     pub fn set_open(&mut self, is_open: bool) {
@@ -98,6 +121,11 @@ impl TracePanel {
                 }
             });
         });
+        if let Some(source) = &self.source {
+            if source_row(ui, &source.label(), &source.name) {
+                picked = Some(TracePanelAction::ClearSource);
+            }
+        }
         let Some(trace) = self.trace.as_ref() else {
             ui.weak(NOTHING_TRACED);
             return picked;
@@ -105,10 +133,11 @@ impl TracePanel {
         let direction = match trace.direction {
             Direction::Back => "Traced back: where it comes from",
             Direction::Forward => "Traced forward: where it goes",
+            Direction::Between => "Traced from a source to a sink",
         };
         ui.label(direction);
-        ui.monospace(&trace.subject);
-        ui.weak(format!("{}:{}", trace.file, trace.line));
+        ui.monospace(visible(&trace.subject));
+        ui.weak(visible(&format!("{}:{}", trace.file, trace.line)));
         ui.label(summary(trace)).on_hover_text(LIMITS);
         if trace.is_cut_short {
             ui.weak("Limits were reached, so there may be more paths.");
@@ -128,12 +157,53 @@ impl TracePanel {
     }
 }
 
+/// The source picked for a trace to a sink, and what to do next. Whether
+/// its Clear was clicked.
+fn source_row(ui: &mut egui::Ui, source: &str, name: &str) -> bool {
+    let frame = egui::Frame::group(ui.style()).inner_margin(6.0);
+    frame
+        .show(ui, |ui| {
+            let is_cleared = ui
+                .horizontal(|ui| {
+                    ui.label(RichText::new("Source:").strong());
+                    ui.monospace(visible(source));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.small_button("Clear")
+                            .on_hover_text("Forget this source")
+                            .clicked()
+                    })
+                    .inner
+                })
+                .inner;
+            ui.weak(visible(&format!(
+                "Now right-click the call it should reach and pick Trace `{name}` to Here."
+            )));
+            is_cleared
+        })
+        .inner
+}
+
 /// "3 paths, 1 from outside input", "1 path to a risky call", or why
 /// there are none.
 fn summary(trace: &Trace) -> String {
     match trace.direction {
         Direction::Back => back_summary(trace),
         Direction::Forward => forward_summary(trace),
+        Direction::Between => between_summary(trace),
+    }
+}
+
+fn between_summary(trace: &Trace) -> String {
+    let reached = trace.paths.iter().filter(|p| p.endpoint.is_sink()).count();
+    let stops = trace.paths.len() - reached;
+    match (reached, stops) {
+        (0, 0) => {
+            "No path to the sink found: the value isn't used in a way this can follow.".to_string()
+        }
+        (0, 1) => "No path to the sink found; 1 place where it stops".to_string(),
+        (0, n) => format!("No path to the sink found; {n} places where it stops"),
+        (1, _) => "1 path from the source to the sink".to_string(),
+        (n, _) => format!("{n} paths from the source to the sink"),
     }
 }
 
@@ -209,11 +279,11 @@ fn paths(
 fn step_row(ui: &mut egui::Ui, number: usize, step: &Step, is_selected: bool) -> bool {
     let place = format!("{number}. {}:{}", step.file, step.line);
     let row = ui
-        .selectable_label(is_selected, RichText::new(place).strong())
+        .selectable_label(is_selected, RichText::new(visible(&place)).strong())
         .on_hover_text("Show in the source");
     ui.indent(("trace_step", number), |ui| {
-        ui.label(RichText::new(&step.code).monospace());
-        ui.weak(&step.note);
+        ui.label(RichText::new(visible(&step.code)).monospace());
+        ui.weak(visible(&step.note));
     });
     ui.add_space(2.0);
     row.clicked()

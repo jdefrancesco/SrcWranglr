@@ -2,11 +2,13 @@
 //! (and, from external tools, their findings), and what each function
 //! does by way of the APIs it calls.
 
+pub mod behavior;
 pub mod capabilities;
 pub mod dangerous;
 pub mod flawfinder;
 pub mod fuzz;
 pub mod heuristics;
+pub mod lookalike;
 pub mod reach;
 pub mod risky;
 pub mod silenced;

@@ -71,6 +71,8 @@ pub struct Panes {
     pub strings: bool,
     #[serde(default)]
     pub history: bool,
+    #[serde(default)]
+    pub matching: bool,
     /// Whether the Trace pane was shown; `None` in sessions saved before
     /// this was kept (the pane then shows if there is a trace).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,15 +101,49 @@ pub enum TraceStart {
         line: u32,
         column: u32,
     },
+    /// A variable picked as the source, traced to the call to `sink_call`
+    /// at `sink_file:sink_line`.
+    Between {
+        file: String,
+        line: u32,
+        column: u32,
+        sink_file: String,
+        sink_line: u32,
+        sink_call: String,
+    },
 }
 
 impl TraceStart {
-    fn place(&self) -> (&str, u32) {
+    /// Where it starts, and where it ends when a sink was picked.
+    fn places(&self) -> Vec<(&str, u32)> {
         match self {
             Self::Call { file, line, .. }
             | Self::Variable { file, line, .. }
-            | Self::Forward { file, line, .. } => (file, *line),
+            | Self::Forward { file, line, .. } => vec![(file, *line)],
+            Self::Between {
+                file,
+                line,
+                sink_file,
+                sink_line,
+                ..
+            } => vec![(file, *line), (sink_file, *sink_line)],
         }
+    }
+}
+
+/// A variable picked as the source of a trace to a sink, until a sink is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceSource {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+    pub name: String,
+}
+
+impl TraceSource {
+    /// "`n` at net.c:42".
+    pub fn label(&self) -> String {
+        format!("`{}` at {}:{}", self.name, self.file, self.line)
     }
 }
 
@@ -118,11 +154,14 @@ impl Session {
         if let Some(symbol) = &self.symbol {
             check_target(&NoteTarget::Symbol(symbol.clone()))?;
         }
+        if let Some(TraceStart::Between { sink_call, .. }) = &self.trace {
+            check_target(&NoteTarget::Symbol(sink_call.clone()))?;
+        }
         let places = self
             .place
             .iter()
             .map(|p| (p.file.as_str(), p.line))
-            .chain(self.trace.iter().map(TraceStart::place));
+            .chain(self.trace.iter().flat_map(TraceStart::places));
         for (file, line) in places {
             check_target(&NoteTarget::Line {
                 file: file.to_string(),
@@ -257,6 +296,7 @@ mod tests {
                 todos: true,
                 strings: true,
                 history: true,
+                matching: true,
                 trace: Some(false),
             },
             trace: Some(TraceStart::Variable {
@@ -282,6 +322,33 @@ mod tests {
         let text = to_file(root, &sample()).expect("written");
         assert!(text.contains("\"from\": \"variable\""), "{text}");
         assert_eq!(from_file(&text), Ok((root.to_path_buf(), sample())));
+    }
+
+    #[test]
+    fn a_trace_to_a_sink_round_trips_and_its_sink_is_checked() {
+        let root = Path::new("/src/leveldb");
+        let between = |sink_file: &str, sink_line: u32, sink_call: &str| Session {
+            trace: Some(TraceStart::Between {
+                file: "db/a.c".into(),
+                line: 3,
+                column: 4,
+                sink_file: sink_file.into(),
+                sink_line,
+                sink_call: sink_call.into(),
+            }),
+            ..Session::default()
+        };
+        let session = between("db/b.c", 9, "memcpy");
+        let text = to_file(root, &session).expect("written");
+        assert!(text.contains("\"from\": \"between\""), "{text}");
+        assert_eq!(from_file(&text), Ok((root.to_path_buf(), session)));
+        for bad in [
+            between("../../etc/passwd", 9, "memcpy"),
+            between("db/b.c", 0, "memcpy"),
+            between("db/b.c", 9, ""),
+        ] {
+            assert!(bad.check().is_err(), "{bad:?}");
+        }
     }
 
     #[test]

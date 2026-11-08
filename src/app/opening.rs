@@ -176,6 +176,11 @@ impl SrcWranglrApp {
         self.survey_view.reset();
         self.harness_view = None;
         self.trace_panel.close();
+        self.set_trace_source(None);
+        self.docs.reset();
+        self.matching_panel.reset();
+        // A bundle read for the old project mustn't be merged into this one.
+        self.bundle_preview = None;
         self.code_panel.set_trail(Vec::new());
         self.report_findings();
         let name = project.name.clone();

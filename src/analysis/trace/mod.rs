@@ -8,6 +8,8 @@
 //! - **Forward**, to where it goes: from a variable you pick to the risky
 //!   calls (the findings) it reaches, through the same assignments,
 //!   copies, calls, returns and buffers.
+//! - **Between** a source and a sink you pick: forward from a variable to
+//!   one call, by the same steps.
 //!
 //! It reads each function's syntax with tree-sitter and knows no types or
 //! aliases: a write through another pointer to the same memory, a call
@@ -50,6 +52,8 @@ pub enum Direction {
     Back,
     /// Forward to the risky calls it reaches.
     Forward,
+    /// Forward from a source to a sink, both picked.
+    Between,
 }
 
 /// One way the value goes, its steps in the order the value takes them.
@@ -90,7 +94,8 @@ impl Endpoint {
     }
 }
 
-/// A risky call a value traced forward may reach: where a finding is.
+/// A call a value traced forward may reach: where a finding is, or a call
+/// picked as the sink.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sink {
     pub file: String,
@@ -98,8 +103,21 @@ pub struct Sink {
     pub line: u32,
     /// Byte column of the call on that line, when the finding knows it.
     pub column: Option<u32>,
-    /// How bad, and who says so: `high`, `medium, semgrep`.
+    /// Only the call to this function on the line, when given.
+    pub name: Option<String>,
+    /// Which of its arguments count.
+    pub args: SinkArgs,
+    /// How bad, and who says so: `high`, `medium, semgrep`; or `the sink`.
     pub detail: String,
+}
+
+/// Which of a sink's arguments a value must be in to reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkArgs {
+    /// The ones that make the call risky: a finding's call.
+    Risky,
+    /// Any of them: a call picked as the sink.
+    Any,
 }
 
 impl Sink {
@@ -114,7 +132,22 @@ impl Sink {
             file: finding.file.clone(),
             line: finding.line,
             column: finding.columns.map(|(start, _)| start),
+            name: None,
+            args: SinkArgs::Risky,
             detail,
+        }
+    }
+
+    /// The call to `name` at `line` of `file`, picked as the sink: a value
+    /// in any of its arguments reaches it.
+    pub fn picked(file: &str, line: u32, name: &str) -> Self {
+        Self {
+            file: file.to_string(),
+            line,
+            column: None,
+            name: Some(name.to_string()),
+            args: SinkArgs::Any,
+            detail: "the sink".to_string(),
         }
     }
 }
@@ -168,6 +201,54 @@ pub fn trace_forward(
     forward::Follower::new(graph, sinks).variable(file, line, column)
 }
 
+/// Whether the value of the variable written at `line` (1-based), byte
+/// `column` of `file` reaches the call `sink`: the paths from one to the
+/// other, or, when there are none, where the value stopped being followed.
+/// `None` if no variable is written there.
+pub fn trace_between(
+    graph: &CodeGraph,
+    file: &str,
+    line: u32,
+    column: u32,
+    sink: &Sink,
+) -> Option<Trace> {
+    let sinks = std::slice::from_ref(sink);
+    let trace = forward::Follower::new(graph, sinks).variable(file, line, column)?;
+    let is_reached = trace.paths.iter().any(|p| p.endpoint.is_sink());
+    let paths = match is_reached {
+        true => trace
+            .paths
+            .into_iter()
+            .filter(|p| p.endpoint.is_sink())
+            .collect(),
+        false => trace.paths,
+    };
+    let call = sink.name.as_deref().unwrap_or("the call");
+    Some(Trace {
+        subject: format!("{} to `{call}()`", trace.subject),
+        direction: Direction::Between,
+        paths,
+        ..trace
+    })
+}
+
+/// The last name of `called`: `parse` of `ns::parse`, `obj.parse`,
+/// `p->parse` or `parse<int>`.
+fn last_name(called: &str) -> &str {
+    let without_template = called.split('<').next().unwrap_or(called);
+    let name = without_template
+        .rsplit("::")
+        .next()
+        .and_then(|n| n.rsplit("->").next())
+        .and_then(|n| n.rsplit('.').next())
+        .unwrap_or(without_template)
+        .trim();
+    match name.is_empty() {
+        true => called,
+        false => name,
+    }
+}
+
 /// `paths` without repeats, those to what was looked for (outside input, a
 /// risky call) first, then shorter ones.
 fn ordered(paths: Vec<TracePath>) -> Vec<TracePath> {
@@ -182,6 +263,8 @@ fn ordered(paths: Vec<TracePath>) -> Vec<TracePath> {
     unique
 }
 
+#[cfg(test)]
+mod between_tests;
 #[cfg(test)]
 mod forward_tests;
 #[cfg(test)]

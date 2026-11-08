@@ -43,7 +43,7 @@ impl SrcWranglrApp {
 
     /// Keeps `todos` as the list, saved with the project (if it has a
     /// folder and its file could be read). Whether it was kept.
-    fn set_todos(&mut self, todos: Todos) -> bool {
+    pub(super) fn set_todos(&mut self, todos: Todos) -> bool {
         if let Some(error) = &self.todos_error {
             self.status = Status::Error(format!("TODOs are read-only: {error}"));
             return false;

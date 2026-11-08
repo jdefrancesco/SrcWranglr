@@ -15,7 +15,7 @@ use crate::safe_fs::{read_regular_file, write_atomically};
 
 pub const TRIAGE_FILE: &str = "triage.json";
 const FORMAT_VERSION: u32 = 1;
-const MAX_ENTRIES: usize = 50_000;
+pub const MAX_ENTRIES: usize = 50_000;
 const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +167,22 @@ impl Triage {
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Every verdict, in the order recorded.
+    pub fn entries(&self) -> &[TriageEntry] {
+        &self.entries
+    }
+
+    /// These verdicts and `entries` (on spots without one), if the file
+    /// can hold them all.
+    pub fn with_all_added(&self, entries: Vec<TriageEntry>) -> Result<Self, String> {
+        entries.iter().try_for_each(check_entry)?;
+        if self.entries.len() + entries.len() > MAX_ENTRIES {
+            return Err(format!("more than {MAX_ENTRIES} verdicts"));
+        }
+        let entries = self.entries.iter().cloned().chain(entries).collect();
+        Ok(Self { entries })
     }
 }
 

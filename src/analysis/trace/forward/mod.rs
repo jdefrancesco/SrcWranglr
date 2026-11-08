@@ -22,7 +22,7 @@ use super::goes::{goes, through_parameter, uses_of, Goes, Use};
 use super::scope::{contains, loop_around};
 use super::sites::{CallRef, CallSites};
 use super::walk::set_by;
-use super::{Direction, Endpoint, Sink, Step, Trace, TracePath};
+use super::{last_name, Direction, Endpoint, Sink, SinkArgs, Step, Trace, TracePath};
 use crate::analysis::reach::MAIN_NAMES;
 use crate::index::syntax::{line_of, text};
 use crate::model::CodeGraph;
@@ -568,17 +568,21 @@ impl<'g> Follower<'g> {
         };
         let called = called_name(function, at.source);
         let count = arguments(call).len();
-        if risky_args(library_name(&called), count).contains(&index) {
-            if let Some(sink) = self.sink_at(at.file, call) {
-                let note = format!(
-                    "`{}` reaches `{called}()`, argument {}",
-                    snippet(value, at.source),
-                    index + 1
-                );
-                self.push(&at, note);
-                self.record(Endpoint::Sink(format!("`{called}()` ({})", sink.detail)));
-                self.trail.pop();
-            }
+        let sink = self
+            .sink_at(at.file, call, &called)
+            .filter(|sink| match sink.args {
+                SinkArgs::Risky => risky_args(library_name(&called), count).contains(&index),
+                SinkArgs::Any => true,
+            });
+        if let Some(sink) = sink {
+            let note = format!(
+                "`{}` reaches `{called}()`, argument {}",
+                snippet(value, at.source),
+                index + 1
+            );
+            self.push(&at, note);
+            self.record(Endpoint::Sink(format!("`{called}()` ({})", sink.detail)));
+            self.trail.pop();
         }
         let is_copied = self.copied(at, value, call, &called, index);
         if !is_copied {
@@ -599,8 +603,9 @@ impl<'g> Follower<'g> {
         }
     }
 
-    /// The risky call `call` is, if a finding is there.
-    fn sink_at(&self, file: &str, call: Node) -> Option<&'g Sink> {
+    /// The sink `call` (to `called`) is: a finding's call, or the one
+    /// picked.
+    fn sink_at(&self, file: &str, call: Node, called: &str) -> Option<&'g Sink> {
         let function = call.child_by_field_name("function")?;
         let name = call_name_node(function);
         let (first, last) = (call.start_position(), name.end_position());
@@ -610,8 +615,13 @@ impl<'g> Follower<'g> {
         };
         let on_line = self.sinks.get(file)?.get(&line_of(name))?;
         on_line.iter().copied().find(|s| {
-            s.column
-                .is_none_or(|c| usize::try_from(c).is_ok_and(|c| columns.contains(&c)))
+            let is_named = s
+                .name
+                .as_deref()
+                .is_none_or(|name| last_name(name) == last_name(called));
+            is_named
+                && s.column
+                    .is_none_or(|c| usize::try_from(c).is_ok_and(|c| columns.contains(&c)))
         })
     }
 

@@ -27,19 +27,21 @@ pub enum Pane {
     Findings,
     Strings,
     History,
+    Matching,
     Todos,
     Trace,
 }
 
 impl Pane {
     /// In the order the toggles are shown, left to right.
-    pub const ALL: [Pane; 8] = [
+    pub const ALL: [Pane; 9] = [
         Pane::Symbols,
         Pane::Source,
         Pane::Notes,
         Pane::Findings,
         Pane::Strings,
         Pane::History,
+        Pane::Matching,
         Pane::Todos,
         Pane::Trace,
     ];
@@ -53,6 +55,7 @@ impl Pane {
             Pane::Findings => "Findings",
             Pane::Strings => "Strings",
             Pane::History => "History",
+            Pane::Matching => "Matching",
             Pane::Todos => "TODO",
             Pane::Trace => "Trace",
         }
@@ -67,6 +70,7 @@ impl Pane {
             Pane::Findings => "Findings (risky calls)",
             Pane::Strings => "Strings in the Source",
             Pane::History => "Git History (fix commits)",
+            Pane::Matching => "Semantic Code Matching",
             Pane::Todos => "TODO List",
             Pane::Trace => "Trace Pane",
         }
@@ -168,6 +172,7 @@ impl SrcWranglrApp {
             Pane::Findings => self.findings_panel.is_open(),
             Pane::Strings => self.strings_panel.is_open(),
             Pane::History => self.history_panel.is_open(),
+            Pane::Matching => self.matching_panel.is_open(),
             Pane::Todos => self.todo_panel.is_open(),
             Pane::Trace => self.trace_panel.is_open(),
         }
@@ -183,6 +188,7 @@ impl SrcWranglrApp {
             Pane::Findings => self.findings_panel.set_open(is_shown),
             Pane::Strings => self.strings_panel.set_open(is_shown),
             Pane::History => self.history_panel.set_open(is_shown),
+            Pane::Matching => self.matching_panel.set_open(is_shown),
             Pane::Todos => self.todo_panel.set_open(is_shown),
             Pane::Trace => self.trace_panel.set_open(is_shown),
         }

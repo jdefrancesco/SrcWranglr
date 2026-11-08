@@ -9,14 +9,15 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use super::{file_history, read, FileHistory, History, Limits};
+use super::{file_history, read, FileHistory, History};
+#[cfg(not(test))]
+use crate::process::{run_process, Limits, ProcessError};
 
 /// The argument that starts the worker mode.
 pub const WORKER_ARG: &str = "--history-worker";
@@ -31,8 +32,6 @@ const PROJECT_GRACE: Duration = Duration::from_secs(30);
 const FILE_DEADLINE: Duration = Duration::from_secs(60);
 /// A worker whose app is gone exits after this, whatever it is doing.
 const WORKER_LIFETIME: Duration = Duration::from_secs(300);
-/// How often the app checks on a running worker.
-const POLL: Duration = Duration::from_millis(50);
 
 /// The history of the checkout at `root` for its `files`, read by a worker
 /// process; stopped (killed) if `stop` is set.
@@ -41,7 +40,7 @@ pub fn read_in_worker(
     files: Vec<String>,
     stop: &AtomicBool,
 ) -> Result<History, String> {
-    let deadline = Limits::default().budget + PROJECT_GRACE;
+    let deadline = super::Limits::default().budget + PROJECT_GRACE;
     ask_worker(PROJECT_MODE, root, &files, deadline, stop)
 }
 
@@ -84,7 +83,25 @@ fn exchange(
         mode.into(),
         root.as_os_str().to_owned(),
     ];
-    run_process(&program, &args, input, deadline, stop)
+    let limits = Limits {
+        deadline,
+        max_output: MAX_MESSAGE_BYTES,
+    };
+    run_process(
+        "the history reader",
+        &program,
+        &args,
+        &[],
+        input,
+        limits,
+        stop,
+    )
+    .map_err(|e| match e {
+        ProcessError::TookTooLong => {
+            "Reading the git history took too long and was stopped.".to_string()
+        }
+        other => other.to_string(),
+    })
 }
 
 /// Tests answer in-process: their program is the test runner, which has
@@ -98,65 +115,6 @@ fn exchange(
     _stop: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
     Ok(answer(mode, root, input))
-}
-
-/// Runs `program` with `args`, `input` on its stdin; its stdout once it
-/// exits. Killed if it outlives `deadline` or `stop` is set.
-pub fn run_process(
-    program: &Path,
-    args: &[OsString],
-    input: &[u8],
-    deadline: Duration,
-    stop: &AtomicBool,
-) -> Result<Vec<u8>, String> {
-    let started = Instant::now();
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Could not start the history reader: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or("No pipe to the history reader")?;
-    let input = input.to_vec();
-    // Written and read on threads of their own, so neither pipe can stall
-    // the other.
-    let writer = std::thread::spawn(move || {
-        let _ = stdin.write_all(&input);
-    });
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or("No pipe from the history reader")?;
-    let reader = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let _ = stdout
-            .by_ref()
-            .take(MAX_MESSAGE_BYTES)
-            .read_to_end(&mut out);
-        out
-    });
-    loop {
-        if stop.load(Ordering::Relaxed) || started.elapsed() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = writer.join();
-            let _ = reader.join();
-            return Err(match stop.load(Ordering::Relaxed) {
-                true => "Stopped.".into(),
-                false => "Reading the git history took too long and was stopped.".into(),
-            });
-        }
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => std::thread::sleep(POLL),
-            Err(e) => return Err(format!("Lost the history reader: {e}")),
-        }
-    }
-    let _ = writer.join();
-    reader
-        .join()
-        .map_err(|_| "Could not read the history reader's answer.".to_string())
 }
 
 /// The worker mode's main: `<mode> <root>` from `args`, the request on
@@ -193,7 +151,12 @@ pub fn answer(mode: &str, root: &Path, input: &[u8]) -> Vec<u8> {
             .map_err(|e| e.to_string())
             .and_then(|files| {
                 let files = files.into_iter().collect();
-                read(root, &files, Limits::default(), &AtomicBool::new(false))
+                read(
+                    root,
+                    &files,
+                    super::Limits::default(),
+                    &AtomicBool::new(false),
+                )
             })
             .map_or_else(
                 |e| serde_json::to_vec(&Err::<History, _>(e)),
@@ -201,7 +164,7 @@ pub fn answer(mode: &str, root: &Path, input: &[u8]) -> Vec<u8> {
             ),
         FILE_MODE => serde_json::from_slice::<String>(input)
             .map_err(|e| e.to_string())
-            .and_then(|file| file_history(root, &file, Limits::default().max_file_bytes))
+            .and_then(|file| file_history(root, &file, super::Limits::default().max_file_bytes))
             .map_or_else(
                 |e| serde_json::to_vec(&Err::<FileHistory, _>(e)),
                 |h| serde_json::to_vec(&Ok::<_, String>(h)),
@@ -215,49 +178,6 @@ pub fn answer(mode: &str, root: &Path, input: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::history::test_repo::sample;
-
-    #[cfg(unix)]
-    #[test]
-    fn a_process_past_its_deadline_is_killed() {
-        let started = Instant::now();
-        let args = ["-c".into(), "sleep 30".into()];
-        let error = run_process(
-            Path::new("/bin/sh"),
-            &args,
-            b"",
-            Duration::from_millis(200),
-            &AtomicBool::new(false),
-        )
-        .expect_err("killed");
-        assert!(error.contains("too long"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(5));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_stopped_process_is_killed_and_an_answer_is_read() {
-        let args = ["-c".into(), "sleep 30".into()];
-        let stop = AtomicBool::new(true);
-        let error = run_process(
-            Path::new("/bin/sh"),
-            &args,
-            b"",
-            Duration::from_secs(60),
-            &stop,
-        )
-        .expect_err("stopped");
-        assert_eq!(error, "Stopped.");
-        let echo = ["-c".into(), "cat".into()];
-        let out = run_process(
-            Path::new("/bin/sh"),
-            &echo,
-            b"[1,2]",
-            Duration::from_secs(10),
-            &AtomicBool::new(false),
-        )
-        .expect("ran");
-        assert_eq!(out, b"[1,2]");
-    }
 
     #[test]
     fn the_worker_answers_both_requests_as_json() {

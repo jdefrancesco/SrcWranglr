@@ -74,6 +74,16 @@ impl Todos {
         Ok(Self { items })
     }
 
+    /// The list with `todos` added at the end, if it can hold them all.
+    pub fn with_all_added(&self, todos: Vec<Todo>) -> Result<Self, String> {
+        todos.iter().try_for_each(check_todo)?;
+        if self.items.len() + todos.len() > MAX_TODOS {
+            return Err(format!("{MAX_TODOS} TODOs is the most; clear some first"));
+        }
+        let items = self.items.iter().cloned().chain(todos).collect();
+        Ok(Self { items })
+    }
+
     /// The list with TODO `index` done (or not).
     pub fn with_done(&self, index: usize, is_done: bool) -> Self {
         self.with_changed(index, |todo| Todo { is_done, ..todo })
@@ -185,7 +195,8 @@ fn is_disallowed(c: char) -> bool {
 }
 
 /// What `load` accepts: one line of text, and a line of a project file.
-fn check_todo(todo: &Todo) -> Result<(), String> {
+/// What the TODO file accepts.
+pub fn check_todo(todo: &Todo) -> Result<(), String> {
     if todo.text.is_empty() {
         return Err("a TODO needs some text".into());
     }

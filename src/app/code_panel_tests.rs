@@ -431,6 +431,101 @@ fn a_traced_path_is_marked_in_the_file_shown_only() {
 }
 
 #[test]
+fn line_menu_sets_a_variable_as_the_trace_source() {
+    let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.get_by_label("strcpy(d, s);").click_secondary();
+    harness.run();
+    assert!(harness.query_by_label_contains("to Here").is_none());
+    harness.get_by_label("Set as Trace Source").hover();
+    harness.run();
+    harness.get_by_label("s").click();
+    harness.run();
+    let Some(PanelAction::SetTraceSource(picked)) = harness.state().last_action.clone() else {
+        panic!("got {:?}", harness.state().last_action);
+    };
+    assert_eq!((picked.line, picked.column), (2, 10));
+    assert_eq!(picked.name, "s");
+}
+
+#[test]
+fn line_menu_traces_the_source_to_a_call_on_the_line() {
+    let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.state_mut().panel.set_trace_source(Some("s".into()));
+    harness.run();
+    harness.get_by_label("strcpy(d, s);").click_secondary();
+    harness.run();
+    harness.get_by_label("Trace `s` to Here").hover();
+    harness.run();
+    harness.get_by_label("strcpy()").click();
+    harness.run();
+    let Some(PanelAction::TraceToSink { line, call, .. }) = harness.state().last_action.clone()
+    else {
+        panic!("got {:?}", harness.state().last_action);
+    };
+    assert_eq!((line, call.as_str()), (2, "strcpy"));
+}
+
+#[test]
+fn line_menu_shows_the_docs_of_a_call_on_the_line() {
+    let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.get_by_label("strcpy(d, s);").click_secondary();
+    harness.run();
+    harness.get_by_label("Show Docs").hover();
+    harness.run();
+    harness.get_by_label("strcpy()").click();
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::ShowDocs("strcpy".into()))
+    );
+}
+
+#[test]
+fn hovering_a_library_call_looks_up_its_man_page_and_shows_its_summary() {
+    let source = "int f(int n) {\nreturn abs(n);\n}\n";
+    let mut harness = harness_for(source, "f");
+    let line = harness.get_by_label("return abs(n);").rect();
+    let char_width = line.width() / "return abs(n);".len() as f32;
+    let on_abs = egui::pos2(line.left() + char_width * 8.0, line.center().y);
+    harness.hover_at(on_abs);
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::LookUpDocs("abs".into()))
+    );
+    harness.get_by_label("Looking up its man page…");
+    harness
+        .state_mut()
+        .panel
+        .set_call_summary("abs".into(), Some("abs – integer absolute value".into()));
+    harness.state_mut().last_action = None;
+    harness.hover_at(on_abs);
+    harness.run();
+    harness.get_by_label("abs – integer absolute value");
+    assert_eq!(harness.state().last_action, None, "already looked up");
+}
+
+#[test]
+fn line_menu_finds_code_like_the_function_holding_the_line() {
+    let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.get_by_label("strcpy(d, s);").click_secondary();
+    harness.run();
+    harness.get_by_label("Find Code Like This Function").click();
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::FindLookAlikes {
+            file: "a.cpp".into(),
+            line: 2
+        })
+    );
+}
+
+#[test]
 fn line_menu_offers_to_find_more_like_the_line() {
     let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
     let mut harness = harness_for(source, "f");

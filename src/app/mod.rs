@@ -2,10 +2,17 @@
 //! the lifecycle of background indexing jobs.
 
 mod about;
+mod background;
+mod bundle;
+mod bundle_actions;
 mod code_panel;
+mod code_panel_actions;
 mod dangerous_editor;
 mod dangerous_lists;
 mod dialogs;
+mod docs;
+mod docs_actions;
+mod docs_view;
 mod editor;
 mod finding_view;
 mod findings;
@@ -20,6 +27,9 @@ mod history_panel;
 pub mod launch;
 mod layout;
 mod locations;
+mod matching;
+mod matching_actions;
+mod matching_panel;
 mod menus;
 mod note_editor;
 mod notebook;
@@ -69,7 +79,7 @@ use crate::analysis::reach::Reach;
 use crate::graph::{Badge, GraphView, ViewMode};
 use crate::index::job::IndexJob;
 use crate::index::{IndexError, IndexOptions, IndexOutcome};
-use code_panel::{CodePanel, PanelAction};
+use code_panel::CodePanel;
 use dangerous_lists::DangerousLists;
 use editor::SourcePosition;
 use finding_view::FindingView;
@@ -80,7 +90,7 @@ use note_editor::NoteEditor;
 use notebook::Notebook;
 use notes_panel::{NotesPanel, NotesPanelAction};
 use palette::{Command, Entry, Palette};
-use pane_bar::{Edge, Pane};
+use pane_bar::Pane;
 use project::Project;
 use survey_view::{SurveyAction, SurveyTab, SurveyView};
 use symbol_list::{SymbolList, SymbolListAction};
@@ -148,6 +158,8 @@ pub struct SrcWranglrApp {
     harness_view: Option<harness_view::HarnessView>,
     /// The Find More Like This window, while open.
     similar_view: Option<similar_view::SimilarView>,
+    /// The Docs window, and the man pages read so far.
+    docs: docs::Docs,
     /// Where the source pane sits; kept between launches.
     layout: Layout,
     /// Which functions outside input reaches, for the open project.
@@ -157,6 +169,8 @@ pub struct SrcWranglrApp {
     /// The open project's strings, each once with its places.
     strings_panel: strings_panel::StringsPanel,
     history_panel: history_panel::HistoryPanel,
+    /// Look-alike code, and functions by behavior.
+    matching_panel: matching_panel::MatchingPanel,
     /// Your settings (editor, tool folders, source colors).
     settings: settings::Settings,
     /// The Settings window, while it is open.
@@ -173,6 +187,10 @@ pub struct SrcWranglrApp {
     session_to_confirm: Option<(PathBuf, session::Session)>,
     /// The session file dialog, while it is open.
     session_dialog: Option<session_actions::SessionDialog>,
+    /// An audit bundle file dialog, while one is open.
+    bundle_dialog: Option<bundle_actions::BundleDialog>,
+    /// A bundle read, waiting for the user to import it.
+    bundle_preview: Option<Box<bundle_actions::BundlePreview>>,
     /// The open project's TODO list.
     todos: crate::notes::todo::Todos,
     /// Why the TODO file couldn't be read; the list is read-only then.
@@ -216,6 +234,7 @@ impl SrcWranglrApp {
             trace_panel: trace_panel::TracePanel::default(),
             strings_panel: strings_panel::StringsPanel::default(),
             history_panel: history_panel::HistoryPanel::default(),
+            matching_panel: matching_panel::MatchingPanel::default(),
             settings: settings::Settings::default(),
             settings_view: None,
             is_about_open: false,
@@ -223,6 +242,8 @@ impl SrcWranglrApp {
             pending_session: None,
             session_to_confirm: None,
             session_dialog: None,
+            bundle_dialog: None,
+            bundle_preview: None,
             todos: Default::default(),
             todos_error: None,
             todo_panel: todo_panel::TodoPanel::default(),
@@ -232,6 +253,7 @@ impl SrcWranglrApp {
             survey_view: SurveyView::default(),
             harness_view: None,
             similar_view: None,
+            docs: docs::Docs::default(),
             layout: Layout::load(storage),
             reach: Reach::default(),
             open_dialog: None,
@@ -382,15 +404,18 @@ impl eframe::App for SrcWranglrApp {
         let ctx = ui.ctx().clone();
         self.poll_open_dialog(&ctx);
         self.poll_session_dialog(&ctx);
+        self.poll_bundle_dialog();
         self.poll_job(&ctx);
         self.poll_tool_jobs();
         self.poll_history();
+        self.poll_docs(&ctx);
         // Global shortcuts pause while the palette or a dialog is open.
         let is_dialog_open = self.note_editor.is_some()
             || self.finding_view.is_some()
             || self.dangerous_editor.is_some()
             || self.settings_view.is_some()
-            || self.session_to_confirm.is_some();
+            || self.session_to_confirm.is_some()
+            || self.bundle_preview.is_some();
         if !self.palette.is_open() && !is_dialog_open {
             self.handle_global_shortcuts(&ctx);
         }
@@ -413,6 +438,7 @@ impl eframe::App for SrcWranglrApp {
         self.show_settings_view(&ctx);
         about::show(&ctx, &mut self.is_about_open);
         self.show_session_confirm(&ctx);
+        self.show_bundle_preview(&ctx);
         let survey = self
             .survey_view
             .show(&ctx, &self.project.name, &self.project.graph);
@@ -427,6 +453,7 @@ impl eframe::App for SrcWranglrApp {
         }
         self.show_harness_view(&ctx);
         self.show_similar_view(&ctx);
+        self.show_docs_window(&ctx);
         let notes = if self.palette.is_open() {
             self.note_candidates()
         } else {
@@ -471,6 +498,7 @@ impl SrcWranglrApp {
         }
         self.show_strings_panel(ui);
         self.show_history_panel(ui);
+        self.show_matching_panel(ui);
         self.show_trace_panel(ui);
         self.show_code_panel(ui);
         egui::CentralPanel::default().show(ui, |ui| {
@@ -532,6 +560,8 @@ impl SrcWranglrApp {
             Command::Settings => self.open_settings(),
             Command::SaveSession => self.save_session_dialog(ctx),
             Command::OpenSession => self.open_session_dialog(ctx),
+            Command::ExportBundle => self.export_bundle_dialog(ctx),
+            Command::ImportBundle => self.import_bundle_dialog(ctx),
             Command::About => self.is_about_open = true,
             Command::EditNote => {
                 if let Some(target) = self.selected_target() {
@@ -629,51 +659,12 @@ impl SrcWranglrApp {
         let action = shown.and_then(|shown| shown.inner);
         let is_hidden = !is_shown || action == Some(SymbolListAction::Hide);
         self.layout = self.layout.with_symbols_shown(!is_hidden);
-        if let Some(SymbolListAction::Select(id)) = action {
-            self.graph_view.select(id);
+        match action {
+            Some(SymbolListAction::Select(id)) => self.graph_view.select(id),
+            Some(SymbolListAction::ShowDocs(id)) => self.show_symbol_docs(id),
+            Some(SymbolListAction::FindLike(id)) => self.find_code_like(id, ui.ctx()),
+            Some(SymbolListAction::Hide) | None => {}
         }
-    }
-
-    fn show_code_panel(&mut self, ui: &mut egui::Ui) {
-        if !self.layout.is_source_shown {
-            return;
-        }
-        let layout = self.layout;
-        let (layout, ()) = layout.show_source_pane(ui, |ui| {
-            let selected = self.graph_view.selected();
-            let edge = match layout.source {
-                SourcePlacement::Beside => Edge::Right,
-                SourcePlacement::Below => Edge::Bottom,
-            };
-            let action = self.code_panel.show(
-                ui,
-                &self.project.graph,
-                selected,
-                &self.notebook,
-                &self.findings,
-                edge,
-            );
-            match action {
-                Some(PanelAction::Hide) => self.layout = self.layout.with_source_shown(false),
-                Some(PanelAction::Explore(id)) => self.graph_view.select(id),
-                Some(PanelAction::OpenInEditor) => self.open_in_editor(),
-                Some(PanelAction::ToggleBookmark(target)) => self.toggle_bookmark(target),
-                Some(PanelAction::EditNote(target)) => self.edit_note(target),
-                Some(PanelAction::ShowFinding(id)) => self.explain_finding(id),
-                Some(PanelAction::MarkDangerous(name)) => self.mark_dangerous(&name),
-                Some(PanelAction::AddTodo { file, line }) => self.todo_panel.add_here(file, line),
-                Some(PanelAction::FindSimilar { file, line }) => self.find_similar(&file, line),
-                Some(PanelAction::Trace { file, line, column }) => {
-                    self.trace_variable(&file, line, column);
-                }
-                Some(PanelAction::TraceForward { file, line, column }) => {
-                    self.trace_forward(&file, line, column);
-                }
-                None => {}
-            }
-        });
-        // Kept hidden if its arrow was clicked.
-        self.layout = layout.with_source_shown(self.layout.is_source_shown);
     }
 
     fn show_warnings_window(&mut self, ctx: &egui::Context) {

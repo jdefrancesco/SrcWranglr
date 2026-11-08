@@ -5,6 +5,7 @@
 //! Syntax colouring uses a small hand-written tokenizer (`tokenize`);
 //! symbol-aware decoration comes from the index's occurrences.
 
+mod line_menu;
 pub mod scheme;
 mod segments;
 mod tokenize;
@@ -12,7 +13,8 @@ mod variables;
 
 use crate::app::visible::{visible, visible_lines};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
 use std::sync::Arc;
@@ -22,10 +24,10 @@ use egui::{Color32, CursorIcon, Response, RichText, Sense, Stroke};
 
 use crate::model::{CodeGraph, EdgeKind, Occurrence, OccurrenceRole, Span, SymbolId};
 use crate::style::{BOOKMARK_COLOR, MARK_OUTLINE, NOTE_COLOR, TRAIL_COLOR};
+use line_menu::{line_menu, MenuContext};
 use scheme::SourceColors;
 use segments::{merge, overlay_risks, Mark, Segment};
 use tokenize::colored_ranges;
-use variables::variables_in;
 
 const LINK_UNDERLINE_ALPHA: f32 = 0.35;
 /// Risky snippets: a tint of their severity color, underlined.
@@ -66,6 +68,11 @@ pub struct Focus<'a> {
     pub risks: &'a BTreeMap<u32, Vec<RiskSpan<'a>>>,
     /// Where the steps of the trace path shown are in `file`.
     pub trail: &'a [Span],
+    /// The variable picked as the source of a trace to a sink, if any.
+    pub trace_source: Option<&'a str>,
+    /// Man page summaries of library functions, by name: `None` where this
+    /// system has no page. Names missing aren't looked up yet.
+    pub call_summaries: Option<&'a HashMap<String, Option<String>>>,
     /// The color scheme to draw with.
     pub colors: SourceColors,
 }
@@ -114,6 +121,18 @@ pub enum LineAction {
     AddTodo,
     /// Draft a semgrep rule finding code like this line.
     FindSimilar,
+    /// List the functions most like the one holding this line.
+    FindLookAlikes,
+    /// Make the variable `name` at this byte column the source of a trace
+    /// to a sink.
+    SetTraceSource {
+        column: u32,
+        name: String,
+    },
+    /// Trace from the source picked to the call to this function here.
+    TraceToHere(String),
+    /// Show the docs for this function called here.
+    ShowDocs(String),
 }
 
 /// Something the user did in the code view.
@@ -125,6 +144,9 @@ pub enum CodeEvent {
     Line(u32, LineAction),
     /// Clicked a risky snippet: the `RiskSpan::id`.
     Risk(usize),
+    /// Hovering a call to a library function whose man page isn't looked
+    /// up yet: its name as looked up.
+    HoveredCall(String),
 }
 
 /// Source viewer. Keeps the line index of the file it last showed, so
@@ -135,6 +157,9 @@ pub struct CodeView {
     lines: Vec<Range<usize>>,
     /// Rows drawn last frame (0-based), for the cached file.
     visible_rows: Range<usize>,
+    /// The doc brief of the symbol last hovered, in the graph at that
+    /// address: finding it scans the project, too slow for every frame.
+    hovered_brief: RefCell<Option<(SymbolId, usize, Option<String>)>>,
 }
 
 /// Per-frame inputs shared by every row.
@@ -144,6 +169,7 @@ struct Rows<'a> {
     contents: &'a str,
     font: egui::FontId,
     row_height: f32,
+    hovered_brief: &'a RefCell<Option<(SymbolId, usize, Option<String>)>>,
 }
 
 impl CodeView {
@@ -170,6 +196,7 @@ impl CodeView {
             contents,
             font: egui::TextStyle::Monospace.resolve(ui.style()),
             row_height: ui.text_style_height(&egui::TextStyle::Monospace),
+            hovered_brief: &self.hovered_brief,
         };
         let mut area = egui::ScrollArea::both()
             .id_salt(focus.file)
@@ -271,8 +298,13 @@ impl Rows<'_> {
             };
             let (event, code) = self.show_code(ui, &line);
             let calls = self.calls_on_line(line_no);
-            let action = line_menu(&gutter, &shown, mark, &calls)
-                .or_else(|| line_menu(&code, &shown, mark, &calls));
+            let menu = MenuContext {
+                shown: &shown,
+                mark,
+                calls: &calls,
+                trace_source: self.focus.trace_source,
+            };
+            let action = line_menu(&gutter, &menu).or_else(|| line_menu(&code, &menu));
             action.map(|a| CodeEvent::Line(line_no, a)).or(event)
         })
         .inner
@@ -329,22 +361,81 @@ impl Rows<'_> {
                 });
             return response.clicked().then_some(CodeEvent::Risk(risk.id));
         }
-        let hit = *occurrence_at_x(line.occurrences, line.visible_len, pointer_x, x_of)?;
+        let Some(hit) = name.copied() else {
+            return self.library_call_hover(response, line, pointer_x, x_of);
+        };
         let symbol = self.graph.symbols.get(&hit.symbol)?;
+        let brief = self.brief_of(symbol.id);
         let response = response
             .clone()
             .on_hover_cursor(CursorIcon::PointingHand)
             .on_hover_ui_at_pointer(|ui| {
-                ui.strong(&symbol.qualified_name);
-                ui.label(format!(
+                ui.strong(visible(&symbol.qualified_name));
+                ui.label(visible(&format!(
                     "{} · {}:{}",
                     symbol.kind.label(),
                     symbol.file,
                     symbol.line
-                ));
-                ui.weak("click to explore");
+                )));
+                if let Some(brief) = &brief {
+                    ui.label(visible_lines(brief));
+                }
+                ui.weak("click to explore · right-click › Show Docs");
             });
         response.clicked().then_some(CodeEvent::Clicked(hit))
+    }
+
+    /// The first sentence of `id`'s doc comment, remembered for the symbol
+    /// last asked about.
+    fn brief_of(&self, id: SymbolId) -> Option<String> {
+        let graph_at = std::ptr::from_ref(self.graph) as usize;
+        let mut cached = self.hovered_brief.borrow_mut();
+        if let Some((symbol, at, brief)) = cached.as_ref() {
+            if *symbol == id && *at == graph_at {
+                return brief.clone();
+            }
+        }
+        let brief = crate::docs::symbol_brief(self.graph, id);
+        *cached = Some((id, graph_at, brief.clone()));
+        brief
+    }
+
+    /// Explains the library call under the pointer with its man page's
+    /// summary; asks for the page if it isn't looked up yet.
+    fn library_call_hover(
+        &self,
+        response: &Response,
+        line: &DrawnLine,
+        pointer_x: f32,
+        x_of: impl Fn(usize) -> f32,
+    ) -> Option<CodeEvent> {
+        let calls = self
+            .graph
+            .external_calls_on_line(self.focus.file, line.line_no);
+        let call = calls.iter().find(|c| {
+            let range = byte_range(c.span, line.visible_len);
+            !range.is_empty() && (x_of(range.start)..x_of(range.end)).contains(&pointer_x)
+        })?;
+        let name = crate::docs::man::lookup_name(&call.name)?;
+        let summary = self.focus.call_summaries.and_then(|s| s.get(name));
+        response.clone().on_hover_ui_at_pointer(|ui| {
+            ui.strong(format!("{name}()"));
+            match summary {
+                Some(Some(summary)) => {
+                    ui.label(summary);
+                }
+                Some(None) => {
+                    ui.weak("This system has no man page for it.");
+                }
+                None => {
+                    ui.weak("Looking up its man page…");
+                }
+            }
+            ui.weak("right-click › Show Docs for the whole page");
+        });
+        summary
+            .is_none()
+            .then(|| CodeEvent::HoveredCall(name.to_string()))
     }
 
     /// Names of the functions called on `line`: the project's and others.
@@ -463,112 +554,6 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
         });
     }
     gutter.on_hover_text(explanations.join("\n\n"))
-}
-
-/// The right-click menu of a line (on its number or its code).
-fn line_menu(
-    response: &Response,
-    shown: &str,
-    mark: Option<&LineMark>,
-    calls: &[&str],
-) -> Option<LineAction> {
-    let has_note = mark.is_some_and(|m| !m.note.is_empty());
-    let is_starred = mark.is_some_and(|m| m.is_starred);
-    let mut action = None;
-    response.context_menu(|ui| {
-        if ui.button("Copy Line").clicked() {
-            ui.ctx().copy_text(shown.to_string());
-            ui.close();
-        }
-        ui.separator();
-        let note = if has_note {
-            "Edit Note…"
-        } else {
-            "Add Note…"
-        };
-        let star = if is_starred {
-            "Remove Bookmark"
-        } else {
-            "Bookmark Line"
-        };
-        if ui.button(note).clicked() {
-            action = Some(LineAction::EditNote);
-        }
-        if ui.button(star).clicked() {
-            action = Some(LineAction::ToggleBookmark);
-        }
-        if ui.button("Add TODO Here…").clicked() {
-            action = Some(LineAction::AddTodo);
-        }
-        let similar = ui
-            .button("Find More Like This…")
-            .on_hover_text("Draft a semgrep rule matching code like this line, and test it");
-        if similar.clicked() {
-            action = Some(LineAction::FindSimilar);
-        }
-        if let Some(traced) = trace_menu(ui, shown) {
-            action = Some(traced);
-        }
-        if !calls.is_empty() {
-            ui.separator();
-            ui.menu_button("Mark as Dangerous", |ui| {
-                for name in calls {
-                    if ui.button(*name).clicked() {
-                        action = Some(LineAction::MarkDangerous(name.to_string()));
-                    }
-                }
-            });
-        }
-        if action.is_some() {
-            ui.close();
-        }
-    });
-    action
-}
-
-/// The line menu's trace submenus: the variables on the line, to trace
-/// back to where each gets its value or forward to where it goes.
-fn trace_menu(ui: &mut egui::Ui, shown: &str) -> Option<LineAction> {
-    let variables = variables_in(shown);
-    if variables.is_empty() {
-        return None;
-    }
-    ui.separator();
-    let back = variable_menu(
-        ui,
-        "Trace Where It Comes From",
-        &variables,
-        |name| format!("Follow where `{name}` gets its value, back to outside input"),
-        LineAction::Trace,
-    );
-    let forward = variable_menu(
-        ui,
-        "Trace Where It Goes",
-        &variables,
-        |name| format!("Follow where the value of `{name}` goes, on to risky calls"),
-        LineAction::TraceForward,
-    );
-    back.or(forward)
-}
-
-/// A submenu listing `variables`; picking one is `action` at its column.
-fn variable_menu(
-    ui: &mut egui::Ui,
-    title: &str,
-    variables: &[(String, usize)],
-    hint: fn(&str) -> String,
-    action: fn(u32) -> LineAction,
-) -> Option<LineAction> {
-    ui.menu_button(title, |ui| {
-        variables.iter().find_map(|(name, column)| {
-            let item = ui.button(name.as_str()).on_hover_text(hint(name));
-            item.clicked()
-                .then(|| u32::try_from(*column).ok().map(action))
-                .flatten()
-        })
-    })
-    .inner
-    .flatten()
 }
 
 fn byte_range(span: Span, visible_len: usize) -> Range<usize> {

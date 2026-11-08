@@ -1,7 +1,7 @@
 //! The bottom panel: a header listing where the selected symbol appears
 //! (◀ 3 / 12 ▶ · call in `Foo::bar`), above the source at that location.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use egui::RichText;
 
@@ -9,6 +9,7 @@ use super::findings::Findings;
 use super::locations::LocationCursor;
 use super::notebook::Notebook;
 use super::pane_bar::{self, Edge};
+use super::session::TraceSource;
 use crate::code_view::scheme::{Scheme, SourceColors};
 use crate::code_view::{CodeEvent, CodeView, Focus, LineAction, LineMark, LineWarning, RiskSpan};
 use crate::model::{CodeGraph, Location, OccurrenceRole, Span, Symbol, SymbolId};
@@ -59,6 +60,21 @@ pub enum PanelAction {
         line: u32,
         column: u32,
     },
+    /// Make the variable `name` at `file:line`, byte `column`, the source
+    /// of a trace to a sink.
+    SetTraceSource(TraceSource),
+    /// Trace from the source picked to the call to `call` at `file:line`.
+    TraceToSink {
+        file: String,
+        line: u32,
+        call: String,
+    },
+    /// Show the docs for the function `name`.
+    ShowDocs(String),
+    /// List the functions most like the one holding `file:line`.
+    FindLookAlikes { file: String, line: u32 },
+    /// Look up the man page of the library function `name`, hovered.
+    LookUpDocs(String),
     /// Its hide arrow was clicked.
     Hide,
 }
@@ -93,6 +109,10 @@ pub struct CodePanel {
     scheme: Scheme,
     /// Where the steps of the trace path shown are, by file.
     trail: Vec<(String, Span)>,
+    /// The variable picked as the source of a trace to a sink, if any.
+    trace_source: Option<String>,
+    /// Library functions' man page summaries, for hovering their calls.
+    call_summaries: HashMap<String, Option<String>>,
 }
 
 impl CodePanel {
@@ -165,6 +185,22 @@ impl CodePanel {
             CodeEvent::Line(line, LineAction::TraceForward(column)) => {
                 Some(PanelAction::TraceForward { file, line, column })
             }
+            CodeEvent::Line(line, LineAction::SetTraceSource { column, name }) => {
+                Some(PanelAction::SetTraceSource(TraceSource {
+                    file,
+                    line,
+                    column,
+                    name,
+                }))
+            }
+            CodeEvent::Line(line, LineAction::TraceToHere(call)) => {
+                Some(PanelAction::TraceToSink { file, line, call })
+            }
+            CodeEvent::Line(_, LineAction::ShowDocs(name)) => Some(PanelAction::ShowDocs(name)),
+            CodeEvent::Line(line, LineAction::FindLookAlikes) => {
+                Some(PanelAction::FindLookAlikes { file, line })
+            }
+            CodeEvent::HoveredCall(name) => Some(PanelAction::LookUpDocs(name)),
             CodeEvent::Line(line, LineAction::AddTodo) => Some(PanelAction::AddTodo { file, line }),
             CodeEvent::Line(line, LineAction::FindSimilar) => {
                 Some(PanelAction::FindSimilar { file, line })
@@ -177,6 +213,10 @@ impl CodePanel {
                     LineAction::MarkDangerous(name) => PanelAction::MarkDangerous(name),
                     LineAction::Trace(_)
                     | LineAction::TraceForward(_)
+                    | LineAction::SetTraceSource { .. }
+                    | LineAction::TraceToHere(_)
+                    | LineAction::ShowDocs(_)
+                    | LineAction::FindLookAlikes
                     | LineAction::AddTodo
                     | LineAction::FindSimilar => return None,
                 })
@@ -214,6 +254,24 @@ impl CodePanel {
     /// clears them.
     pub fn set_trail(&mut self, trail: Vec<(String, Span)>) {
         self.trail = trail;
+    }
+
+    /// Keeps `summary` as what hovering a call to the library function
+    /// `name` shows (`None`: this system has no page for it).
+    pub fn set_call_summary(&mut self, name: String, summary: Option<String>) {
+        self.call_summaries.insert(name, summary);
+    }
+
+    /// What hovering a call to `name` shows, if it was handed over.
+    #[cfg(test)]
+    pub fn call_summary(&self, name: &str) -> Option<&Option<String>> {
+        self.call_summaries.get(name)
+    }
+
+    /// Offers tracing from the variable `name` to the calls on a line,
+    /// while it is the source picked (`None`: no source is).
+    pub fn set_trace_source(&mut self, name: Option<String>) {
+        self.trace_source = name;
     }
 
     /// Where the trace path's steps are in `file`.
@@ -262,6 +320,8 @@ impl CodePanel {
                 line_marks: &line_marks,
                 risks: &risks,
                 trail: &[],
+                trace_source: None,
+                call_summaries: None,
                 colors: SourceColors::default(),
             },
             None => focus_for(symbol, location, self.should_scroll, &line_marks, &risks),
@@ -269,6 +329,8 @@ impl CodePanel {
         let focus = Focus {
             colors: self.scheme.colors(),
             trail: &trail,
+            trace_source: self.trace_source.as_deref(),
+            call_summaries: Some(&self.call_summaries),
             ..focus
         };
         let event = self.view.show(ui, graph, &focus);
@@ -508,6 +570,8 @@ fn focus_for<'a>(
             line_marks,
             risks,
             trail: &[],
+            trace_source: None,
+            call_summaries: None,
             colors: SourceColors::default(),
         },
         None => Focus {
@@ -519,6 +583,8 @@ fn focus_for<'a>(
             line_marks,
             risks,
             trail: &[],
+            trace_source: None,
+            call_summaries: None,
             colors: SourceColors::default(),
         },
     }

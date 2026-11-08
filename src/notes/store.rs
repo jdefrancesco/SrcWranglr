@@ -49,8 +49,8 @@ struct NotesFile {
 }
 
 /// One note: `symbol`, or `file` + `line`.
-#[derive(Debug, Serialize, Deserialize)]
-struct NoteEntry {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     symbol: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,7 +162,8 @@ fn io_error(path: &Path, error: &std::io::Error) -> NotesError {
     }
 }
 
-fn to_entry(note: &Note) -> NoteEntry {
+/// `note` as stored in a file.
+pub fn to_entry(note: &Note) -> NoteEntry {
     let (symbol, file, line) = match &note.target {
         NoteTarget::Symbol(name) => (Some(name.clone()), None, None),
         NoteTarget::Line { file, line } => (None, Some(file.clone()), Some(*line)),
@@ -179,7 +180,8 @@ fn to_entry(note: &Note) -> NoteEntry {
     }
 }
 
-fn to_note(entry: NoteEntry) -> Result<Note, String> {
+/// The note a stored entry holds, if it is one the notes file accepts.
+pub fn to_note(entry: NoteEntry) -> Result<Note, String> {
     let target = match (entry.symbol, entry.file, entry.line) {
         (Some(symbol), None, None) => NoteTarget::Symbol(symbol),
         (None, Some(file), Some(line)) => NoteTarget::Line { file, line },

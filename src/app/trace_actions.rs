@@ -1,8 +1,8 @@
 //! What the app does with traces: running one from a finding or from a
-//! variable picked in the source (back to where it comes from, or forward
-//! to where it goes), and showing its steps.
+//! variable picked in the source (back to where it comes from, forward to
+//! where it goes, or to a sink picked after it), and showing its steps.
 
-use super::session::TraceStart;
+use super::session::{TraceSource, TraceStart};
 use super::trace_panel::TracePanelAction;
 use super::{SrcWranglrApp, Status};
 use crate::analysis::trace::{self, Sink, Step, Trace};
@@ -41,28 +41,74 @@ impl SrcWranglrApp {
         });
     }
 
-    fn run_trace(&mut self, start: TraceStart) {
+    /// Makes `source` the variable a trace to a sink starts from (`None`:
+    /// forgets the one picked).
+    pub(super) fn set_trace_source(&mut self, source: Option<TraceSource>) {
+        if let Some(source) = &source {
+            self.status = Status::Info(format!(
+                "Source: {}. Now right-click the call it should reach and pick Trace `{}` to \
+                 Here.",
+                source.label(),
+                source.name
+            ));
+        }
+        let name = source.as_ref().map(|s| s.name.clone());
+        self.trace_panel.set_source(source);
+        self.code_panel.set_trace_source(name);
+    }
+
+    /// Traces from the source picked to the call to `call` at `file:line`,
+    /// into the Trace pane; the source is then forgotten.
+    pub(super) fn trace_to_sink(&mut self, file: &str, line: u32, call: &str) {
+        let Some(source) = self.trace_panel.source().cloned() else {
+            self.status = Status::Info(
+                "Pick a source first: right-click a variable, then Set as Trace Source.".into(),
+            );
+            return;
+        };
+        let is_traced = self.run_trace(TraceStart::Between {
+            file: source.file,
+            line: source.line,
+            column: source.column,
+            sink_file: file.to_string(),
+            sink_line: line,
+            sink_call: call.to_string(),
+        });
+        // Kept when nothing was traced, so it needn't be picked again.
+        if is_traced {
+            self.set_trace_source(None);
+        }
+    }
+
+    /// Runs the trace `start` into the Trace pane. Whether there was one.
+    fn run_trace(&mut self, start: TraceStart) -> bool {
         match self.traced(&start) {
             Some(found) => {
                 let subject = &found.subject;
                 let what = match start {
                     TraceStart::Forward { .. } => format!("where {subject} goes"),
-                    TraceStart::Call { .. } | TraceStart::Variable { .. } => subject.clone(),
+                    TraceStart::Call { .. }
+                    | TraceStart::Variable { .. }
+                    | TraceStart::Between { .. } => subject.clone(),
                 };
                 self.status = Status::Info(format!("Traced {what} in the Trace pane."));
                 self.trace_panel.open(found, start);
                 self.code_panel.set_trail(Vec::new());
+                true
             }
             None => {
                 let missing = match start {
                     TraceStart::Call { .. } => {
                         "No call was found where this finding is, so nothing was traced."
                     }
-                    TraceStart::Variable { .. } | TraceStart::Forward { .. } => {
+                    TraceStart::Variable { .. }
+                    | TraceStart::Forward { .. }
+                    | TraceStart::Between { .. } => {
                         "That isn't a variable inside a function, so nothing was traced."
                     }
                 };
                 self.status = Status::Info(missing.to_string());
+                false
             }
         }
     }
@@ -94,6 +140,17 @@ impl SrcWranglrApp {
                     .collect();
                 trace::trace_forward(graph, &sinks, file, *line, *column)
             }
+            TraceStart::Between {
+                file,
+                line,
+                column,
+                sink_file,
+                sink_line,
+                sink_call,
+            } => {
+                let sink = Sink::picked(sink_file, *sink_line, sink_call);
+                trace::trace_between(graph, file, *line, *column, &sink)
+            }
         }
     }
 
@@ -113,6 +170,7 @@ impl SrcWranglrApp {
                 self.trace_panel.close();
                 self.code_panel.set_trail(Vec::new());
             }
+            Some(TracePanelAction::ClearSource) => self.set_trace_source(None),
             None => {}
         }
     }
@@ -222,6 +280,57 @@ mod tests {
         assert!(!super::is_about_a_call(&finding(
             crate::analysis::silenced::TOOL
         )));
+    }
+
+    fn argv_source() -> TraceSource {
+        TraceSource {
+            file: "user.c".into(),
+            line: 6,
+            column: "load_user(".len() as u32,
+            name: "argv".into(),
+        }
+    }
+
+    #[test]
+    fn a_source_then_a_sink_traces_between_them_and_forgets_the_source() {
+        let mut app = app();
+        app.set_trace_source(Some(argv_source()));
+        assert!(app.trace_panel.is_open(), "the pane shows the source");
+        assert_eq!(app.trace_panel.source(), Some(&argv_source()));
+        app.trace_to_sink("user.c", 3, "strcpy");
+        assert!(matches!(
+            app.trace_panel.start(),
+            Some(TraceStart::Between { sink_line: 3, .. })
+        ));
+        assert_eq!(app.trace_panel.source(), None);
+        let start = app.trace_panel.start().cloned().expect("a start");
+        let trace = app.traced(&start).expect("a trace");
+        assert_eq!(trace.direction, trace::Direction::Between);
+        assert!(
+            trace.paths.iter().any(|p| p.endpoint.is_sink()),
+            "{trace:#?}"
+        );
+    }
+
+    #[test]
+    fn a_sink_without_a_source_says_what_to_do_first() {
+        let mut app = app();
+        app.trace_to_sink("user.c", 3, "strcpy");
+        assert!(app.trace_panel.start().is_none());
+        let Status::Info(text) = &app.status else {
+            panic!("expected info");
+        };
+        assert!(text.contains("Set as Trace Source"), "{text}");
+    }
+
+    #[test]
+    fn a_source_is_cleared_but_kept_when_a_trace_is_closed() {
+        let mut app = app();
+        app.set_trace_source(Some(argv_source()));
+        app.trace_panel.close();
+        assert_eq!(app.trace_panel.source(), Some(&argv_source()));
+        app.set_trace_source(None);
+        assert_eq!(app.trace_panel.source(), None);
     }
 
     #[test]

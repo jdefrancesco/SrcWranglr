@@ -76,6 +76,20 @@ impl SrcWranglrApp {
         if ui.add_enabled(can_save_session, save_session).clicked() {
             return Some(Command::SaveSession);
         }
+        let export = egui::Button::new(Command::ExportBundle.label());
+        let export = ui.add_enabled(can_save_session, export).on_hover_text(
+            "Your notes, bookmarks, TODOs, verdicts and place, in one file to share",
+        );
+        if export.clicked() {
+            return Some(Command::ExportBundle);
+        }
+        let import = egui::Button::new(Command::ImportBundle.label());
+        let import = ui
+            .add_enabled(can_save_session, import)
+            .on_hover_text("Merge someone's audit bundle into this project's");
+        if import.clicked() {
+            return Some(Command::ImportBundle);
+        }
         ui.separator();
         let can_reindex = self.project.root.is_some() && self.job.is_none();
         if ui
@@ -194,7 +208,7 @@ impl SrcWranglrApp {
         if ui.add(findings).clicked() {
             return Some(command);
         }
-        for pane in [Pane::Strings, Pane::History] {
+        for pane in [Pane::Strings, Pane::History, Pane::Matching] {
             let command = Command::TogglePane(pane);
             if ui.button(command.label()).clicked() {
                 return Some(command);

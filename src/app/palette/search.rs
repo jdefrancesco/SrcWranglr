@@ -38,6 +38,8 @@ pub enum Command {
     Settings,
     SaveSession,
     OpenSession,
+    ExportBundle,
+    ImportBundle,
     About,
     Back,
     Fit,
@@ -51,7 +53,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 39] = [
+    pub const ALL: [Command; 42] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -64,6 +66,7 @@ impl Command {
         Command::TogglePane(Pane::Findings),
         Command::TogglePane(Pane::Strings),
         Command::TogglePane(Pane::History),
+        Command::TogglePane(Pane::Matching),
         Command::MarkDangerous,
         Command::TrustProject,
         Command::RunSemgrep,
@@ -72,6 +75,8 @@ impl Command {
         Command::Settings,
         Command::SaveSession,
         Command::OpenSession,
+        Command::ExportBundle,
+        Command::ImportBundle,
         Command::TogglePane(Pane::Todos),
         Command::TogglePane(Pane::Trace),
         Command::About,
@@ -113,6 +118,8 @@ impl Command {
             Command::Settings => "Settings…",
             Command::SaveSession => "Save Session As…",
             Command::OpenSession => "Open Session…",
+            Command::ExportBundle => "Export Audit Bundle…",
+            Command::ImportBundle => "Import Audit Bundle…",
             Command::About => "About SrcWranglr",
             Command::Back => "Go Back",
             Command::Fit => "Fit Graph to Window",

@@ -130,6 +130,19 @@ impl Notebook {
         self.save().map(|()| is_starred)
     }
 
+    /// Replaces every note with `notes` (yours with an import merged in)
+    /// and saves; nothing changes if they can't be saved.
+    pub fn replace_all(&mut self, project: &Project, notes: Notes) -> Result<(), String> {
+        self.check_writable()?;
+        let before = std::mem::replace(&mut self.notes, notes);
+        if let Err(error) = self.save() {
+            self.notes = before;
+            return Err(error);
+        }
+        self.refresh_marks(project);
+        Ok(())
+    }
+
     fn check_writable(&self) -> Result<(), String> {
         match &self.load_error {
             Some(error) => Err(format!(
@@ -273,7 +286,7 @@ mod tests {
         };
         book.set(&project, at(4), "entry", false).expect("set");
         // Pretend the file gained two lines on top since the note was made.
-        let mut graph = project.graph.clone();
+        let mut graph = (*project.graph).clone();
         let source = graph.file_contents["main.cpp"].clone();
         graph
             .file_contents

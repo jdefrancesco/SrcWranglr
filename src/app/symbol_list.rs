@@ -135,6 +135,10 @@ fn kind_rank(kind: SymbolKind) -> u8 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolListAction {
     Select(SymbolId),
+    /// Show the symbol's docs (its right-click menu).
+    ShowDocs(SymbolId),
+    /// List the functions most like it (its right-click menu).
+    FindLike(SymbolId),
     /// Its hide arrow was clicked.
     Hide,
 }
@@ -186,6 +190,8 @@ impl SymbolList {
         let row_height = ui.spacing().interact_size.y;
         let family = self.font.family();
         let mut clicked = None;
+        let mut docs = None;
+        let mut like = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_rows(ui, row_height, self.rows.len(), |ui, range| {
@@ -201,12 +207,25 @@ impl SymbolList {
                         row_label(symbol, self.query.sort, project)
                     );
                     let label = egui::RichText::new(label).family(family.clone());
-                    if ui.selectable_label(selected == Some(*id), label).clicked() {
+                    let row = ui.selectable_label(selected == Some(*id), label);
+                    if row.clicked() {
                         clicked = Some(*id);
                     }
+                    row.context_menu(|ui| {
+                        if ui.button("Show Docs").clicked() {
+                            docs = Some(*id);
+                            ui.close();
+                        }
+                        if ui.button("Find Code Like This").clicked() {
+                            like = Some(*id);
+                            ui.close();
+                        }
+                    });
                 }
             });
-        clicked.map(SymbolListAction::Select)
+        docs.map(SymbolListAction::ShowDocs)
+            .or(like.map(SymbolListAction::FindLike))
+            .or(clicked.map(SymbolListAction::Select))
     }
 
     /// The heading, filter and sort controls. Returns whether the hide
@@ -297,6 +316,35 @@ mod tests {
             sort,
             kinds,
         }
+    }
+
+    #[test]
+    fn a_row_s_right_click_menu_shows_its_docs() {
+        use egui_kittest::kittest::Queryable;
+        let project = demo();
+        let mut list = SymbolList::default();
+        list.refresh(&project);
+        let first = list.rows[0];
+        let notebook = Notebook::open(&project);
+        let label = format!(
+            "{}{}",
+            mark_prefix(&notebook, first),
+            row_label(&project.graph.symbols[&first], list.query.sort, &project)
+        );
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
+            |ui, picked: &mut Option<SymbolListAction>| {
+                if let Some(action) = list.show(ui, &project, None, &notebook) {
+                    *picked = Some(action);
+                }
+            },
+            None,
+        );
+        harness.run();
+        harness.get_by_label(&label).click_secondary();
+        harness.run();
+        harness.get_by_label("Show Docs").click();
+        harness.run();
+        assert_eq!(*harness.state(), Some(SymbolListAction::ShowDocs(first)));
     }
 
     #[test]

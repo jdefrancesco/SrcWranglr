@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::demo::demo_codebase;
 use crate::model::{CodeGraph, EdgeKind, Symbol, SymbolId};
@@ -11,7 +12,8 @@ pub struct Project {
     pub name: String,
     /// Folder it was indexed from; `None` for the built-in demo.
     pub root: Option<PathBuf>,
-    pub graph: CodeGraph,
+    /// Shared, so work in the background can read it without a copy.
+    pub graph: Arc<CodeGraph>,
     /// All symbol ids sorted by qualified name (computed once, not per frame).
     sorted_ids: Vec<SymbolId>,
     /// `(id, qualified name)` in name order, for quick-open search.
@@ -47,7 +49,7 @@ impl Project {
         Self {
             name: name.into(),
             root,
-            graph,
+            graph: Arc::new(graph),
             sorted_ids,
             search_names,
             usage,
