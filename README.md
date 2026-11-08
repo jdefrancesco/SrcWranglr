@@ -153,7 +153,7 @@ A path means the value *may* go that way:
 
 ### Panes
 
-The source pane sits beside the graph; **⌘⇧L / Ctrl+Shift+L** moves it below. Show or hide any pane with the buttons at the top right of the window (**Symbols**, **Source**, **Notes**, **Findings**, **TODO**, **Trace**), or hide one with the arrow in its heading. Side panes slide in and out, and dragging one shut hides it too.
+The source pane sits beside the graph; **⌘⇧L / Ctrl+Shift+L** moves it below. Show or hide any pane with the buttons at the top right of the window (**Symbols**, **Source**, **Notes**, **Findings**, **Strings**, **TODO**, **Trace**), or hide one with the arrow in its heading. Side panes slide in and out, and dragging one shut hides it too.
 
 ### Sessions
 
@@ -170,6 +170,13 @@ Reopening a project puts you back where you were:
 **TODO** at the top right (or **Go → TODO List**) opens a lightweight list for the project, saved next to its notes in `.srcwranglr/todo.json`:
 - Type a TODO and press Enter. Tick it when done, double-click it to edit, and **Clear Done** to tidy up.
 - Right-click a line of code, then **Add TODO Here…**, to write one about that line. Its `file:line` link takes you back there.
+
+### Strings
+
+**Strings** at the top right (or **Analyze → Strings in the Source**) lists every string literal in the project once, with how many places write it. Filter it, sort it A–Z or by use, and pick a string to see each place: file, line and the function it is in. Click one to show it in the source.
+- Strings are shown as written, except for characters that don't show as themselves: line breaks, other control characters, invisible and zero-width characters, odd spaces, and the marks that change which way text runs (bidi overrides). Those are shown as orange marks such as `‹LF›` or `‹U+202E›`, so a string can't read differently from what it holds. File and function names are shown the same way.
+- Adjacent literals (`"a" "b"`) count as one string. Strings in macros count too (`#define VERSION "1.2"`, `#define LOG(x) printf("%s", x)`). `#include` paths and `extern "C"` don't count.
+- Up to 5,000 strings are kept per file and 200,000 in all, each up to 512 characters. The pane says which files had more.
 
 ### Quick open
 
@@ -257,6 +264,7 @@ srcwranglr --version
 | Settings (editor, tool folders, source colors, symbol list font) | **⌘, / Ctrl+,**, or **File → Settings…** |
 | Save or reopen where you were | **File → Save Session As… / Open Session…** (reopening a project restores it too) |
 | TODO list | **TODO** at the top right, or **Go → TODO List**; right-click a line, then **Add TODO Here…** |
+| Strings in the source, and where each is used | **Strings** at the top right, or **Analyze → Strings in the Source** |
 | Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Where It Comes From** |
 | Trace where a value goes | Right-click a line, then **Trace Where It Goes**; click a step to mark its path in the source |
 | Undo dragged pane sizes | **View → Reset Layout** |

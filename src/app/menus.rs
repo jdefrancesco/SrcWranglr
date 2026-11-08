@@ -188,6 +188,10 @@ impl SrcWranglrApp {
         if ui.add(findings).clicked() {
             return Some(command);
         }
+        let strings = Command::TogglePane(Pane::Strings);
+        if ui.button(strings.label()).clicked() {
+            return Some(strings);
+        }
         ui.separator();
         [
             Command::MarkDangerous,

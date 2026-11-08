@@ -12,6 +12,7 @@ use tree_sitter::{Node, Parser};
 
 use super::complexity;
 use super::signature;
+use super::strings::{self, FileStrings};
 use super::syntax::{
     clean_name, declarator_name, declared_name, field_children, find_function_declarator,
     is_class_like, is_function_pointer, join, line_of, name_span, named_children, segments,
@@ -92,19 +93,32 @@ pub struct FileFacts {
     pub decls: Vec<Decl>,
     pub refs: Vec<Reference>,
     pub functions: Vec<FunctionFacts>,
+    /// The string literals written in the file.
+    pub strings: FileStrings,
 }
 
 pub struct Extractor {
     parser: Parser,
+    /// How many more strings the project may keep.
+    strings_left: usize,
 }
 
 impl Extractor {
     pub fn new() -> Result<Self, String> {
+        Self::with_string_budget(strings::MAX_STRINGS_TOTAL)
+    }
+
+    /// An extractor that keeps at most `budget` strings over all the files
+    /// it reads.
+    pub fn with_string_budget(budget: usize) -> Result<Self, String> {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .map_err(|e| e.to_string())?;
-        Ok(Self { parser })
+        Ok(Self {
+            parser,
+            strings_left: budget,
+        })
     }
 
     /// Returns `None` only if tree-sitter gives up on the input entirely;
@@ -117,7 +131,13 @@ impl Extractor {
             last_from: None,
         };
         walker.visit_children(tree.root_node(), &[], false, 0);
-        Some(walker.facts)
+        let limit = self.strings_left.min(strings::MAX_STRINGS_PER_FILE);
+        let strings = strings::collect(tree.root_node(), source, limit);
+        self.strings_left = self.strings_left.saturating_sub(strings.strings.len());
+        Some(FileFacts {
+            strings,
+            ..walker.facts
+        })
     }
 }
 

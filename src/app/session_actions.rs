@@ -47,6 +47,7 @@ impl SrcWranglrApp {
                 notes: self.notes_panel.is_open(),
                 findings: self.findings_panel.is_open(),
                 todos: self.todo_panel.is_open(),
+                strings: self.strings_panel.is_open(),
                 trace: Some(self.trace_panel.is_open()),
             },
             trace: self.trace_panel.start().cloned(),
@@ -74,6 +75,7 @@ impl SrcWranglrApp {
         self.notes_panel.set_open(session.panes.notes);
         self.findings_panel.set_open(session.panes.findings);
         self.todo_panel.set_open(session.panes.todos);
+        self.strings_panel.set_open(session.panes.strings);
         let symbol = session.symbol.as_deref().and_then(|n| self.project.find(n));
         if let Some(id) = symbol {
             self.graph_view.select(id);

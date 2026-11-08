@@ -8,8 +8,10 @@ mod complexity;
 mod discover;
 mod extract;
 pub mod job;
+mod macro_strings;
 mod resolve;
 mod signature;
+mod strings;
 pub(crate) mod syntax;
 
 use std::fmt;
@@ -17,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::model::CodeGraph;
+pub use strings::{MAX_STRINGS_PER_FILE, MAX_STRINGS_TOTAL};
 
 pub use extract::Extractor;
 pub use resolve::{build_graph, SourceFile};

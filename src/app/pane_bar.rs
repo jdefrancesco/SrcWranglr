@@ -14,17 +14,19 @@ pub enum Pane {
     Source,
     Notes,
     Findings,
+    Strings,
     Todos,
     Trace,
 }
 
 impl Pane {
     /// In the order the toggles are shown, left to right.
-    pub const ALL: [Pane; 6] = [
+    pub const ALL: [Pane; 7] = [
         Pane::Symbols,
         Pane::Source,
         Pane::Notes,
         Pane::Findings,
+        Pane::Strings,
         Pane::Todos,
         Pane::Trace,
     ];
@@ -36,6 +38,7 @@ impl Pane {
             Pane::Source => "Source",
             Pane::Notes => "Notes",
             Pane::Findings => "Findings",
+            Pane::Strings => "Strings",
             Pane::Todos => "TODO",
             Pane::Trace => "Trace",
         }
@@ -48,6 +51,7 @@ impl Pane {
             Pane::Source => "Source Pane",
             Pane::Notes => "Notes & Bookmarks",
             Pane::Findings => "Findings (risky calls)",
+            Pane::Strings => "Strings in the Source",
             Pane::Todos => "TODO List",
             Pane::Trace => "Trace Pane",
         }
@@ -132,6 +136,7 @@ impl SrcWranglrApp {
             Pane::Source => self.layout.is_source_shown,
             Pane::Notes => self.notes_panel.is_open(),
             Pane::Findings => self.findings_panel.is_open(),
+            Pane::Strings => self.strings_panel.is_open(),
             Pane::Todos => self.todo_panel.is_open(),
             Pane::Trace => self.trace_panel.is_open(),
         }
@@ -145,6 +150,7 @@ impl SrcWranglrApp {
             Pane::Source => self.layout = self.layout.with_source_shown(is_shown),
             Pane::Notes => self.notes_panel.set_open(is_shown),
             Pane::Findings => self.findings_panel.set_open(is_shown),
+            Pane::Strings => self.strings_panel.set_open(is_shown),
             Pane::Todos => self.todo_panel.set_open(is_shown),
             Pane::Trace => self.trace_panel.set_open(is_shown),
         }

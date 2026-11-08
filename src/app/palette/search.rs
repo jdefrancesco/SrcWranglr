@@ -51,7 +51,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 37] = [
+    pub const ALL: [Command; 38] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -62,6 +62,7 @@ impl Command {
         Command::EditNote,
         Command::TogglePane(Pane::Notes),
         Command::TogglePane(Pane::Findings),
+        Command::TogglePane(Pane::Strings),
         Command::MarkDangerous,
         Command::TrustProject,
         Command::RunSemgrep,

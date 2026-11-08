@@ -30,6 +30,9 @@ mod session_actions;
 mod settings;
 mod settings_actions;
 mod settings_view;
+mod strings;
+mod strings_actions;
+mod strings_panel;
 mod survey_code;
 mod survey_fuzz;
 mod survey_tabs;
@@ -42,6 +45,7 @@ mod trace_actions;
 mod trace_panel;
 mod triage_actions;
 mod trust;
+mod visible;
 mod welcome;
 
 use std::path::PathBuf;
@@ -138,6 +142,8 @@ pub struct SrcWranglrApp {
     reach: Reach,
     /// The trace shown in the Trace pane, if any.
     trace_panel: trace_panel::TracePanel,
+    /// The open project's strings, each once with its places.
+    strings_panel: strings_panel::StringsPanel,
     /// Your settings (editor, tool folders, source colors).
     settings: settings::Settings,
     /// The Settings window, while it is open.
@@ -194,6 +200,7 @@ impl SrcWranglrApp {
             findings,
             findings_panel: FindingsPanel::default(),
             trace_panel: trace_panel::TracePanel::default(),
+            strings_panel: strings_panel::StringsPanel::default(),
             settings: settings::Settings::default(),
             settings_view: None,
             is_about_open: false,
@@ -444,6 +451,7 @@ impl SrcWranglrApp {
         if let Some((symbol, file, line)) = finding {
             self.go_to_place(symbol, &file, line);
         }
+        self.show_strings_panel(ui);
         self.show_trace_panel(ui);
         self.show_code_panel(ui);
         egui::CentralPanel::default().show(ui, |ui| {

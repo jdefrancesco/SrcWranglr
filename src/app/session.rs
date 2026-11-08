@@ -67,6 +67,8 @@ pub struct Panes {
     pub findings: bool,
     #[serde(default)]
     pub todos: bool,
+    #[serde(default)]
+    pub strings: bool,
     /// Whether the Trace pane was shown; `None` in sessions saved before
     /// this was kept (the pane then shows if there is a trace).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,6 +253,7 @@ mod tests {
                 notes: true,
                 findings: false,
                 todos: true,
+                strings: true,
                 trace: Some(false),
             },
             trace: Some(TraceStart::Variable {
@@ -259,6 +262,15 @@ mod tests {
                 column: 8,
             }),
         }
+    }
+
+    #[test]
+    fn a_session_saved_before_the_strings_and_trace_panes_still_reads() {
+        let older = r#"{"panes": {"notes": true, "findings": false, "todos": true}}"#;
+        let session: Session = serde_json::from_str(older).expect("read");
+        assert!(session.panes.notes && session.panes.todos);
+        assert!(!session.panes.strings);
+        assert_eq!(session.panes.trace, None);
     }
 
     #[test]

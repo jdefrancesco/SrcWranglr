@@ -168,6 +168,8 @@ impl SrcWranglrApp {
         self.remember_session();
         self.findings = Findings::for_graph(&project.graph, self.dangerous.merged());
         self.reach = Reach::of(&project.graph);
+        self.strings_panel
+            .set_strings(super::strings::entries(&project.graph));
         // Their results belong to the old project.
         self.tool_jobs.clear();
         self.finding_view = None;

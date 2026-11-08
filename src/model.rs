@@ -118,6 +118,18 @@ pub struct ExternalCall {
     pub args: Vec<String>,
 }
 
+/// A string literal written in the project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StringLiteral {
+    /// As written: prefix, quotes and escapes included; adjacent literals
+    /// joined by a space; cut short (with `…`) if long.
+    pub text: String,
+    /// Where it starts; to the end of that line if it goes on.
+    pub span: Span,
+    /// The function it is in; `None` at file scope.
+    pub function: Option<SymbolId>,
+}
+
 /// Size and branching of one function definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionMetrics {
@@ -181,6 +193,10 @@ pub struct CodeGraph {
     pub external_calls: HashMap<String, Vec<ExternalCall>>,
     /// Every function definition's size and complexity.
     pub functions: Vec<FunctionMetrics>,
+    /// String literals per file (files with any), in file order.
+    pub strings: HashMap<String, Vec<StringLiteral>>,
+    /// Files with more strings than were kept.
+    pub strings_cut_short: Vec<String>,
 }
 
 impl CodeGraph {
