@@ -4,11 +4,13 @@
 //! `resolve` names into a [`CodeGraph`]. [`job::IndexJob`] runs the whole
 //! thing on a background thread for the UI.
 
+mod comment_marks;
 mod complexity;
 mod discover;
 mod extract;
 pub mod job;
 mod macro_strings;
+mod placement;
 mod resolve;
 mod signature;
 mod strings;
@@ -19,6 +21,32 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::model::CodeGraph;
+pub use comment_marks::MAX_MARKS_PER_FILE;
+
+/// For each of `places` (a project-relative file and a 1-based line), the
+/// innermost function holding it, if any. One sweep per file.
+pub fn functions_holding_lines(
+    graph: &crate::model::CodeGraph,
+    places: &[(&str, u32)],
+) -> Vec<Option<crate::model::SymbolId>> {
+    let functions_in = placement::by_file(&graph.functions);
+    let mut by_file: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (index, (file, _)) in places.iter().enumerate() {
+        by_file.entry(file).or_default().push(index);
+    }
+    let mut holding = vec![None; places.len()];
+    for (file, indices) in by_file {
+        let functions = functions_in.get(file).map_or(&[][..], Vec::as_slice);
+        let lines: Vec<u32> = indices.iter().map(|&i| places[i].1).collect();
+        for (&index, function) in indices
+            .iter()
+            .zip(placement::functions_holding(&lines, functions))
+        {
+            holding[index] = function;
+        }
+    }
+    holding
+}
 pub use strings::{MAX_STRINGS_PER_FILE, MAX_STRINGS_TOTAL};
 
 pub use extract::Extractor;

@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
+use super::comment_marks;
 use super::extract::{Decl, FileFacts, Lookup, Reference};
 use super::strings;
 use crate::model::{
@@ -80,6 +81,8 @@ pub fn build_graph(mut files: Vec<SourceFile>) -> CodeGraph {
 
     let functions = function_metrics(&files, &by_qname);
     let (strings, strings_cut_short) = strings::by_file(&mut files, &functions);
+    let (tags_cut_short, silencers_cut_short) = comment_marks::files_cut_short(&files);
+    let comment_marks = comment_marks::by_file(&mut files, &functions);
     let file_contents = files.into_iter().map(|f| (f.path, f.contents)).collect();
     CodeGraph {
         symbols,
@@ -90,6 +93,9 @@ pub fn build_graph(mut files: Vec<SourceFile>) -> CodeGraph {
         functions,
         strings,
         strings_cut_short,
+        comment_marks,
+        tags_cut_short,
+        silencers_cut_short,
     }
 }
 

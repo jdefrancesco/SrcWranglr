@@ -429,3 +429,20 @@ fn a_traced_path_is_marked_in_the_file_shown_only() {
     panel.set_trail(Vec::new());
     assert!(panel.trail_in("a.c").is_empty());
 }
+
+#[test]
+fn line_menu_offers_to_find_more_like_the_line() {
+    let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.get_by_label("strcpy(d, s);").click_secondary();
+    harness.run();
+    harness.get_by_label("Find More Like This…").click();
+    harness.run();
+    let Some(PanelAction::FindSimilar { line, .. }) = harness.state().last_action.clone() else {
+        panic!(
+            "expected FindSimilar, got {:?}",
+            harness.state().last_action
+        );
+    };
+    assert_eq!(line, 2);
+}

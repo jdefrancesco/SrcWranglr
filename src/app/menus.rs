@@ -34,7 +34,13 @@ impl SrcWranglrApp {
                             .or(help.inner.flatten());
                         ui.separator();
                         ui.label(RichText::new(&self.project.name).strong());
-                        let toggled = self.show_pane_toggles(ui);
+                        let toggled = match self.is_project_open {
+                            true => {
+                                ui.separator();
+                                self.show_pane_toggles(ui)
+                            }
+                            false => None,
+                        };
                         action.or(toggled)
                     })
                     .inner
@@ -188,9 +194,11 @@ impl SrcWranglrApp {
         if ui.add(findings).clicked() {
             return Some(command);
         }
-        let strings = Command::TogglePane(Pane::Strings);
-        if ui.button(strings.label()).clicked() {
-            return Some(strings);
+        for pane in [Pane::Strings, Pane::History] {
+            let command = Command::TogglePane(pane);
+            if ui.button(command.label()).clicked() {
+                return Some(command);
+            }
         }
         ui.separator();
         [

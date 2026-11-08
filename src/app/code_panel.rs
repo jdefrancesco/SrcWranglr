@@ -44,6 +44,8 @@ pub enum PanelAction {
     MarkDangerous(String),
     /// Write a TODO about `file:line`.
     AddTodo { file: String, line: u32 },
+    /// Draft a rule finding code like `file:line`.
+    FindSimilar { file: String, line: u32 },
     /// Trace where the variable at `file:line`, byte `column`, gets its value.
     Trace {
         file: String,
@@ -164,15 +166,19 @@ impl CodePanel {
                 Some(PanelAction::TraceForward { file, line, column })
             }
             CodeEvent::Line(line, LineAction::AddTodo) => Some(PanelAction::AddTodo { file, line }),
+            CodeEvent::Line(line, LineAction::FindSimilar) => {
+                Some(PanelAction::FindSimilar { file, line })
+            }
             CodeEvent::Line(line, action) => {
                 let target = NoteTarget::Line { file, line };
                 Some(match action {
                     LineAction::EditNote => PanelAction::EditNote(target),
                     LineAction::ToggleBookmark => PanelAction::ToggleBookmark(target),
                     LineAction::MarkDangerous(name) => PanelAction::MarkDangerous(name),
-                    LineAction::Trace(_) | LineAction::TraceForward(_) | LineAction::AddTodo => {
-                        return None
-                    }
+                    LineAction::Trace(_)
+                    | LineAction::TraceForward(_)
+                    | LineAction::AddTodo
+                    | LineAction::FindSimilar => return None,
                 })
             }
             CodeEvent::Risk(id) => Some(PanelAction::ShowFinding(id)),

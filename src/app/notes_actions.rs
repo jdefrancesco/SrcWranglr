@@ -4,7 +4,7 @@
 use super::note_editor::{EditorOutcome, NoteEditor};
 use super::notebook::symbol_target;
 use super::{SrcWranglrApp, Status};
-use crate::model::SymbolId;
+use crate::model::{Span, SymbolId};
 use crate::notes::NoteTarget;
 
 /// Note text shown in a palette row (long notes would make search slow).
@@ -103,6 +103,13 @@ impl SrcWranglrApp {
     pub(super) fn go_to_place(&mut self, symbol: Option<SymbolId>, file: &str, line: u32) {
         self.layout = self.layout.with_source_shown(true);
         self.place_source_at(symbol, file, line);
+    }
+
+    /// Shows `span` of `file`, in `symbol` if it is in one, marked in the
+    /// source.
+    pub(super) fn go_to_span(&mut self, symbol: Option<SymbolId>, file: &str, span: Span) {
+        self.go_to_place(symbol, file, span.line);
+        self.code_panel.highlight(Some(span));
     }
 
     /// Like `go_to_place`, but leaves the panes as they are (to restore

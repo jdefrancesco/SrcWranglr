@@ -10,6 +10,7 @@ mod segments;
 mod tokenize;
 mod variables;
 
+use crate::app::visible::{visible, visible_lines};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -111,6 +112,8 @@ pub enum LineAction {
     TraceForward(u32),
     /// Add a TODO about this line.
     AddTodo,
+    /// Draft a semgrep rule finding code like this line.
+    FindSimilar,
 }
 
 /// Something the user did in the code view.
@@ -319,8 +322,9 @@ impl Rows<'_> {
                 .clone()
                 .on_hover_cursor(CursorIcon::PointingHand)
                 .on_hover_ui_at_pointer(|ui| {
-                    ui.strong(risk.title);
-                    ui.label(risk.why);
+                    // Messages may quote the code, and notes come from it.
+                    ui.strong(visible(risk.title));
+                    ui.label(visible_lines(risk.why));
                     ui.weak("click for details");
                 });
             return response.clicked().then_some(CodeEvent::Risk(risk.id));
@@ -437,7 +441,11 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
             egui::vec2(WARNING_BAR_WIDTH, gutter.rect.height()),
         );
         ui.painter().rect_filled(bar, 0.0, warning.color);
-        explanations.push(format!("{}: {}", warning.title, warning.text));
+        explanations.push(format!(
+            "{}: {}",
+            visible(warning.title),
+            visible_lines(warning.text)
+        ));
     }
     if mark.is_starred || !mark.note.is_empty() {
         let color = if mark.is_starred {
@@ -450,7 +458,8 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
         ui.painter().circle(center, MARKER_RADIUS, color, outline);
         explanations.push(match mark.note {
             "" => "Bookmarked line".to_string(),
-            note => note.to_string(),
+            // A note's lines stay lines; what hides inside them is marked.
+            note => visible_lines(note),
         });
     }
     gutter.on_hover_text(explanations.join("\n\n"))
@@ -490,6 +499,12 @@ fn line_menu(
         }
         if ui.button("Add TODO Here…").clicked() {
             action = Some(LineAction::AddTodo);
+        }
+        let similar = ui
+            .button("Find More Like This…")
+            .on_hover_text("Draft a semgrep rule matching code like this line, and test it");
+        if similar.clicked() {
+            action = Some(LineAction::FindSimilar);
         }
         if let Some(traced) = trace_menu(ui, shown) {
             action = Some(traced);

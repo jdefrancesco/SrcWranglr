@@ -1,12 +1,14 @@
-//! Whether you trust a project's own `.srcwranglr` verdicts and
-//! dangerous-functions list. A hostile repository could ship verdicts that
-//! hide its bugs, or a list that silences them, so being there isn't
+//! Whether you trust a project's own `.srcwranglr` verdicts,
+//! dangerous-functions list and semgrep rules. A hostile repository could
+//! ship verdicts that hide its bugs, a list that silences them, or rules
+//! that bury them in noise, so being there isn't
 //! enough: the decision lives in your config, in `trusted-projects.txt`
 //! (one project folder per line).
 
 use std::path::{Path, PathBuf};
 
 use super::dangerous_lists::{config_dir, write_user_file, LIST_FILE};
+use super::rule_files::PROJECT_RULES_DIR;
 use crate::notes::store::NOTES_DIR;
 use crate::notes::triage::TRIAGE_FILE;
 
@@ -23,10 +25,11 @@ pub fn trust(root: &Path) -> Result<(), String> {
     trust_in(&file, root)
 }
 
-/// Whether `root` has verdicts or a dangerous list of its own.
+/// Whether `root` has verdicts, a dangerous list or semgrep rules of its
+/// own.
 pub fn has_project_files(root: &Path) -> bool {
     let dir = root.join(NOTES_DIR);
-    [TRIAGE_FILE, LIST_FILE]
+    [TRIAGE_FILE, LIST_FILE, PROJECT_RULES_DIR]
         .iter()
         .any(|name| std::fs::symlink_metadata(dir.join(name)).is_ok())
 }
@@ -99,6 +102,14 @@ mod tests {
             "notes don't hide findings"
         );
         std::fs::write(dir.join(TRIAGE_FILE), "{}").expect("write");
+        assert!(has_project_files(project.path()));
+    }
+
+    #[test]
+    fn a_project_with_its_own_semgrep_rules_is_noticed() {
+        let project = tempfile::tempdir().expect("tmp");
+        std::fs::create_dir_all(project.path().join(NOTES_DIR).join(PROJECT_RULES_DIR))
+            .expect("mkdir");
         assert!(has_project_files(project.path()));
     }
 }

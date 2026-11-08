@@ -51,7 +51,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 38] = [
+    pub const ALL: [Command; 39] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -63,6 +63,7 @@ impl Command {
         Command::TogglePane(Pane::Notes),
         Command::TogglePane(Pane::Findings),
         Command::TogglePane(Pane::Strings),
+        Command::TogglePane(Pane::History),
         Command::MarkDangerous,
         Command::TrustProject,
         Command::RunSemgrep,
@@ -105,7 +106,7 @@ impl Command {
             Command::EditNote => "Note on Symbol…",
             Command::TogglePane(pane) => pane.title(),
             Command::MarkDangerous => "Mark Selected Function as Dangerous…",
-            Command::TrustProject => "Trust This Project's Verdicts and List",
+            Command::TrustProject => "Trust This Project's Verdicts, List and Rules",
             Command::RunSemgrep => "Run semgrep",
             Command::RunCppcheck => "Run cppcheck",
             Command::RunFlawfinder => "Run flawfinder",

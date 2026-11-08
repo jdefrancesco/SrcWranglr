@@ -3,6 +3,7 @@ mod app;
 mod code_view;
 mod demo;
 mod graph;
+mod history;
 mod index;
 mod model;
 mod notes;
@@ -22,7 +23,16 @@ const MIN_WINDOW_SIZE: [f32; 2] = [960.0, 600.0];
 
 /// Usage: see `app::launch::USAGE`.
 fn main() -> eframe::Result<()> {
-    let options = match parse_args(std::env::args_os().skip(1)) {
+    let mut args = std::env::args_os().skip(1).peekable();
+    // The app runs itself this way to read a git history apart from it.
+    if args
+        .peek()
+        .is_some_and(|arg| arg == history::worker::WORKER_ARG)
+    {
+        args.next();
+        std::process::exit(history::worker::worker_main(args));
+    }
+    let options = match parse_args(args) {
         Ok(options) => options,
         Err(message) => {
             eprintln!("{message}");

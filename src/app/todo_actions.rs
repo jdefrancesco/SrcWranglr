@@ -34,6 +34,9 @@ impl SrcWranglrApp {
                 }
             }
             Some(TodoPanelAction::GoTo { file, line }) => self.go_to_place(None, &file, line),
+            Some(TodoPanelAction::ShowTag(tag)) => {
+                self.go_to_span(tag.function, &tag.file, tag.span)
+            }
             None => {}
         }
     }

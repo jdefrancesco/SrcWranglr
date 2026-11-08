@@ -8,7 +8,7 @@ use super::pane_bar::{self, Edge};
 use super::session::TraceStart;
 use crate::analysis::trace::{Direction, Endpoint, Step, Trace, TracePath};
 use crate::analysis::Severity;
-use crate::style::{severity_color, INPUT_COLOR};
+use crate::style::{severity_text_color, INPUT_COLOR};
 
 const DEFAULT_WIDTH: f32 = 380.0;
 /// Paths to outside input or a risky call start open; this many others do
@@ -178,7 +178,7 @@ fn paths(
     for (index, path) in paths.iter().enumerate() {
         let color = match path.endpoint {
             Endpoint::Input(_) => Some(INPUT_COLOR),
-            Endpoint::Sink(_) => Some(severity_color(Severity::High)),
+            Endpoint::Sink(_) => Some(severity_text_color(Severity::High, ui.visuals())),
             Endpoint::Stopped(_) => None,
         };
         let is_open = color.is_some() || {

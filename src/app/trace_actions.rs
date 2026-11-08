@@ -85,7 +85,13 @@ impl SrcWranglrApp {
                 trace::trace_variable(graph, file, *line, *column)
             }
             TraceStart::Forward { file, line, column } => {
-                let sinks: Vec<Sink> = self.findings.all().iter().map(Sink::of).collect();
+                let sinks: Vec<Sink> = self
+                    .findings
+                    .all()
+                    .iter()
+                    .filter(|f| is_about_a_call(f))
+                    .map(Sink::of)
+                    .collect();
                 trace::trace_forward(graph, &sinks, file, *line, *column)
             }
         }
@@ -120,6 +126,17 @@ impl SrcWranglrApp {
             .filter_map(|s| s.span.map(|span| (s.file.clone(), span)))
             .collect()
     }
+}
+
+/// Whether `finding` is about a call a value can reach, so a trace may end
+/// there: not a comment silencing a tool, nor lines a fix commit changed
+/// (which mark whole lines, and would match any call on them).
+fn is_about_a_call(finding: &crate::analysis::Finding) -> bool {
+    ![
+        crate::analysis::silenced::TOOL,
+        crate::history::findings::TOOL,
+    ]
+    .contains(&finding.tool.as_str())
 }
 
 #[cfg(test)]
@@ -179,6 +196,32 @@ mod tests {
             panic!("expected info");
         };
         assert!(text.contains("goes"), "{text}");
+    }
+
+    #[test]
+    fn only_findings_about_calls_end_a_trace() {
+        let finding = |tool: &str| crate::analysis::Finding {
+            tool: tool.into(),
+            rule: "r".into(),
+            severity: crate::analysis::Severity::Low,
+            message: String::new(),
+            fix: None,
+            cwe: None,
+            file: "a.c".into(),
+            line: 1,
+            columns: None,
+            symbol: None,
+        };
+        assert!(super::is_about_a_call(&finding("semgrep")));
+        assert!(super::is_about_a_call(&finding(
+            crate::analysis::risky::TOOL
+        )));
+        assert!(!super::is_about_a_call(&finding(
+            crate::history::findings::TOOL
+        )));
+        assert!(!super::is_about_a_call(&finding(
+            crate::analysis::silenced::TOOL
+        )));
     }
 
     #[test]

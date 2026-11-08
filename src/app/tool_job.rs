@@ -23,20 +23,69 @@ pub struct ToolJob {
     results: Receiver<Result<Vec<Finding>, String>>,
 }
 
+/// Which semgrep rules a run uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SemgrepRules {
+    /// Yours and SrcWranglr's, plus the project's own folder of them (if
+    /// you trust it).
+    Yours { project: Option<PathBuf> },
+    /// Just this rule file, removed once the run is done.
+    Only(PathBuf),
+}
+
 impl ToolJob {
-    pub fn spawn(tool: Tool, root: PathBuf, search: SearchPath, ctx: egui::Context) -> Self {
+    /// Runs `tool` on `root`; semgrep with your rules (and `project_rules`,
+    /// a folder of the project's own, when given).
+    pub fn spawn(
+        tool: Tool,
+        root: PathBuf,
+        search: SearchPath,
+        project_rules: Option<PathBuf>,
+        ctx: egui::Context,
+    ) -> Self {
+        let rules = SemgrepRules::Yours {
+            project: project_rules,
+        };
+        Self::start(tool, root, search, rules, ctx)
+    }
+
+    /// Runs semgrep on `root` with only the rule in `rule_file`, which is
+    /// removed afterwards.
+    pub fn spawn_rule_test(
+        rule_file: PathBuf,
+        root: PathBuf,
+        search: SearchPath,
+        ctx: egui::Context,
+    ) -> Self {
+        Self::start(
+            Tool::Semgrep,
+            root,
+            search,
+            SemgrepRules::Only(rule_file),
+            ctx,
+        )
+    }
+
+    fn start(
+        tool: Tool,
+        root: PathBuf,
+        search: SearchPath,
+        rules: SemgrepRules,
+        ctx: egui::Context,
+    ) -> Self {
         let (tx, results) = channel();
         std::thread::spawn(move || {
-            let rules = match tool {
-                Tool::Semgrep => prepare_semgrep_rules(semgrep_rules_dir().as_deref()),
-                Tool::Cppcheck | Tool::Flawfinder => Ok(String::new()),
-            };
-            let result = rules.and_then(|rules| {
+            let yours = || prepare_semgrep_rules(semgrep_rules_dir().as_deref());
+            let result = rules_for(tool, &rules, yours).and_then(|rules| {
                 let (program, args) = tool.command(&root, &rules);
                 let found = locate(tool, &program, &search)?;
                 let parse = |out: &str, err: &str| tool.parse(out, err, &root);
                 run(&found, &args, &search.joined(), parse)
             });
+            if let SemgrepRules::Only(file) = &rules {
+                // Ours to remove; one left behind is only a stray draft.
+                let _ = std::fs::remove_file(file);
+            }
             // The app may be gone (closed) by now; nothing to report to then.
             let _ = tx.send(result);
             ctx.request_repaint();
@@ -57,6 +106,25 @@ impl ToolJob {
                 Some(Err(format!("{} stopped unexpectedly", self.tool.name())))
             }
         }
+    }
+}
+
+/// The rules `tool` runs with: for semgrep, what `rules` says, `yours`
+/// giving (and refreshing) your folder of them.
+fn rules_for(
+    tool: Tool,
+    rules: &SemgrepRules,
+    yours: impl FnOnce() -> Result<String, String>,
+) -> Result<Vec<String>, String> {
+    if tool != Tool::Semgrep {
+        return Ok(Vec::new());
+    }
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    match rules {
+        SemgrepRules::Only(file) => Ok(vec![path(file)]),
+        SemgrepRules::Yours { project } => Ok(std::iter::once(yours()?)
+            .chain(project.as_deref().map(path))
+            .collect()),
     }
 }
 
@@ -177,7 +245,7 @@ mod tests {
         let project = tempfile::tempdir().expect("dir");
         let code = "void f(char *s) {\n  char b[8];\n  strcpy(b, s);\n}\n";
         std::fs::write(project.path().join("a.c"), code).expect("write");
-        let (_, args) = Tool::Flawfinder.command(project.path(), "");
+        let (_, args) = Tool::Flawfinder.command(project.path(), &[]);
         let root = project.path();
         let parse = |out: &str, err: &str| Tool::Flawfinder.parse(out, err, root);
         let findings = run(&program, &args, &search.joined(), parse).expect("ran");
@@ -187,6 +255,28 @@ mod tests {
             .expect("strcpy flagged");
         assert_eq!((strcpy.file.as_str(), strcpy.line), ("a.c", 3));
         assert_eq!(strcpy.columns, Some((2, 8)));
+    }
+
+    #[test]
+    fn semgrep_runs_your_rules_and_the_projects_or_only_a_draft() {
+        let yours = || Ok("/me/rules".to_string());
+        let project = Some(PathBuf::from("/p/.srcwranglr/semgrep"));
+        assert_eq!(
+            rules_for(Tool::Semgrep, &SemgrepRules::Yours { project }, yours),
+            Ok(vec!["/me/rules".into(), "/p/.srcwranglr/semgrep".into()])
+        );
+        let untrusted = SemgrepRules::Yours { project: None };
+        assert_eq!(
+            rules_for(Tool::Semgrep, &untrusted, yours),
+            Ok(vec!["/me/rules".to_string()])
+        );
+        let draft = SemgrepRules::Only(PathBuf::from("/tmp/draft.yaml"));
+        let unused = || Err("not asked for".to_string());
+        assert_eq!(
+            rules_for(Tool::Semgrep, &draft, unused),
+            Ok(vec!["/tmp/draft.yaml".to_string()])
+        );
+        assert_eq!(rules_for(Tool::Cppcheck, &draft, unused), Ok(Vec::new()));
     }
 
     #[test]
@@ -238,6 +328,7 @@ mod tests {
             Tool::Cppcheck,
             PathBuf::from("/nonexistent-srcwranglr-root"),
             SearchPath::new(&[], None, None),
+            None,
             egui::Context::default(),
         );
         let result = (0..200).find_map(|_| {

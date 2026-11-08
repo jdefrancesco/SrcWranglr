@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use tree_sitter::{Node, Parser};
 
+use super::comment_marks::{self, FileMarks};
 use super::complexity;
 use super::signature;
 use super::strings::{self, FileStrings};
@@ -95,12 +96,17 @@ pub struct FileFacts {
     pub functions: Vec<FunctionFacts>,
     /// The string literals written in the file.
     pub strings: FileStrings,
+    /// Comments silencing analyzers, and TODO-style tags.
+    pub comment_marks: FileMarks,
 }
 
 pub struct Extractor {
     parser: Parser,
     /// How many more strings the project may keep.
     strings_left: usize,
+    /// How many more tags and silencing comments the project may keep.
+    tags_left: usize,
+    silencers_left: usize,
 }
 
 impl Extractor {
@@ -118,6 +124,8 @@ impl Extractor {
         Ok(Self {
             parser,
             strings_left: budget,
+            tags_left: comment_marks::MAX_MARKS_TOTAL,
+            silencers_left: comment_marks::MAX_MARKS_TOTAL,
         })
     }
 
@@ -134,8 +142,17 @@ impl Extractor {
         let limit = self.strings_left.min(strings::MAX_STRINGS_PER_FILE);
         let strings = strings::collect(tree.root_node(), source, limit);
         self.strings_left = self.strings_left.saturating_sub(strings.strings.len());
+        let limits = comment_marks::MarkLimits {
+            tags: self.tags_left.min(comment_marks::MAX_MARKS_PER_FILE),
+            silencers: self.silencers_left.min(comment_marks::MAX_MARKS_PER_FILE),
+        };
+        let comment_marks = comment_marks::collect(tree.root_node(), source, limits);
+        let (tags, silencers) = comment_marks.counts();
+        self.tags_left = self.tags_left.saturating_sub(tags);
+        self.silencers_left = self.silencers_left.saturating_sub(silencers);
         Some(FileFacts {
             strings,
+            comment_marks,
             ..walker.facts
         })
     }

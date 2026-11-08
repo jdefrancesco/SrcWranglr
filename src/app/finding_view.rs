@@ -3,10 +3,11 @@
 
 use egui::{Id, RichText};
 
-use crate::analysis::{risky, Finding};
+use super::visible::visible_lines;
+use crate::analysis::{risky, silenced, Finding};
 use crate::model::SymbolId;
 use crate::notes::triage::TriageStatus;
-use crate::style::{severity_color, INPUT_COLOR};
+use crate::style::{severity_text_color, INPUT_COLOR};
 
 const WIDTH: f32 = 460.0;
 
@@ -76,7 +77,7 @@ impl FindingView {
             ui.heading(&f.rule);
             let severity = RichText::new(f.severity.label())
                 .strong()
-                .color(severity_color(f.severity));
+                .color(severity_text_color(f.severity, ui.visuals()));
             ui.label(severity);
             if let Some(cwe) = f.cwe {
                 ui.label(format!("CWE-{cwe}"));
@@ -101,7 +102,8 @@ impl FindingView {
         }
         ui.separator();
         ui.strong("Why it can be a bug");
-        ui.label(&f.message);
+        // A tool's message may quote the code; a commit's is the repository's.
+        ui.label(visible_lines(&f.message));
         if let Some(fix) = &f.fix {
             ui.add_space(4.0);
             ui.strong("How to fix");
@@ -158,11 +160,14 @@ impl FindingView {
                 action = Some(FindingViewAction::Explore(id));
             }
         }
-        let trace = ui.button("Trace Back").on_hover_text(
-            "Follow the values this call uses back to where they come from, in the Trace pane",
-        );
-        if trace.clicked() {
-            action = Some(FindingViewAction::Trace);
+        // A comment has no values to follow.
+        if self.finding.tool != silenced::TOOL {
+            let trace = ui.button("Trace Back").on_hover_text(
+                "Follow the values this call uses back to where they come from, in the Trace pane",
+            );
+            if trace.clicked() {
+                action = Some(FindingViewAction::Trace);
+            }
         }
         if ui.button("Open in Editor").clicked() {
             action = Some(FindingViewAction::OpenInEditor);

@@ -55,12 +55,13 @@ impl Tool {
         }
     }
 
-    /// Program and arguments that analyze `root`; semgrep uses the rules
-    /// at `semgrep_rules` (a file or folder). Nothing is fetched online.
-    pub fn command(self, root: &Path, semgrep_rules: &str) -> (String, Vec<String>) {
+    /// The program and arguments that run this tool on `root`; semgrep
+    /// with each of `semgrep_rules` (files or folders of rules). Nothing
+    /// is fetched online.
+    pub fn command(self, root: &Path, semgrep_rules: &[String]) -> (String, Vec<String>) {
         let root = root.to_string_lossy().into_owned();
         let args = match self {
-            Tool::Semgrep => vec![
+            Tool::Semgrep => [
                 "scan".into(),
                 "--json".into(),
                 "--quiet".into(),
@@ -71,24 +72,34 @@ impl Tool {
                 "--no-git-ignore".into(),
                 "--x-ignore-semgrepignore-files".into(),
                 "--max-target-bytes=0".into(),
-                "--config".into(),
-                semgrep_rules.into(),
-                root,
-            ],
+                // The code may silence findings with `// nosemgrep`.
+                "--disable-nosem".into(),
+            ]
+            .into_iter()
+            .chain(
+                semgrep_rules
+                    .iter()
+                    .flat_map(|rules| ["--config".to_string(), rules.clone()]),
+            )
+            .chain([root])
+            .collect(),
+            // Without --inline-suppr: the code may silence findings with
+            // `// cppcheck-suppress`.
             Tool::Cppcheck => vec![
                 "--enable=warning,portability".into(),
-                "--inline-suppr".into(),
                 "--quiet".into(),
                 format!("--template={CPPCHECK_TEMPLATE}"),
                 root,
             ],
             // Symlinks aren't followed (flawfinder's default); dot folders
-            // are scanned, since untrusted code may hide in any of them.
+            // are scanned, since untrusted code may hide in any of them; and
+            // `// Flawfinder: ignore` comments in the code are not obeyed.
             Tool::Flawfinder => vec![
                 "--csv".into(),
                 "--quiet".into(),
                 "--columns".into(),
                 "--followdotdir".into(),
+                "--neverignore".into(),
                 root,
             ],
         };
@@ -366,7 +377,8 @@ mod tests {
         std::fs::write(dir.path().join("bugs.c"), PLANTED_BUGS).expect("write");
         let rules = dir.path().join("rules");
         write_bundled_rules(&rules).expect("rules");
-        let (program, args) = Tool::Semgrep.command(dir.path(), &rules.to_string_lossy());
+        let (program, args) =
+            Tool::Semgrep.command(dir.path(), &[rules.to_string_lossy().into_owned()]);
         let output = std::process::Command::new(program)
             .args(args)
             .output()
@@ -489,16 +501,27 @@ void term(const char *s) {
 
     #[test]
     fn commands_pass_the_project_as_an_argument() {
-        let (program, args) = Tool::Cppcheck.command(Path::new("/p q/r"), "");
+        let (program, args) = Tool::Cppcheck.command(Path::new("/p q/r"), &[]);
         assert_eq!(program, "cppcheck");
         assert_eq!(args.last().map(String::as_str), Some("/p q/r"));
-        let (_, args) = Tool::Semgrep.command(Path::new("/p"), "/rules");
+        let (_, args) = Tool::Semgrep.command(Path::new("/p"), &["/rules".to_string()]);
         for offline in ["--metrics=off", "--disable-version-check", "/rules"] {
             assert!(args.contains(&offline.to_string()), "{args:?}");
         }
-        let (program, args) = Tool::Flawfinder.command(Path::new("/p q/r"), "");
+        let (program, args) = Tool::Flawfinder.command(Path::new("/p q/r"), &[]);
         assert_eq!(program, "flawfinder");
         assert_eq!(args.last().map(String::as_str), Some("/p q/r"));
         assert!(args.contains(&"--csv".to_string()));
+    }
+
+    #[test]
+    fn the_code_cannot_silence_the_analyzers() {
+        let has = |tool: Tool, flag: &str| {
+            let (_, args) = tool.command(Path::new("/p"), &["/rules".to_string()]);
+            args.iter().any(|a| a == flag)
+        };
+        assert!(has(Tool::Semgrep, "--disable-nosem"));
+        assert!(has(Tool::Flawfinder, "--neverignore"));
+        assert!(!has(Tool::Cppcheck, "--inline-suppr"));
     }
 }

@@ -54,6 +54,12 @@ pub fn visible(text: &str) -> Cow<'_, str> {
     Cow::Owned(shown)
 }
 
+/// `text` with each line's hidden characters marked, its line breaks kept:
+/// for messages and notes written over lines.
+pub fn visible_lines(text: &str) -> String {
+    text.lines().map(visible).collect::<Vec<_>>().join("\n")
+}
+
 /// `text` in `font` and `color`, its marks in `MARK_COLOR`.
 pub fn job(text: &str, font: FontId, color: Color32) -> LayoutJob {
     let mut job = LayoutJob::default();
@@ -163,6 +169,12 @@ mod tests {
         let colors: Vec<Color32> = shown.sections.iter().map(|s| s.format.color).collect();
         assert_eq!(colors, [Color32::WHITE, MARK_COLOR, Color32::WHITE]);
         assert_eq!(shown.text, "a‹U+202E›b");
+    }
+
+    #[test]
+    fn lines_keep_their_breaks_and_lose_what_hides_in_them() {
+        assert_eq!(visible_lines("one\ntwo\u{202E}"), "one\ntwo‹U+202E›");
+        assert_eq!(visible_lines("a\r\nb"), "a\nb");
     }
 
     #[test]

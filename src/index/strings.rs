@@ -7,11 +7,11 @@
 //! user-defined literal (`"abc"_s`) is listed without its suffix.
 
 use std::collections::HashMap;
-use std::ops::Range;
 
 use tree_sitter::Node;
 
 use super::macro_strings;
+use super::placement;
 use super::resolve::SourceFile;
 use crate::model::{FunctionMetrics, Span, StringLiteral};
 
@@ -175,13 +175,7 @@ pub fn by_file(
     files: &mut [SourceFile],
     functions: &[FunctionMetrics],
 ) -> (HashMap<String, Vec<StringLiteral>>, Vec<String>) {
-    let mut functions_in: HashMap<&str, Vec<&FunctionMetrics>> = HashMap::new();
-    for function in functions {
-        functions_in
-            .entry(function.file.as_str())
-            .or_default()
-            .push(function);
-    }
+    let functions_in = placement::by_file(functions);
     let cut_short = files
         .iter()
         .filter(|file| file.facts.strings.is_cut_short)
@@ -204,33 +198,13 @@ pub fn by_file(
 }
 
 /// `facts` placed in the innermost of `functions` (one file's) holding
-/// each: the one starting last among those whose lines hold it. One sweep
-/// down the file, so many functions don't cost time per string.
+/// each.
 fn placed(facts: Vec<StringFact>, functions: &[&FunctionMetrics]) -> Vec<StringLiteral> {
-    let mut by_start: Vec<&FunctionMetrics> = functions.to_vec();
-    by_start.sort_by_key(|f| f.line);
-    let mut order: Vec<usize> = (0..facts.len()).collect();
-    order.sort_by_key(|&i| facts[i].span.line);
-    let lines = |f: &FunctionMetrics| -> Range<u32> { f.line..f.line.saturating_add(f.lines) };
-    let mut function_of = vec![None; facts.len()];
-    // The functions started so far that may still hold the line, innermost
-    // last.
-    let mut open: Vec<&FunctionMetrics> = Vec::new();
-    let mut next = 0;
-    for i in order {
-        let line = facts[i].span.line;
-        while let Some(function) = by_start.get(next).filter(|f| f.line <= line) {
-            open.push(function);
-            next += 1;
-        }
-        while open.last().is_some_and(|f| !lines(f).contains(&line)) {
-            open.pop();
-        }
-        function_of[i] = open.last().map(|f| f.symbol);
-    }
+    let lines: Vec<u32> = facts.iter().map(|fact| fact.span.line).collect();
+    let holding = placement::functions_holding(&lines, functions);
     facts
         .into_iter()
-        .zip(function_of)
+        .zip(holding)
         .map(|(fact, function)| StringLiteral {
             text: fact.text,
             span: fact.span,

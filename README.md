@@ -67,6 +67,8 @@ A first look at an unfamiliar codebase. Open it with **Triage → Project Triage
 
 **Analyze → Findings** (⌘⇧R / Ctrl+Shift+R) lists risky calls, most severe first. The calls are judged by their arguments, so a constant-size `memcpy` isn't flagged but `sprintf` with a non-literal format is. The list also includes results from semgrep, cppcheck and flawfinder (**Analyze → Run …**), and the functions on your dangerous-functions list. Filter by severity or text, and record a verdict on each one.
 
+**Silenced warnings.** Code can tell an analyzer not to report a line with a comment: `// nosemgrep`, `/* Flawfinder: ignore */`, `// cppcheck-suppress …`, `// NOLINT`, `// coverity[…]`, `// lgtm[…]`, `// NOSONAR`, `//-V547`. SrcWranglr runs semgrep, cppcheck and flawfinder with these comments ignored, so the code you audit can't hide findings from them that way. Each such comment is also listed as a low finding from **source comments**: someone saw a warning there and silenced it. Up to 2,000 are kept per file (counted apart from TODO-style tags, so those can't crowd them out); a file with more gets a medium finding saying so.
+
 **Input reachability** marks the findings that outside input may get to:
 - Input comes in at calls such as `recv`, `read`, `fread`, `fgets`, `getline`, `getenv`, `scanf`, `ReadFile` and `SSL_read`, and through `main`'s command line.
 - From the function that reads it, only the calls passed what was read count: the buffer filled, the variable assigned, `argv`. Below that, every call counts.
@@ -81,6 +83,18 @@ This is a prioritizer, not proof:
 - The "passed what was read" check matches names, so input copied into another variable or a global first isn't followed.
 - Same-named functions in different files are one symbol to the indexer (see **Limitations**), so one can lend reach to another.
 - A finding without the tag isn't proven unreachable.
+
+### Find more like this
+
+Right-click a line of code, then **Find More Like This…**, to hunt for variants of it. SrcWranglr drafts a semgrep rule from the call on the line (or its statement):
+- **Same shape** keeps the code but for its variables: `memcpy(buf, pkt->data, ntohs(hdr->len))` becomes `memcpy($A, $B->data, ntohs($C->len))`. Called names, fields, types, literals and capitalized names (macros, constants) stay.
+- **Any values** keeps only the call and its number of arguments: `memcpy($A, $B, ntohs(...))`. A string literal becomes `"..."`, and an argument with a call inside becomes `<... ntohs(...) ...>`.
+
+A line whose names are all variables (`return len;`, `x = y;`) is refused, since its rule would match almost anything.
+
+Edit the rule as you like, then **Test** runs it alone on the project and lists every match (the line you started from included). Click one to show it in the source. **Save for This Project** writes it to the project's `.srcwranglr/semgrep/`; **Save for All Projects** writes it to `~/.config/srcwranglr/semgrep/`. **Analyze → Run semgrep** uses your rules, SrcWranglr's own, and the project's. A project's own rules are used only once you trust its files, since a hostile repository could ship rules too. Saving a rule into a project whose files are all yours marks it trusted.
+
+Everything taken from the code (names, strings, the file's path) is written into the rule escaped, so a crafted line can't change the rule. A string literal that semgrep would read as pattern syntax (`"$HOME"`, `"..."`, `"=~/re/"`) becomes `"..."`.
 
 ### Tracing a value
 
@@ -153,7 +167,7 @@ A path means the value *may* go that way:
 
 ### Panes
 
-The source pane sits beside the graph; **⌘⇧L / Ctrl+Shift+L** moves it below. Show or hide any pane with the buttons at the top right of the window (**Symbols**, **Source**, **Notes**, **Findings**, **Strings**, **TODO**, **Trace**), or hide one with the arrow in its heading. Side panes slide in and out, and dragging one shut hides it too.
+The source pane sits beside the graph; **⌘⇧L / Ctrl+Shift+L** moves it below. Show or hide any pane with the buttons in the menu bar, after the project's name (**Symbols**, **Source**, **Notes**, **Findings**, **Strings**, **History**, **TODO**, **Trace**), or hide one with the arrow in its heading. Side panes slide in and out, and dragging one shut hides it too.
 
 ### Sessions
 
@@ -165,15 +179,31 @@ Reopening a project puts you back where you were:
 
 **File → Save Session As…** writes the same to a `.srcwranglr-session` file, with the project's folder, to come back to later or to hand to someone. **File → Open Session…** opens one: it indexes the project if it isn't the one open, then restores the session. A session file from someone else is checked before anything in it is used: the project folder must be a full path, and files must be inside the project.
 
+### Git history
+
+When a project that is a git checkout opens, SrcWranglr reads its history in the background and looks for commits whose message says they fixed something: words like `fix`, `bug`, `revert`, `workaround`, `TODO`, and security words such as `overflow`, `use-after-free`, `oob`, `leak`, `race`, `crash`, `oss-fuzz` or a `CVE-…` id. It then traces each file those commits changed back line by line (blame), to find the lines of today's code that each fix commit last changed. Code fixed once is a good place to look for the same bug nearby, or for a fix that missed a case.
+- Those lines are marked as low findings from **git history** (leads, not bugs, so they stay below what the code itself shows). They get a bar in the source's gutter and a verdict like any finding; **Lines fix commits changed** in Findings leaves them out of the list. Up to 5,000 runs of lines are marked, security fixes first.
+- **History** in the menu bar (or **Analyze → Git History (fix commits)**) lists the fix commits, newest first, with how many of today's lines each still owns. Filter by text, show only security fixes, or include commits whose lines are all gone. Pick one to list its lines; click one to show it in the source.
+- Its **Selected function** tab answers who last changed each line of the function you're looking at: every commit, not only fixes, newest first, with fixes picked out. Each file's history is read on demand.
+- Only the checked-out commit's history counts. A file you changed since then isn't traced, since its lines can't be matched to commits; the pane says which.
+- Up to 20,000 commits are read, 2,000 fix commits kept and 2,000 files traced, within 90 seconds. On curl's 40,000-commit history that takes about a minute in the background; zlib's takes a tenth of a second.
+
+The repository is the audited project's, so it is never read by running `git`: a repository's own config can make `git` run programs (an fsmonitor hook, a pager, diff and textconv drivers). SrcWranglr reads it with gitoxide instead:
+- In a separate worker process (SrcWranglr itself, started with `--history-worker`), which is killed at a deadline or when you open another project. A repository crafted to exhaust memory or never finish costs only that read, not the app.
+- Opened without system, user or environment config and with its own config untrusted; only committed objects are read.
+- `.git` must be a real folder at the project's top (not a symlink, nor a `gitdir:` file). A `.git` whose `HEAD`, `config`, `packed-refs`, `objects` or `refs` is a symlink, too large, or not what git keeps there is refused, as is one that reads from another repository's folder (`objects/info/alternates`, a linked worktree's `commondir`).
+- Commit messages and author names are shown with hidden characters marked, like strings.
+
 ### TODO list
 
-**TODO** at the top right (or **Go → TODO List**) opens a lightweight list for the project, saved next to its notes in `.srcwranglr/todo.json`:
+**TODO** in the menu bar (or **Go → TODO List**) opens a lightweight list for the project, saved next to its notes in `.srcwranglr/todo.json`:
 - Type a TODO and press Enter. Tick it when done, double-click it to edit, and **Clear Done** to tidy up.
 - Right-click a line of code, then **Add TODO Here…**, to write one about that line. Its `file:line` link takes you back there.
+- **In the source** lists the `TODO`, `FIXME`, `XXX`, `HACK` and `BUG` comments in the code (and Doxygen's `\todo` and `\bug`), colored by how worrying the tag is. Filter by text or file, or show one tag. Click one to show it in the source. Tags count only in comments, in capitals, as whole words, so "a todo list" or `BUG_ON` don't. Up to 2,000 marked comments are kept per file and 100,000 in all.
 
 ### Strings
 
-**Strings** at the top right (or **Analyze → Strings in the Source**) lists every string literal in the project once, with how many places write it. Filter it, sort it A–Z or by use, and pick a string to see each place: file, line and the function it is in. Click one to show it in the source.
+**Strings** in the menu bar (or **Analyze → Strings in the Source**) lists every string literal in the project once, with how many places write it. Filter it, sort it A–Z or by use, and pick a string to see each place: file, line and the function it is in. Click one to show it in the source.
 - Strings are shown as written, except for characters that don't show as themselves: line breaks, other control characters, invisible and zero-width characters, odd spaces, and the marks that change which way text runs (bidi overrides). Those are shown as orange marks such as `‹LF›` or `‹U+202E›`, so a string can't read differently from what it holds. File and function names are shown the same way.
 - Adjacent literals (`"a" "b"`) count as one string. Strings in macros count too (`#define VERSION "1.2"`, `#define LOG(x) printf("%s", x)`). `#include` paths and `extern "C"` don't count.
 - Up to 5,000 strings are kept per file and 200,000 in all, each up to 512 characters. The pane says which files had more.
@@ -260,11 +290,11 @@ srcwranglr --version
 | Filter symbols | Type in **Search** |
 | Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
 | Put the source below the graph, or back beside it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
-| Show or hide a pane | The buttons at the top right, or the arrow in a pane's heading; **⌘B / Ctrl+B** for Notes, **⌘⇧R / Ctrl+Shift+R** for Findings |
+| Show or hide a pane | The buttons in the menu bar, or the arrow in a pane's heading; **⌘B / Ctrl+B** for Notes, **⌘⇧R / Ctrl+Shift+R** for Findings |
 | Settings (editor, tool folders, source colors, symbol list font) | **⌘, / Ctrl+,**, or **File → Settings…** |
 | Save or reopen where you were | **File → Save Session As… / Open Session…** (reopening a project restores it too) |
-| TODO list | **TODO** at the top right, or **Go → TODO List**; right-click a line, then **Add TODO Here…** |
-| Strings in the source, and where each is used | **Strings** at the top right, or **Analyze → Strings in the Source** |
+| TODO list | **TODO** in the menu bar, or **Go → TODO List**; right-click a line, then **Add TODO Here…** |
+| Strings in the source, and where each is used | **Strings** in the menu bar, or **Analyze → Strings in the Source** |
 | Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Where It Comes From** |
 | Trace where a value goes | Right-click a line, then **Trace Where It Goes**; click a step to mark its path in the source |
 | Undo dragged pane sizes | **View → Reset Layout** |
@@ -290,6 +320,9 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
 | `src/analysis/trace/` | Tracing a value back to where it comes from (`walk.rs`) or forward to the risky calls it reaches (`forward.rs`, `goes.rs`), across functions, by syntax |
 | `src/analysis/tools.rs`, `flawfinder.rs` | Running semgrep, cppcheck and flawfinder, and reading their reports |
+| `src/history/` | Reading the git history with gitoxide in a worker process (`worker.rs`): fix commits by message (`keywords.rs`), the lines each last changed (`read.rs`, `file.rs`), and findings for them |
+| `src/analysis/similar.rs`, `src/app/similar_view.rs` | Drafting a semgrep rule from a line (Find More Like This), testing and saving it |
+| `src/index/comment_marks.rs`, `src/analysis/silenced.rs` | Comments that silence analyzers or leave TODO-style tags, and the findings for the former |
 | `src/version.rs`, `build.rs` | Which version this is; `build.rs` records the git commit it was built from |
 | `src/programs.rs` | Finding the programs to run: your folders, `PATH`, then the usual install places |
 | `src/app/settings.rs` | Your settings file; `settings_view.rs` is the Settings window |
@@ -349,7 +382,7 @@ Until v0.2.0 this project was called *slurcetrail*, a working title that sat too
 
 - Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. SrcWranglr is an independent implementation and shares no code with it.
 - Screenshots show [LevelDB](https://github.com/google/leveldb) (BSD-3-Clause, © The LevelDB Authors).
-- Bundles the fonts [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) (© Adobe) and [Iosevka](https://github.com/be5invis/Iosevka) (© Renzhi Li), both under the SIL Open Font License 1.1; see [assets/fonts](assets/fonts).
+- Bundles the fonts [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) (© Adobe) and [Iosevka](https://github.com/be5invis/Iosevka) (© Renzhi Li), both under the SIL Open Font License 1.1, and [Ubuntu](https://github.com/google/fonts/tree/main/ufl/ubuntu) Regular and Medium (© Canonical Ltd.) under the Ubuntu Font Licence 1.0; see [assets/fonts](assets/fonts).
 - Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), [rfd](https://github.com/PolyMeilleur/rfd), and [nucleo-matcher](https://github.com/helix-editor/nucleo).
 
 ## License

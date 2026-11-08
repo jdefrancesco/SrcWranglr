@@ -13,6 +13,10 @@ mod findings_actions;
 mod findings_panel;
 mod fonts;
 mod harness_view;
+mod history;
+mod history_actions;
+mod history_function;
+mod history_panel;
 pub mod launch;
 mod layout;
 mod locations;
@@ -25,11 +29,16 @@ mod opening;
 mod palette;
 mod pane_bar;
 mod project;
+mod rule_files;
 mod session;
 mod session_actions;
 mod settings;
 mod settings_actions;
 mod settings_view;
+mod similar_actions;
+mod similar_view;
+mod source_tags;
+mod source_tags_view;
 mod strings;
 mod strings_actions;
 mod strings_panel;
@@ -38,6 +47,7 @@ mod survey_fuzz;
 mod survey_tabs;
 mod survey_view;
 mod symbol_list;
+mod theme;
 mod todo_actions;
 mod todo_panel;
 mod tool_job;
@@ -45,7 +55,7 @@ mod trace_actions;
 mod trace_panel;
 mod triage_actions;
 mod trust;
-mod visible;
+pub(crate) mod visible;
 mod welcome;
 
 use std::path::PathBuf;
@@ -136,6 +146,8 @@ pub struct SrcWranglrApp {
     survey_view: SurveyView,
     /// The drafted fuzz harness, if its window is open.
     harness_view: Option<harness_view::HarnessView>,
+    /// The Find More Like This window, while open.
+    similar_view: Option<similar_view::SimilarView>,
     /// Where the source pane sits; kept between launches.
     layout: Layout,
     /// Which functions outside input reaches, for the open project.
@@ -144,6 +156,7 @@ pub struct SrcWranglrApp {
     trace_panel: trace_panel::TracePanel,
     /// The open project's strings, each once with its places.
     strings_panel: strings_panel::StringsPanel,
+    history_panel: history_panel::HistoryPanel,
     /// Your settings (editor, tool folders, source colors).
     settings: settings::Settings,
     /// The Settings window, while it is open.
@@ -190,6 +203,7 @@ impl SrcWranglrApp {
         options: LaunchOptions,
     ) -> Self {
         fonts::install(ctx);
+        theme::install(ctx);
         let project = Project::empty();
         let status = Status::Info("Open a project folder to get started.".into());
         let notebook = Notebook::open(&project);
@@ -201,6 +215,7 @@ impl SrcWranglrApp {
             findings_panel: FindingsPanel::default(),
             trace_panel: trace_panel::TracePanel::default(),
             strings_panel: strings_panel::StringsPanel::default(),
+            history_panel: history_panel::HistoryPanel::default(),
             settings: settings::Settings::default(),
             settings_view: None,
             is_about_open: false,
@@ -216,6 +231,7 @@ impl SrcWranglrApp {
             dangerous_editor: None,
             survey_view: SurveyView::default(),
             harness_view: None,
+            similar_view: None,
             layout: Layout::load(storage),
             reach: Reach::default(),
             open_dialog: None,
@@ -368,6 +384,7 @@ impl eframe::App for SrcWranglrApp {
         self.poll_session_dialog(&ctx);
         self.poll_job(&ctx);
         self.poll_tool_jobs();
+        self.poll_history();
         // Global shortcuts pause while the palette or a dialog is open.
         let is_dialog_open = self.note_editor.is_some()
             || self.finding_view.is_some()
@@ -409,6 +426,7 @@ impl eframe::App for SrcWranglrApp {
             None => {}
         }
         self.show_harness_view(&ctx);
+        self.show_similar_view(&ctx);
         let notes = if self.palette.is_open() {
             self.note_candidates()
         } else {
@@ -452,6 +470,7 @@ impl SrcWranglrApp {
             self.go_to_place(symbol, &file, line);
         }
         self.show_strings_panel(ui);
+        self.show_history_panel(ui);
         self.show_trace_panel(ui);
         self.show_code_panel(ui);
         egui::CentralPanel::default().show(ui, |ui| {
@@ -643,6 +662,7 @@ impl SrcWranglrApp {
                 Some(PanelAction::ShowFinding(id)) => self.explain_finding(id),
                 Some(PanelAction::MarkDangerous(name)) => self.mark_dangerous(&name),
                 Some(PanelAction::AddTodo { file, line }) => self.todo_panel.add_here(file, line),
+                Some(PanelAction::FindSimilar { file, line }) => self.find_similar(&file, line),
                 Some(PanelAction::Trace { file, line, column }) => {
                     self.trace_variable(&file, line, column);
                 }

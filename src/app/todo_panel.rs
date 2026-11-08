@@ -1,11 +1,15 @@
 //! The TODO pane on the right: the project's TODO list. Type one and press
 //! Enter to add it; right-click a line in the source, then Add TODO Here,
-//! to add one about that line, which it then links to.
+//! to add one about that line, which it then links to. Its "In the source"
+//! tab lists the TODO, FIXME, XXX, HACK and BUG comments in the code.
 
 use egui::RichText;
 
 use super::layout::Layout;
 use super::pane_bar::{self, Edge};
+use super::source_tags::SourceTags;
+use super::source_tags_view::{PickedTag, SourceTagsView};
+use super::visible::visible;
 use crate::notes::todo::{Todo, Todos};
 
 const DEFAULT_WIDTH: f32 = 300.0;
@@ -20,6 +24,18 @@ pub enum TodoPanelAction {
     Added(Todos),
     /// Show this line in the source.
     GoTo { file: String, line: u32 },
+    /// Show this comment's tag in the source.
+    ShowTag(PickedTag),
+}
+
+/// Which list the pane shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum TodoView {
+    /// The TODOs you wrote.
+    #[default]
+    Yours,
+    /// The tags in the code's comments.
+    InSource,
 }
 
 #[derive(Default)]
@@ -34,6 +50,8 @@ pub struct TodoPanel {
     /// Focus the new-TODO field next frame.
     should_focus: bool,
     error: Option<String>,
+    view: TodoView,
+    source: SourceTagsView,
 }
 
 impl TodoPanel {
@@ -46,12 +64,19 @@ impl TodoPanel {
     }
 
     /// Forgets what belonged to the project before: what was being typed
-    /// or edited, and the line it was about. Stays open or closed.
+    /// or edited, the line it was about, and the code's tags. Stays open or
+    /// closed, on the same list.
     pub fn reset(&mut self) {
         *self = Self {
             is_open: self.is_open,
+            view: self.view,
             ..Self::default()
         };
+    }
+
+    /// Lists `tags`, the tags in the open project's comments.
+    pub fn set_source_tags(&mut self, tags: SourceTags) {
+        self.source.set_tags(tags);
     }
 
     /// Clears the TODO typed, once it has been saved.
@@ -94,6 +119,14 @@ impl TodoPanel {
         let title = format!("TODO ({} open)", todos.open_count());
         if pane_bar::heading(ui, title, Edge::Right) {
             self.is_open = false;
+        }
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.view, TodoView::Yours, "Yours");
+            let in_source = format!("In the source ({})", self.source.len());
+            ui.selectable_value(&mut self.view, TodoView::InSource, in_source);
+        });
+        if self.view == TodoView::InSource {
+            return self.source.show(ui).map(TodoPanelAction::ShowTag);
         }
         match storage {
             Ok(place) => ui.weak(place),
@@ -182,9 +215,11 @@ impl TodoPanel {
         if checkbox.changed() {
             action = Some(TodoPanelAction::Changed(todos.with_done(index, is_done)));
         }
+        // todo.json is in the project, so its text may hide characters.
+        let shown = visible(&todo.text);
         let text = match todo.is_done {
-            true => RichText::new(&todo.text).strikethrough().weak(),
-            false => RichText::new(&todo.text),
+            true => RichText::new(shown).strikethrough().weak(),
+            false => RichText::new(shown),
         };
         let label = ui.label(text).on_hover_text("Double-click to edit");
         checkbox.labelled_by(label.id);
@@ -193,7 +228,7 @@ impl TodoPanel {
         }
         if let Some((file, line)) = todo.place() {
             let link = ui
-                .link(format!("{file}:{line}"))
+                .link(format!("{}:{line}", visible(file)))
                 .on_hover_text("Show in the source");
             if link.clicked() {
                 action = Some(TodoPanelAction::GoTo {
@@ -275,7 +310,7 @@ mod tests {
                             state.todos = added.clone();
                             state.panel.clear_draft();
                         }
-                        TodoPanelAction::GoTo { .. } => {}
+                        TodoPanelAction::GoTo { .. } | TodoPanelAction::ShowTag(_) => {}
                     }
                     state.action = Some(action);
                 }
@@ -318,6 +353,46 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].text, "bounds check");
         assert_eq!(items[0].place(), Some(("util.c", 7)));
+    }
+
+    fn tagged_panel() -> TodoPanel {
+        let graph = crate::index::graph_of_files(&[("a.c", "// FIXME: leak\n")]);
+        let mut panel = TodoPanel::default();
+        panel.set_source_tags(crate::app::source_tags::source_tags(&graph));
+        panel
+    }
+
+    #[test]
+    fn the_in_the_source_tab_lists_the_codes_tags() {
+        let mut harness = harness(sample(), tagged_panel());
+        harness.get_by_label("In the source (1)").click();
+        harness.run();
+        assert!(harness.query_by_label("check parse_header").is_none());
+        harness.get_by_label("a.c:1  FIXME: leak").click();
+        harness.run();
+        let Some(TodoPanelAction::ShowTag(tag)) = &harness.state().action else {
+            panic!("expected a tag, got {:?}", harness.state().action);
+        };
+        assert_eq!((tag.file.as_str(), tag.span.line), ("a.c", 1));
+    }
+
+    #[test]
+    fn text_from_the_project_shows_its_hidden_characters() {
+        let todos = Todos::default()
+            .with_added(Todo::new("ok\u{200B}evil", Some(("a\u{200B}.c".into(), 1))))
+            .expect("valid");
+        let harness = harness(todos, TodoPanel::default());
+        harness.get_by_label("ok‹U+200B›evil");
+        harness.get_by_label("a‹U+200B›.c:1");
+    }
+
+    #[test]
+    fn switching_projects_keeps_the_tab_but_not_the_tags() {
+        let mut panel = tagged_panel();
+        panel.view = TodoView::InSource;
+        panel.reset();
+        assert_eq!(panel.view, TodoView::InSource);
+        assert_eq!(panel.source.len(), 0);
     }
 
     #[test]

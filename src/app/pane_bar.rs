@@ -1,11 +1,22 @@
-//! Showing and hiding panes without shortcuts: a toggle per pane at the
-//! right of the menu bar, and a hide arrow in each pane's heading. Side
-//! panes slide in and out, and dragging one shut hides it too.
+//! Showing and hiding panes without shortcuts: a toggle per pane in the
+//! menu bar, after the project's name, and a hide arrow in each pane's
+//! heading. Side panes slide in and out, and dragging one shut hides it
+//! too.
 
 use egui::{Align, Layout, RichText};
 
+use super::fonts;
 use super::palette::Command;
 use super::{SrcWranglrApp, FINDINGS_SHORTCUT, NOTES_PANEL_SHORTCUT};
+
+/// Room between two toggles.
+const TOGGLE_GAP: f32 = 6.0;
+/// Room around a toggle's label, inside its pill.
+const TOGGLE_PADDING: egui::Vec2 = egui::vec2(9.0, 2.0);
+/// Enough to round a toggle's ends fully.
+const TOGGLE_ROUNDING: u8 = 12;
+/// A touch of tracking, so the toggles' labels read as buttons.
+const TOGGLE_LETTER_SPACING: f32 = 0.4;
 
 /// A pane that can be shown or hidden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,18 +26,20 @@ pub enum Pane {
     Notes,
     Findings,
     Strings,
+    History,
     Todos,
     Trace,
 }
 
 impl Pane {
     /// In the order the toggles are shown, left to right.
-    pub const ALL: [Pane; 7] = [
+    pub const ALL: [Pane; 8] = [
         Pane::Symbols,
         Pane::Source,
         Pane::Notes,
         Pane::Findings,
         Pane::Strings,
+        Pane::History,
         Pane::Todos,
         Pane::Trace,
     ];
@@ -39,6 +52,7 @@ impl Pane {
             Pane::Notes => "Notes",
             Pane::Findings => "Findings",
             Pane::Strings => "Strings",
+            Pane::History => "History",
             Pane::Todos => "TODO",
             Pane::Trace => "Trace",
         }
@@ -52,6 +66,7 @@ impl Pane {
             Pane::Notes => "Notes & Bookmarks",
             Pane::Findings => "Findings (risky calls)",
             Pane::Strings => "Strings in the Source",
+            Pane::History => "Git History (fix commits)",
             Pane::Todos => "TODO List",
             Pane::Trace => "Trace Pane",
         }
@@ -91,7 +106,7 @@ pub fn right_pane(id_salt: impl egui::AsIdSalt, width: f32) -> egui::Panel {
 /// clicked.
 pub fn hide_button(ui: &mut egui::Ui, edge: Edge) -> bool {
     ui.small_button(edge.arrow())
-        .on_hover_text("Hide this pane (its button at the top right brings it back)")
+        .on_hover_text("Hide this pane (its button in the menu bar brings it back)")
         .clicked()
 }
 
@@ -108,25 +123,40 @@ pub fn heading(ui: &mut egui::Ui, title: impl Into<RichText>, edge: Edge) -> boo
     .inner
 }
 
-/// A toggle per pane, ending at the right edge of `ui`, lit for the ones
-/// shown. `hint` is each one's tooltip. Returns the one clicked.
+/// A pill per pane, left to right in `ui`, lit for the ones shown. `hint`
+/// is each one's tooltip. Returns the one clicked.
 pub fn toggles(
     ui: &mut egui::Ui,
     is_shown: impl Fn(Pane) -> bool,
     hint: impl Fn(Pane) -> String,
 ) -> Option<Pane> {
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let mut clicked = None;
-        // Right to left, so the last pane is drawn first.
-        for pane in Pane::ALL.into_iter().rev() {
-            let toggle = ui.selectable_label(is_shown(pane), pane.label());
-            if toggle.on_hover_text(hint(pane)).clicked() {
-                clicked = Some(pane);
+    ui.scope(|ui| {
+        // Buttons as elsewhere in the window, not as menu titles: the menu
+        // bar hides the background of buttons that aren't lit.
+        ui.visuals_mut().widgets = ui.ctx().global_style().visuals.widgets.clone();
+        let spacing = ui.spacing_mut();
+        spacing.item_spacing.x = TOGGLE_GAP;
+        spacing.button_padding = TOGGLE_PADDING;
+        Pane::ALL.into_iter().fold(None, |clicked, pane| {
+            let toggle = toggle(ui, pane, is_shown(pane)).on_hover_text(hint(pane));
+            match toggle.clicked() {
+                true => Some(pane),
+                false => clicked,
             }
-        }
-        clicked
+        })
     })
     .inner
+}
+
+/// One pane's pill: blue when the pane is shown, gray when hidden.
+fn toggle(ui: &mut egui::Ui, pane: Pane, is_lit: bool) -> egui::Response {
+    let label = RichText::new(pane.label())
+        .family(fonts::medium())
+        .extra_letter_spacing(TOGGLE_LETTER_SPACING);
+    let pill = egui::Button::selectable(is_lit, label)
+        .frame_when_inactive(true)
+        .corner_radius(TOGGLE_ROUNDING);
+    ui.add(pill)
 }
 
 impl SrcWranglrApp {
@@ -137,6 +167,7 @@ impl SrcWranglrApp {
             Pane::Notes => self.notes_panel.is_open(),
             Pane::Findings => self.findings_panel.is_open(),
             Pane::Strings => self.strings_panel.is_open(),
+            Pane::History => self.history_panel.is_open(),
             Pane::Todos => self.todo_panel.is_open(),
             Pane::Trace => self.trace_panel.is_open(),
         }
@@ -151,12 +182,13 @@ impl SrcWranglrApp {
             Pane::Notes => self.notes_panel.set_open(is_shown),
             Pane::Findings => self.findings_panel.set_open(is_shown),
             Pane::Strings => self.strings_panel.set_open(is_shown),
+            Pane::History => self.history_panel.set_open(is_shown),
             Pane::Todos => self.todo_panel.set_open(is_shown),
             Pane::Trace => self.trace_panel.set_open(is_shown),
         }
     }
 
-    /// The toggles at the right of the menu bar, while a project is open.
+    /// The toggles in the menu bar, while a project is open.
     pub(super) fn show_pane_toggles(&self, ui: &mut egui::Ui) -> Option<Command> {
         if !self.is_project_open {
             return None;
@@ -321,6 +353,31 @@ mod tests {
         harness.run();
         assert!(!harness.state().todo_panel.is_open());
         assert!(harness.query_by_label_contains("TODO (").is_none());
+    }
+
+    #[test]
+    fn the_toggles_follow_the_project_name_left_to_right_with_room_between() {
+        let harness = window();
+        let name = harness.state().project.name.clone();
+        let name_right = harness
+            .query_all_by_label(&name)
+            .map(|node| node.rect())
+            .find(|rect| rect.top() < 30.0)
+            .expect("the project's name in the menu bar")
+            .right();
+        let pills: Vec<egui::Rect> = Pane::ALL
+            .into_iter()
+            .map(|pane| harness.get_by_label(pane.label()).rect())
+            .collect();
+        assert!(
+            pills[0].left() > name_right,
+            "Symbols starts after the name"
+        );
+        for pair in pills.windows(2) {
+            assert!(pair[1].left() - pair[0].right() >= TOGGLE_GAP - 0.5);
+        }
+        // Right after the menus and the name, not pushed to the far right.
+        assert!(pills[0].left() - name_right < 40.0, "{:?}", pills[0]);
     }
 
     #[test]

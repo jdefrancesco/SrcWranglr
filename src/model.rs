@@ -130,6 +130,88 @@ pub struct StringLiteral {
     pub function: Option<SymbolId>,
 }
 
+/// A comment worth a look: one telling an analyzer not to report, or a
+/// TODO-style tag left in the code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentMark {
+    pub kind: CommentMarkKind,
+    /// Where the directive or tag is written.
+    pub span: Span,
+    /// The comment from the directive or tag to the end of its line,
+    /// cut short (with `…`) if long.
+    pub text: String,
+    /// The function it is in; `None` at file scope.
+    pub function: Option<SymbolId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum CommentMarkKind {
+    /// Tells this analyzer not to report here.
+    Silences(Analyzer),
+    Tag(SourceTag),
+}
+
+/// An analyzer whose findings a comment in the code can silence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Analyzer {
+    Semgrep,
+    Flawfinder,
+    Cppcheck,
+    ClangTidy,
+    Coverity,
+    CodeQl,
+    SonarQube,
+    PvsStudio,
+    Splint,
+}
+
+impl Analyzer {
+    pub fn label(self) -> &'static str {
+        match self {
+            Analyzer::Semgrep => "semgrep",
+            Analyzer::Flawfinder => "flawfinder",
+            Analyzer::Cppcheck => "cppcheck",
+            Analyzer::ClangTidy => "clang-tidy",
+            Analyzer::Coverity => "Coverity",
+            Analyzer::CodeQl => "CodeQL",
+            Analyzer::SonarQube => "SonarQube",
+            Analyzer::PvsStudio => "PVS-Studio",
+            Analyzer::Splint => "Splint",
+        }
+    }
+}
+
+/// A tag marking work left or a known problem: `TODO`, `FIXME`, ...
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SourceTag {
+    Fixme,
+    Bug,
+    Xxx,
+    Hack,
+    Todo,
+}
+
+impl SourceTag {
+    pub const ALL: [SourceTag; 5] = [
+        SourceTag::Fixme,
+        SourceTag::Bug,
+        SourceTag::Xxx,
+        SourceTag::Hack,
+        SourceTag::Todo,
+    ];
+
+    /// As written in the code.
+    pub fn label(self) -> &'static str {
+        match self {
+            SourceTag::Fixme => "FIXME",
+            SourceTag::Bug => "BUG",
+            SourceTag::Xxx => "XXX",
+            SourceTag::Hack => "HACK",
+            SourceTag::Todo => "TODO",
+        }
+    }
+}
+
 /// Size and branching of one function definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionMetrics {
@@ -197,6 +279,13 @@ pub struct CodeGraph {
     pub strings: HashMap<String, Vec<StringLiteral>>,
     /// Files with more strings than were kept.
     pub strings_cut_short: Vec<String>,
+    /// Comments silencing analyzers and TODO-style tags, per file (files
+    /// with any), in file order.
+    pub comment_marks: HashMap<String, Vec<CommentMark>>,
+    /// Files with more TODO-style tags than were kept.
+    pub tags_cut_short: Vec<String>,
+    /// Files with more comments silencing analyzers than were kept.
+    pub silencers_cut_short: Vec<String>,
 }
 
 impl CodeGraph {

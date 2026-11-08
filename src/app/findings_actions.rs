@@ -4,6 +4,7 @@
 use super::dangerous_editor::{DangerousEditor, DangerousEditorOutcome};
 use super::dangerous_lists::{DangerousLists, ListScope};
 use super::finding_view::{FindingView, FindingViewAction};
+use super::rule_files;
 use super::tool_job::{self, ToolJob};
 use super::trust;
 use super::{SrcWranglrApp, Status};
@@ -82,7 +83,10 @@ impl SrcWranglrApp {
             .findings
             .with_own_results(&self.project.graph, self.dangerous.merged());
         self.refresh_verdicts();
-        self.status = Status::Info("This project's verdicts and list are now applied.".into());
+        self.status = Status::Info(
+            "This project's verdicts and list are now applied, and semgrep runs use its rules."
+                .into(),
+        );
     }
 
     /// After writing a verdict or list entry into a project whose files are
@@ -124,8 +128,9 @@ impl SrcWranglrApp {
                 n => format!(" ({n} \"off\" entries ignored)"),
             };
             self.status = Status::Info(format!(
-                "This project ships its own verdicts or dangerous list{ignored}: shown, \
-                 not applied. Analyze > Trust This Project's Verdicts and List to apply them."
+                "This project ships its own verdicts, dangerous list or semgrep rules{ignored}: \
+                 not applied. Analyze > Trust This Project's Verdicts, List and Rules to apply \
+                 them."
             ));
             return;
         }
@@ -203,8 +208,18 @@ impl SrcWranglrApp {
             self.project.name
         ));
         let search = self.settings.search_path();
-        self.tool_jobs
-            .push(ToolJob::spawn(tool, root, search, ctx.clone()));
+        // The project's own rules only once you trust its files, asked
+        // now: rules may have appeared since the project was opened.
+        let project_rules = trust::is_trusted(&root)
+            .then(|| rule_files::project_rules(&root))
+            .flatten();
+        self.tool_jobs.push(ToolJob::spawn(
+            tool,
+            root,
+            search,
+            project_rules,
+            ctx.clone(),
+        ));
     }
 
     /// Adds finished tools' findings.

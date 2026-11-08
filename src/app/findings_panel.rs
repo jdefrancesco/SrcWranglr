@@ -2,6 +2,8 @@
 //! severe first, filterable by severity, text, and whether outside input
 //! reaches them; click one to go there.
 
+use super::visible::visible_lines;
+use crate::history::findings as history_findings;
 use egui::RichText;
 
 use super::findings::Findings;
@@ -11,7 +13,7 @@ use crate::analysis::reach::{describe, Reach};
 use crate::analysis::{Finding, Severity};
 use crate::model::CodeGraph;
 use crate::notes::triage::TriageStatus;
-use crate::style::{severity_color, INPUT_COLOR};
+use crate::style::{severity_text_color, INPUT_COLOR};
 
 const DEFAULT_WIDTH: f32 = 340.0;
 
@@ -32,6 +34,8 @@ pub struct Filter {
     pub show_dismissed: bool,
     /// Only findings in functions outside input reaches.
     pub only_reachable: bool,
+    /// Leave out the lines fix commits last changed (git history marks).
+    pub hide_history: bool,
 }
 
 impl FindingsPanel {
@@ -100,6 +104,20 @@ impl FindingsPanel {
             format!("Only what input can reach ({reachable})"),
         )
         .on_hover_text(REACH_HINT);
+        let history = findings
+            .all()
+            .iter()
+            .filter(|f| f.tool == history_findings::TOOL)
+            .count();
+        if history > 0 {
+            let mut is_shown = !filter.hide_history;
+            ui.checkbox(
+                &mut is_shown,
+                format!("Lines fix commits changed ({history})"),
+            )
+            .on_hover_text("Marks from the git history: code a fix commit last changed");
+            filter.hide_history = !is_shown;
+        }
         ui.separator();
         let rows = listed(findings, filter, graph, reach);
         if rows.is_empty() {
@@ -147,7 +165,7 @@ fn finding_row(
             ui.label(RichText::new(format!("[{}]", verdict.label().to_lowercase())).strong());
         }
         let severity = RichText::new(finding.severity.label())
-            .color(severity_color(finding.severity))
+            .color(severity_text_color(finding.severity, ui.visuals()))
             .monospace();
         ui.label(severity);
         let text = format!(
@@ -161,7 +179,11 @@ fn finding_row(
             .cwe
             .map(|c| format!(" (CWE-{c})"))
             .unwrap_or_default();
-        let hover = format!("{}{cwe}\nfound by {}", finding.message, finding.tool);
+        let hover = format!(
+            "{}{cwe}\nfound by {}",
+            visible_lines(&finding.message),
+            finding.tool
+        );
         ui.selectable_label(false, text)
             .on_hover_text(hover)
             .clicked()
@@ -205,6 +227,7 @@ pub fn listed<'f>(
         })
         .filter(|(_, f)| filter.severity.is_none_or(|s| f.severity == s) && matches(f))
         .filter(|(_, f)| !filter.only_reachable || reach.reaches_finding(f))
+        .filter(|(_, f)| !filter.hide_history || f.tool != history_findings::TOOL)
         .collect()
 }
 
@@ -257,6 +280,33 @@ mod tests {
         assert!(harness
             .query_by_label("Only what input can reach (1)")
             .is_some());
+    }
+
+    #[test]
+    fn git_history_marks_can_be_left_out_of_the_list() {
+        let graph = graph();
+        let mark = Finding {
+            tool: history_findings::TOOL.into(),
+            rule: "fixed in aaaa1111".into(),
+            severity: Severity::Low,
+            message: String::new(),
+            fix: None,
+            cwe: None,
+            file: "x.c".into(),
+            line: 1,
+            columns: None,
+            symbol: None,
+        };
+        let findings = Findings::for_graph(&graph, &Default::default())
+            .with_tool_results(history_findings::TOOL, vec![mark]);
+        let reach = Reach::of(&graph);
+        let count = |filter: &Filter| listed(&findings, filter, &graph, &reach).len();
+        let everything = count(&Filter::default());
+        let without = Filter {
+            hide_history: true,
+            ..Filter::default()
+        };
+        assert_eq!(count(&without), everything - 1);
     }
 
     #[test]

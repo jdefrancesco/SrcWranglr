@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::analysis::dangerous::DangerousList;
 use crate::analysis::risky::{self, risky_calls};
+use crate::analysis::silenced::{self, silencing_comments};
 use crate::analysis::{Finding, Severity};
 use crate::model::CodeGraph;
 use crate::notes::triage::{FindingKey, Triage, TriageStatus};
@@ -26,7 +27,7 @@ impl Findings {
     /// The findings SrcWranglr itself makes for `graph`, with `list`'s
     /// functions flagged too.
     pub fn for_graph(graph: &CodeGraph, list: &DangerousList) -> Self {
-        Self::from_findings(risky_calls(graph, list))
+        Self::from_findings(own_findings(graph, list))
     }
 
     fn from_findings(mut all: Vec<Finding>) -> Self {
@@ -91,12 +92,8 @@ impl Findings {
     /// These findings with SrcWranglr's own (rules and your list) made
     /// again for `graph` and `list`; external tools' results are kept.
     pub fn with_own_results(&self, graph: &CodeGraph, list: &DangerousList) -> Self {
-        let tools = self
-            .all
-            .iter()
-            .filter(|f| f.tool != risky::TOOL && f.tool != risky::LIST_TOOL)
-            .cloned();
-        Self::from_findings(tools.chain(risky_calls(graph, list)).collect())
+        let tools = self.all.iter().filter(|f| !is_own(f)).cloned();
+        Self::from_findings(tools.chain(own_findings(graph, list)).collect())
     }
 
     /// These findings with `tool`'s replaced by `found`.
@@ -144,6 +141,19 @@ impl Findings {
         }
         lines
     }
+}
+
+/// The findings SrcWranglr makes itself: risky calls (with `list`'s
+/// functions) and comments silencing analyzers.
+fn own_findings(graph: &CodeGraph, list: &DangerousList) -> Vec<Finding> {
+    let mut found = risky_calls(graph, list);
+    found.extend(silencing_comments(graph));
+    found
+}
+
+/// Whether SrcWranglr made `finding` itself, rather than a tool it ran.
+fn is_own(finding: &Finding) -> bool {
+    [risky::TOOL, risky::LIST_TOOL, silenced::TOOL].contains(&finding.tool.as_str())
 }
 
 /// The lines of the files some findings are in, split once.
