@@ -4,11 +4,12 @@
 
 I like the simple, GUI for the most part. I just need to make some changes to the fonts used for:
 
-1. The list of functions on the left
-2. The top buttons like 'Back' and such. Not a big change but a font that separates it from regular text. 
-3. Default layout should be the code listing on the right instead of the bottom.
-4. Be able to toggle GUI elements without hotkeys. Like if i want to TODO to hide, i want a button at the top so I can hit and hide it.
-5. Settings menu. When changes are made they should be saved. These will apply to the program not a specific session,
+1. Include listing of FILENAMES!
+2. The list of functions on the left
+3. The top buttons like 'Back' and such. Not a big change but a font that separates it from regular text.
+4. Default layout should be the code listing on the right instead of the bottom.
+5. Be able to toggle GUI elements without hotkeys. Like if i want to TODO to hide, i want a button at the top so I can hit and hide it.
+6. Settings menu. When changes are made they should be saved. These will apply to the program not a specific session,
 
 ## Features
 
