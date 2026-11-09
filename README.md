@@ -8,7 +8,8 @@ Written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](htt
 
 ![SrcWranglr showing interactive code graphs, linked source, findings, project triage, and fuzz targets](docs/screenshots/slideshow.webp)
 
-[Quick start](#quick-start) · [Features](#features) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md)
+[Quick start](#quick-start) · [Features](#features) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) [AI policy](#ai-policy)
+
 
 ## Quick start
 
@@ -145,6 +146,21 @@ discover files → extract syntax → resolve names → CodeGraph → layout →
 Indexing lives in `src/index/`, graph layout and rendering in `src/graph/`, value tracing and analysis in `src/analysis/`, and application behavior in `src/app/`. See the [source map](docs/guide.md#how-it-works) and [development reference](docs/guide.md#development) for individual modules, headless indexing measurements, and harness export commands.
 
 Bug reports are especially useful with a small C/C++ example, the expected relationship or trace, the observed result, and your platform. [Open an issue](https://github.com/jdefrancesco/SrcWranglr/issues).
+
+## AI Policy
+
+This project was ported from software I had been working on years ago. I decided to perform a rewrite in Rust to learn it better and implement a real tool
+lusing it. The majority of the code is manually written with the exception of: 
+
+1. The GUI. Writing UI isn't something I find thrilling.
+2. Documentation found in the repository.
+3. Makefile and various helper scripts.
+
+That being said, blind usage of LLMs aren't acceptable. AI has become very useful but I am a strong believer that humans
+need to be driving and crafting a deep understanding of their code. Prototyping, helping debug difficult problems, and security review are
+also acceptable uses of LLMs. So please, if you plan to contribute use AI as a tool and exercise discretion. AI Slop can easily derail otherwise awesome 
+project, 
+
 
 ## Features planned
 
