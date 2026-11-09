@@ -77,7 +77,14 @@ pub struct IndexOptions {
 impl Default for IndexOptions {
     fn default() -> Self {
         Self {
-            max_files: 20_000,
+            // Must exceed the largest tree people open. This was 20,000, but
+            // the Linux kernel has ~65k .c/.h files, and discovery keeps only
+            // the first `max_files` paths in sorted order, so most of the
+            // kernel was silently left out (a "warnings" badge was the only
+            // sign). 100,000 covers Linux with room to grow. A full Linux
+            // index takes ~2 minutes and ~7.6 GB at peak on Apple silicon;
+            // this limit guards against runaway trees, it is not a budget.
+            max_files: 100_000,
             max_file_bytes: 2 * 1024 * 1024,
         }
     }
@@ -217,6 +224,14 @@ mod tests {
 
     fn run(root: &Path, options: IndexOptions) -> Result<IndexOutcome, IndexError> {
         index_project(root, options, &mut |_| {}, &AtomicBool::new(false))
+    }
+
+    #[test]
+    fn default_file_limit_fits_the_linux_kernel() {
+        // Linux 7.x has ~65k .c/.h files. Discovery sorts then truncates, so a
+        // smaller limit silently drops everything after `drivers/gpu/...`.
+        const LINUX_SOURCE_FILES: usize = 65_100;
+        assert!(IndexOptions::default().max_files > LINUX_SOURCE_FILES);
     }
 
     #[test]

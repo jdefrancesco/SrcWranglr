@@ -13,8 +13,22 @@ pub const SOURCE_EXTENSIONS: &[&str] = &[
     "c", "cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx", "h++", "inl", "ipp", "tpp",
 ];
 
-/// Directories that are almost never first-party source.
-const SKIPPED_DIRS: &[&str] = &["node_modules", "target"];
+/// Directories that are almost never first-party source. Matched by name at
+/// any depth, so only list names no C/C++ project uses for its own code.
+const SKIPPED_DIRS: &[&str] = &["node_modules"];
+
+/// Cargo's build output, recognized by the `Cargo.toml` beside it.
+///
+/// `target` used to sit in `SKIPPED_DIRS`, so any folder with that name was
+/// skipped. C projects use the name for real source: on the Linux kernel that
+/// silently dropped `drivers/target` (the SCSI target subsystem),
+/// `drivers/nvme/target` and `include/target`, about 80 files.
+fn is_cargo_target_dir(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "target")
+        && path
+            .parent()
+            .is_some_and(|parent| parent.join("Cargo.toml").is_file())
+}
 
 #[derive(Debug, Default)]
 pub struct Discovery {
@@ -37,7 +51,9 @@ pub fn discover_sources(
         .require_git(false)
         .filter_entry(|entry| {
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-            !(is_dir && SKIPPED_DIRS.iter().any(|d| entry.file_name() == *d))
+            !(is_dir
+                && (SKIPPED_DIRS.iter().any(|d| entry.file_name() == *d)
+                    || is_cargo_target_dir(entry.path())))
         })
         .build();
 
@@ -57,6 +73,11 @@ pub fn discover_sources(
     }
     files.sort();
 
+    // Truncating after the sort keeps an alphabetical prefix, so a limit that
+    // is too small drops whole directories from the end of the alphabet
+    // rather than a scattering of files. That is how a 20,000 limit lost most
+    // of Linux: everything after `drivers/gpu/drm/nouveau/...`, including
+    // `fs/`, `kernel/`, `mm/` and `net/`. See `IndexOptions::default`.
     if files.len() > max_files {
         warnings.push(format!(
             "Found {} source files; only the first {max_files} were indexed.",
@@ -136,6 +157,40 @@ mod tests {
             ["b.h", "include/a.hpp", "src/main.cpp"]
         );
         assert!(found.warnings.is_empty());
+    }
+
+    #[test]
+    fn skips_cargo_target_but_keeps_source_dirs_named_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        // Linux keeps real sources in `drivers/target` and `include/target`.
+        for rel in [
+            "Cargo.toml",
+            "target/debug/build/gen.c",
+            "drivers/target/target_core.c",
+            "drivers/nvme/target/core.c",
+            "include/target/target_core_base.h",
+        ] {
+            touch(root, rel);
+        }
+
+        let found = discover_sources(root, 100, &NOT_CANCELLED).expect("discover");
+        assert_eq!(
+            rel_names(root, &found.files),
+            [
+                "drivers/nvme/target/core.c",
+                "drivers/target/target_core.c",
+                "include/target/target_core_base.h",
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_top_level_target_dir_outside_a_cargo_project() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        touch(dir.path(), "target/main.c");
+        let found = discover_sources(dir.path(), 100, &NOT_CANCELLED).expect("discover");
+        assert_eq!(rel_names(dir.path(), &found.files), ["target/main.c"]);
     }
 
     #[test]
