@@ -8,14 +8,20 @@ Written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](htt
 
 ![SrcWranglr showing interactive code graphs, linked source, findings, project triage, and fuzz targets](docs/screenshots/slideshow.webp)
 
-[Quick start](#quick-start) · [Features](#features) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) [AI policy](#ai-policy)
+[Quick start](#quick-start) · [Features](#features) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) · [AI policy](#ai-policy)
 
+
+## About
+
+I built **SrcWranglr** to help me understand C/C++ codebases while learning Rust. The core analysis code was written by hand; AI tools have assisted with GUI work, tests, and documentation.
+
+Before the Rust re-write, the project used the working name *slurcetrail* and was written in Python for a prototype, then C, then I got side tracked by other things.
 
 ## Quick start
 
 **Requires Rust 1.95 or newer.** Development and testing currently happen on macOS. Linux and Windows are not yet tested.
 
-```sh
+```bash
 git clone https://github.com/jdefrancesco/SrcWranglr.git
 cd SrcWranglr
 cargo run --release --locked
@@ -23,13 +29,13 @@ cargo run --release --locked
 
 Try the built-in demo from the start page, or choose **File → Open Project…** and select a C/C++ project folder. You can also open a project directly:
 
-```sh
+```bash
 cargo run --release --locked -- ~/code/myproject
 ```
 
 Indexing reads source directly; you do not need to build the project or provide a compilation database. It runs in the background, supports cancellation, and respects `.gitignore`. See [limitations](#limitations) for indexing and analysis boundaries.
 
-Semgrep, cppcheck, and flawfinder are **optional**. Install them separately to use their integrations; the graph, navigation, and built-in analysis work without them. **File → Settings…** shows tool discovery and editor options.
+`Semgrep`, `cppcheck`, and `flawfinder` are **optional**. Install them separately to use their integrations; the graph, navigation, and built-in analysis work without them. **File → Settings…** shows tool discovery and editor options.
 
 ## Features
 
@@ -46,14 +52,14 @@ The **Trail** view keeps the selected symbol in the center, its callers on the l
 
 | Task | What SrcWranglr provides |
 |---|---|
-| Review risky calls | Argument-aware checks, a custom dangerous-functions list, and findings from Semgrep, cppcheck, and flawfinder. Filter results and record verdicts. |
+| Review risky calls | Argument-aware checks, a custom dangerous-functions list, and findings from `Semgrep`, `cppcheck`, and `flawfinder`. Filter results and record verdicts. |
 | Follow a value | Trace backward to its origin, forward to risky calls, or between a source variable and a call you choose. Each path links to its source lines. |
-| Find related code | Draft a Semgrep rule from a line with **Find More Like This…**, find functions and blocks with similar syntax, or filter functions by library-call behavior. |
-| Choose fuzz targets | Rank candidates using input reachability, risky calls, complexity, and signatures. Draft editable libFuzzer harnesses, with `TODO`s where manual work is needed. |
+| Find related code | Draft a `Semgrep` rule from a line with **Find More Like This…**, find functions and blocks with similar syntax, or filter functions by library-call behavior. |
+| Choose fuzz targets | Rank candidates using input reach-ability, risky calls, complexity, and signatures. Draft editable `libFuzzer` harnesses, with `TODO`s where manual work is needed. |
 | Survey a project | Inspect languages, build metadata, function complexity, IPC and capabilities, and ELF/PE/Mach-O binaries with hardening information. |
 | Review past fixes | Find commits whose messages suggest bug or security fixes and inspect the lines they still own in the current checkout. |
 
-Input reachability helps prioritize findings. Value traces follow assignments, calls, returns, copies, out-parameters, and struct fields where supported. Both use syntax and heuristics; review the source to establish what a path means.
+Input reach-ability helps prioritize findings. Value traces follow assignments, calls, returns, copies, out-parameters, and struct fields where supported. Both use syntax and heuristics; review the source to establish what a path means.
 
 See the [user guide](docs/guide.md) for analysis behavior, examples, tool configuration, and limits.
 
@@ -115,9 +121,9 @@ srcwranglr [PROJECT_DIR] [--symbol QUALIFIED_NAME] [--view trail|calls] [--triag
 srcwranglr --version
 ```
 
-For example, open LevelDB at a function in the call hierarchy:
+For example, open **LevelDB** at a function in the call hierarchy:
 
-```sh
+```bash
 srcwranglr ~/code/leveldb --symbol leveldb::DBImpl::Write --view calls
 ```
 
@@ -147,21 +153,6 @@ Indexing lives in `src/index/`, graph layout and rendering in `src/graph/`, valu
 
 Bug reports are especially useful with a small C/C++ example, the expected relationship or trace, the observed result, and your platform. [Open an issue](https://github.com/jdefrancesco/SrcWranglr/issues).
 
-## AI Policy
-
-This project was ported from software I had been working on years ago. I decided to perform a rewrite in Rust to learn it better and implement a real tool
-lusing it. The majority of the code is manually written with the exception of: 
-
-1. The GUI. Writing UI isn't something I find thrilling.
-2. Documentation found in the repository.
-3. Makefile and various helper scripts.
-
-That being said, blind usage of LLMs aren't acceptable. AI has become very useful but I am a strong believer that humans
-need to be driving and crafting a deep understanding of their code. Prototyping, helping debug difficult problems, and security review are
-also acceptable uses of LLMs. So please, if you plan to contribute use AI as a tool and exercise discretion. AI Slop can easily derail otherwise awesome 
-project, 
-
-
 ## Features planned
 
 Planned additions include:
@@ -170,18 +161,31 @@ Planned additions include:
 - Richer semantic indexing and search beyond syntax shapes and call behaviors.
 - Collecting useful seed corpora for fuzz targets.
 - Exploring lightweight language-model assistance for understanding large codebases.
+- Adding CodeQL rule generation and querying
 
-## About
 
-I built SrcWranglr to help me understand C/C++ codebases while learning Rust. The core analysis code was written by hand; AI tools have assisted with GUI work, tests, and documentation.
+## AI Policy
 
-Before v0.2.0, the project used the working name *slurcetrail*. Some older screenshots show that name.
+This project was ported from software I had been working on years ago. I decided to perform a rewrite in Rust for learning if I am capable of writing real tools in Rust. Oh, also because "Rustaceans" are relentless zealots who pushed it so hard that
+knowing it has become a requirement for a lot of system development. The cult of Rust can give it a rest now though that us unlikely to happen heheh...
+
+The majority of the code is **manually written** with the exception of: 
+
+1. The GUI. Writing UIs isn't something I find thrilling.
+2. Documentation found in the repository.
+3. The `Makefile` and various helper scripts.
+4. Yak-shaving tasks that consume too much time for a one man army.
+
+That being said, blind usage of LLMs aren't acceptable. AI has become very useful but I am a strong believer that humans
+need to be driving and crafting a deep understanding of their code. Prototyping, helping debug difficult problems, and security review are
+also acceptable uses of LLMs. So please, if you plan to contribute use AI as a tool and exercise discretion. AI Slop can easily derail otherwise awesome 
+project, 
 
 ## Acknowledgements
 
-- Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. SrcWranglr is an independent implementation and shares no code with it.
+- Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. `SrcWranglr` is an independent implementation and shares no code with it.
 - Screenshots show [LevelDB](https://github.com/google/leveldb) (BSD-3-Clause, © The LevelDB Authors).
-- Bundles the fonts [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) (© Adobe) and [Iosevka](https://github.com/be5invis/Iosevka) (© Renzhi Li), both under the SIL Open Font License 1.1, and [Ubuntu](https://github.com/google/fonts/tree/main/ufl/ubuntu) Regular and Medium (© Canonical Ltd.) under the Ubuntu Font Licence 1.0; see [assets/fonts](assets/fonts).
+- Bundles the fonts [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) (© Adobe) and [Iosevka](https://github.com/be5invis/Iosevka) (© Renzhi Li), both under the SIL Open Font License 1.1, and [Ubuntu](https://github.com/google/fonts/tree/main/ufl/ubuntu) Regular and Medium (© Canonical Ltd.) under the Ubuntu Font License 1.0; see [assets/fonts](assets/fonts).
 - Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), [rfd](https://github.com/PolyMeilleur/rfd), and [nucleo-matcher](https://github.com/helix-editor/nucleo).
 
 ## License
