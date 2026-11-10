@@ -1,114 +1,146 @@
-//! The "Find More Like This" window: a semgrep rule drafted from a line of
-//! code, to edit, test on the project, and save for the project or for all
-//! of them. Testing lists every place the rule matches.
+//! The "Find More Like This" window: a semgrep rule drafted from code you
+//! picked (a line, several lines, or several places that share a
+//! pattern), with exceptions for the fixed form and for checks, to edit,
+//! test on the project, and save for the project or for all of them.
 
 use egui::RichText;
 
 use super::findings::line_text;
-use super::rule_files::RuleHome;
+use super::rule_editor::{EditorAction, RuleEditor, SaveButton};
 use super::survey_view::ERROR_COLOR;
-use super::tool_job::{with_symbols, ToolJob};
 use super::visible::{self, visible};
-use crate::analysis::similar::{drafts, Looseness, RuleDraft};
-use crate::analysis::Finding;
+use crate::analysis::semgrep_rule::{Exception, ExceptionKind};
+use crate::analysis::similar::{draft_from, exception_from, Draft, Example, Looseness};
 use crate::model::CodeGraph;
 
-const DEFAULT_SIZE: [f32; 2] = [620.0, 520.0];
-const RULE_ROWS: usize = 8;
-/// Matches listed at most; the count says if there were more.
-const MAX_LISTED: usize = 2_000;
-
-/// What the user asked of the window.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SimilarAction {
-    /// Run the rule (this text) on the project.
-    Test(String),
-    /// Save the rule (this id and text) there.
-    Save(RuleHome, String, String),
-    /// Show this match in the source.
-    GoTo(Finding),
-}
+const DEFAULT_SIZE: [f32; 2] = [660.0, 600.0];
+/// Places listed in full; more are counted.
+const MAX_PLACES_LISTED: usize = 8;
+/// Places a draft is made from, at most.
+const MAX_PLACES: usize = 50;
+/// What a fresh draft's id falls back to.
+const FALLBACK_ID: &str = "like-this";
 
 pub struct SimilarView {
-    file: String,
-    line: u32,
+    places: Vec<Example>,
+    /// Whether other code may come between the statements of several lines.
+    allow_gaps: bool,
     looseness: Looseness,
-    /// The drafts, in `Looseness` order (or why there are none). The
-    /// drafted id names the file if the edited rule's can't.
-    drafts: Result<[RuleDraft; 2], String>,
-    /// The rule, as edited.
-    yaml: String,
-    test: Option<ToolJob>,
-    matches: Option<Result<Vec<Finding>, String>>,
-    /// What the last save did.
-    saved: Option<Result<String, String>>,
+    /// The draft (or why there is none).
+    draft: Result<Draft, String>,
+    exceptions: Vec<Exception>,
+    /// What adding a place or an exception last said, if it went wrong.
+    problem: Option<String>,
+    /// The rule as last drafted, to tell whether it has been edited.
+    drafted: String,
+    pub editor: RuleEditor,
 }
 
 impl SimilarView {
-    /// The window for line `line` of `file`, with a rule drafted from it.
-    pub fn open(graph: &CodeGraph, file: &str, line: u32) -> Self {
-        let source = graph.file_contents.get(file).map_or("", String::as_str);
-        let drafts = drafts(source, file, line);
-        let yaml = drafts
-            .as_ref()
-            .map(|d| d[0].yaml.clone())
-            .unwrap_or_default();
-        Self {
-            file: file.to_string(),
-            line,
+    /// The window for `place`, with a rule drafted from it.
+    pub fn open(graph: &CodeGraph, place: Example) -> Self {
+        Self::open_on(graph, vec![place])
+    }
+
+    /// The window for `places`, with a rule drafted from what they share.
+    pub fn open_on(graph: &CodeGraph, places: Vec<Example>) -> Self {
+        let mut view = Self {
+            places: Vec::new(),
+            allow_gaps: true,
             looseness: Looseness::default(),
-            drafts,
-            yaml,
-            test: None,
-            matches: None,
-            saved: None,
+            draft: Err(String::new()),
+            exceptions: Vec::new(),
+            problem: None,
+            drafted: String::new(),
+            editor: RuleEditor::default(),
+        };
+        for place in places.into_iter().take(MAX_PLACES) {
+            if !view.places.contains(&place) {
+                view.places.push(place);
+            }
+        }
+        view.redraft(graph);
+        view
+    }
+
+    /// Drafts again from the places so far and `place`.
+    pub fn add_place(&mut self, graph: &CodeGraph, place: Example) {
+        self.problem = None;
+        if self.places.contains(&place) {
+            self.problem = Some(format!(
+                "{} is already a place of this rule.",
+                place.place()
+            ));
+            return;
+        }
+        if self.places.len() >= MAX_PLACES {
+            self.problem = Some(format!(
+                "A rule is drafted from at most {MAX_PLACES} places."
+            ));
+            return;
+        }
+        self.places.push(place);
+        self.redraft(graph);
+    }
+
+    /// Adds an exception drafted from line `line` of `file`.
+    pub fn add_exception_from(&mut self, graph: &CodeGraph, file: &str, line: u32) {
+        self.problem = None;
+        let Ok(draft) = &self.draft else {
+            self.problem = Some("Draft a rule first, then add exceptions to it.".into());
+            return;
+        };
+        let source = graph.file_contents.get(file).map_or("", String::as_str);
+        match exception_from(source, file, line, &draft.names, draft.callee.as_deref()) {
+            Ok(exception) => {
+                self.exceptions.push(exception);
+                self.regenerate();
+            }
+            Err(error) => self.problem = Some(format!("{file}:{line}: {error}")),
         }
     }
 
-    /// The draft for the chosen looseness.
-    fn drafted(&self) -> Option<&RuleDraft> {
-        let drafts = self.drafts.as_ref().ok()?;
-        Some(match self.looseness {
-            Looseness::SameShape => &drafts[0],
-            Looseness::AnyValues => &drafts[1],
-        })
+    fn redraft(&mut self, graph: &CodeGraph) {
+        let sources: Vec<(Example, &str)> = self
+            .places
+            .iter()
+            .map(|place| {
+                let source = graph
+                    .file_contents
+                    .get(&place.file)
+                    .map_or("", String::as_str);
+                (place.clone(), source)
+            })
+            .collect();
+        self.draft = draft_from(&sources, self.allow_gaps);
+        if self
+            .draft
+            .as_ref()
+            .is_ok_and(|draft| draft.any_values.is_none())
+        {
+            self.looseness = Looseness::SameShape;
+        }
+        self.regenerate();
     }
 
-    /// Starts showing the results of `job`, a run of the rule.
-    pub fn start_test(&mut self, job: ToolJob) {
-        self.test = Some(job);
-        self.matches = None;
+    /// The rule from the draft as set up now, in place of the one shown.
+    fn regenerate(&mut self) {
+        let Ok(draft) = &self.draft else {
+            return;
+        };
+        self.drafted = draft.yaml(self.looseness, &self.exceptions);
+        self.editor.set_yaml(self.drafted.clone());
     }
 
-    pub fn test_failed(&mut self, error: String) {
-        self.matches = Some(Err(error));
-    }
-
-    pub fn set_saved(&mut self, saved: Result<String, String>) {
-        self.saved = Some(saved);
-    }
-
-    /// What the last save said, either way.
-    #[cfg(test)]
-    pub fn saved_text(&self) -> Option<String> {
-        self.saved
-            .clone()
-            .map(|saved| saved.unwrap_or_else(|error| error))
-    }
-
-    /// Why the last test failed, if it did.
-    #[cfg(test)]
-    pub fn test_error(&self) -> Option<String> {
-        self.matches.clone()?.err()
+    /// The id a new rule file falls back to.
+    fn fallback_id(&self) -> String {
+        self.draft
+            .as_ref()
+            .map_or(FALLBACK_ID.to_string(), |d| d.id.clone())
     }
 
     /// Draws the window; `None` once it is closed, else what was asked.
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        graph: &CodeGraph,
-    ) -> Option<Option<SimilarAction>> {
-        self.poll_test(graph);
+    pub fn show(&mut self, ctx: &egui::Context, graph: &CodeGraph) -> Option<Option<EditorAction>> {
         let mut is_open = true;
         let mut action = None;
         egui::Window::new("Find More Like This")
@@ -117,294 +149,167 @@ impl SimilarView {
             .default_size(DEFAULT_SIZE)
             .resizable(true)
             .collapsible(false)
-            .show(ctx, |ui| action = self.contents(ui, graph));
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("find_more_like_this_scroll")
+                    .show(ui, |ui| action = self.contents(ui, graph));
+            });
         is_open.then_some(action)
     }
 
-    fn poll_test(&mut self, graph: &CodeGraph) {
-        let Some(result) = self.test.as_ref().and_then(ToolJob::poll) else {
-            return;
-        };
-        self.test = None;
-        self.matches = Some(result.map(|found| {
-            let mut found = with_symbols(found, graph);
-            found.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
-            found
-        }));
-    }
-
-    fn contents(&mut self, ui: &mut egui::Ui, graph: &CodeGraph) -> Option<SimilarAction> {
-        let font = egui::TextStyle::Monospace.resolve(ui.style());
-        let code = line_text(graph, &self.file, self.line).trim();
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("From {}:{}", visible(&self.file), self.line));
-            ui.label(visible::job(code, font, ui.visuals().text_color()));
-        });
-        if let Err(error) = &self.drafts {
+    fn contents(&mut self, ui: &mut egui::Ui, graph: &CodeGraph) -> Option<EditorAction> {
+        self.places_list(ui, graph);
+        ui.weak(
+            "Add another place: right-click a line, or lines picked by shift-clicking their \
+             numbers, → Add Place to Rule. Leave out fixed code or code after a check: \
+             right-click it → Use as Rule Exception.",
+        );
+        if let Some(problem) = &self.problem {
+            ui.label(RichText::new(problem).color(ERROR_COLOR));
+        }
+        if let Err(error) = &self.draft {
             ui.label(RichText::new(error).color(ERROR_COLOR));
             return None;
         }
-        self.looseness_picker(ui);
-        let title = ui.label("Rule (semgrep YAML; edit it as you like):");
-        ui.add(
-            egui::TextEdit::multiline(&mut self.yaml)
-                .code_editor()
-                .desired_rows(RULE_ROWS)
-                .desired_width(f32::INFINITY),
-        )
-        .labelled_by(title.id);
-        let action = self.buttons(ui);
-        self.status(ui);
-        action.or_else(|| self.match_list(ui, graph))
-    }
-
-    fn looseness_picker(&mut self, ui: &mut egui::Ui) {
-        let is_edited = self.drafted().is_some_and(|d| d.yaml != self.yaml);
-        let before = self.looseness;
-        ui.horizontal(|ui| {
-            ui.label("Match:");
-            for looseness in Looseness::ALL {
-                ui.radio_value(&mut self.looseness, looseness, looseness.label());
-            }
-            if is_edited {
-                ui.weak("(picking one replaces your edits)");
-            }
-        });
-        if self.looseness != before {
-            if let Some(yaml) = self.drafted().map(|d| d.yaml.clone()) {
-                self.yaml = yaml;
-            }
+        let is_edited = self.editor.yaml != self.drafted;
+        let (looseness_changed, gaps_changed) = self.options(ui);
+        let exceptions_changed = self.exception_list(ui);
+        if is_edited {
+            ui.weak("(changing these replaces your edits to the rule)");
         }
-    }
-
-    fn buttons(&mut self, ui: &mut egui::Ui) -> Option<SimilarAction> {
-        let mut action = None;
-        ui.horizontal(|ui| {
-            let is_testing = self.test.is_some();
-            let test = ui.add_enabled(!is_testing, egui::Button::new("Test"));
-            if test
-                .on_hover_text("Run this rule on the project and list what it matches")
-                .clicked()
-            {
-                action = Some(SimilarAction::Test(self.yaml.clone()));
-            }
-            let id = rule_id_in(&self.yaml)
-                .or(self.drafted().map(|d| d.id.as_str()))
-                .unwrap_or_default()
-                .to_string();
-            let project = ui.button("Save for This Project").on_hover_text(
-                "Into the project's .srcwranglr/semgrep/: Analyze → Run semgrep uses it once you \
-                 trust this project's files",
-            );
-            if project.clicked() {
-                action = Some(SimilarAction::Save(
-                    RuleHome::Project,
-                    id.clone(),
-                    self.yaml.clone(),
-                ));
-            }
-            let yours = ui
-                .button("Save for All Projects")
-                .on_hover_text("Into your semgrep rules: every semgrep run uses it");
-            if yours.clicked() {
-                action = Some(SimilarAction::Save(RuleHome::Yours, id, self.yaml.clone()));
-            }
-        });
-        action
-    }
-
-    fn status(&self, ui: &mut egui::Ui) {
-        match &self.saved {
-            Some(Ok(message)) => {
-                ui.label(message);
-            }
-            Some(Err(error)) => {
-                ui.label(RichText::new(error).color(ERROR_COLOR));
-            }
-            None => {}
+        if gaps_changed {
+            self.redraft(graph);
+        } else if looseness_changed || exceptions_changed {
+            self.regenerate();
         }
-        if self.test.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Running semgrep…");
-            });
-        }
-    }
-
-    /// The places the test matched; the one clicked.
-    fn match_list(&self, ui: &mut egui::Ui, graph: &CodeGraph) -> Option<SimilarAction> {
-        let matches = match self.matches.as_ref()? {
-            Ok(matches) => matches,
-            Err(error) => {
-                // A tool's error output may quote the project's files.
-                let font = egui::TextStyle::Body.resolve(ui.style());
-                ui.label(visible::job(error, font, ERROR_COLOR));
-                return None;
-            }
-        };
         ui.separator();
-        ui.label(match matches.len() {
-            0 => "No matches. Try Any values, or loosen the pattern.".to_string(),
-            1 => "1 match (the line you started from counts):".to_string(),
-            n if n > MAX_LISTED => format!("{n} matches; the first {MAX_LISTED}:"),
-            n => format!("{n} matches (the line you started from counts):"),
-        });
-        let row_height = ui.spacing().interact_size.y;
+        let saves = SaveButton::new_file(&self.fallback_id());
+        self.editor.show(ui, graph, &saves)
+    }
+
+    fn places_list(&mut self, ui: &mut egui::Ui, graph: &CodeGraph) {
         let font = egui::TextStyle::Monospace.resolve(ui.style());
         let color = ui.visuals().text_color();
-        let shown = &matches[..matches.len().min(MAX_LISTED)];
-        egui::ScrollArea::vertical()
-            .id_salt("similar_matches")
-            .auto_shrink([false, false])
-            .show_rows(ui, row_height, shown.len(), |ui, range| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                let mut picked = None;
-                for found in &shown[range] {
-                    let place = format!("{}:{}  ", found.file, found.line);
-                    let mut label = visible::job(&place, font.clone(), color);
-                    let code = line_text(graph, &found.file, found.line).trim();
-                    visible::append(&mut label, code, font.clone(), color);
-                    if ui.selectable_label(false, label).clicked() {
-                        picked = Some(SimilarAction::GoTo(found.clone()));
-                    }
+        if self.places.len() > 1 {
+            ui.label(format!("From {} places:", self.places.len()));
+        }
+        let mut removed = None;
+        for (i, place) in self.places.iter().enumerate().take(MAX_PLACES_LISTED) {
+            let code = line_text(graph, &place.file, place.first_line).trim();
+            ui.horizontal_wrapped(|ui| {
+                let label = match self.places.len() {
+                    1 => format!("From {}", visible(&place.place())),
+                    _ => visible(&place.place()).into_owned(),
+                };
+                ui.label(label);
+                ui.label(visible::job(code, font.clone(), color));
+                let can_remove = self.places.len() > 1;
+                if can_remove
+                    && ui
+                        .small_button("✕")
+                        .on_hover_text("Leave this place out")
+                        .clicked()
+                {
+                    removed = Some(i);
                 }
-                picked
-            })
-            .inner
+            });
+        }
+        if self.places.len() > MAX_PLACES_LISTED {
+            ui.weak(format!(
+                "and {} more",
+                self.places.len() - MAX_PLACES_LISTED
+            ));
+        }
+        if let Some(i) = removed {
+            self.places.remove(i);
+            self.redraft(graph);
+        }
     }
-}
 
-/// The `id:` of the first rule in `yaml`, if it is a plain name.
-fn rule_id_in(yaml: &str) -> Option<&str> {
-    let id = yaml
-        .lines()
-        .find_map(|line| {
-            line.trim_start()
-                .trim_start_matches("- ")
-                .strip_prefix("id:")
-        })?
-        .trim()
-        .trim_matches(|c| c == '"' || c == '\'');
-    let is_plain = !id.is_empty()
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    is_plain.then_some(id)
+    /// The draft's options. Whether the looseness and the gaps changed.
+    fn options(&mut self, ui: &mut egui::Ui) -> (bool, bool) {
+        let has_any_values = self
+            .draft
+            .as_ref()
+            .is_ok_and(|draft| draft.any_values.is_some());
+        let is_sequence = self.draft.as_ref().is_ok_and(|draft| {
+            draft.same_shape.contains('\n')
+                || self.places.iter().any(|p| p.first_line != p.last_line)
+        });
+        let before = (self.looseness, self.allow_gaps);
+        if has_any_values {
+            ui.horizontal(|ui| {
+                ui.label("Match:");
+                for looseness in Looseness::ALL {
+                    ui.radio_value(&mut self.looseness, looseness, looseness.label());
+                }
+            });
+        }
+        if is_sequence {
+            ui.checkbox(
+                &mut self.allow_gaps,
+                "Other code may come between the statements",
+            )
+            .on_hover_text("Puts ... between them");
+        }
+        (self.looseness != before.0, self.allow_gaps != before.1)
+    }
+
+    /// The exceptions, to edit. Whether one changed.
+    fn exception_list(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        let mut removed = None;
+        if !self.exceptions.is_empty() {
+            ui.label("Except:");
+        }
+        for (i, exception) in self.exceptions.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let name = ui.label(format!("{}.", i + 1));
+                let before = exception.kind;
+                egui::ComboBox::from_id_salt(("exception_kind", i))
+                    .selected_text(exception.kind.label())
+                    .show_ui(ui, |ui| {
+                        for kind in ExceptionKind::ALL {
+                            ui.selectable_value(&mut exception.kind, kind, kind.label())
+                                .on_hover_text(kind.hint());
+                        }
+                    })
+                    .response
+                    .labelled_by(name.id);
+                changed |= exception.kind != before;
+                let width = ui.available_width() - 32.0;
+                let edit = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut exception.pattern)
+                            .code_editor()
+                            .desired_width(width.max(120.0)),
+                    )
+                    .labelled_by(name.id);
+                changed |= edit.changed();
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Remove this exception")
+                    .clicked()
+                {
+                    removed = Some(i);
+                }
+            });
+        }
+        if let Some(i) = removed {
+            self.exceptions.remove(i);
+            changed = true;
+        }
+        let add = ui
+            .button("Add Exception")
+            .on_hover_text("Leave out matches like a pattern you write here");
+        if add.clicked() {
+            self.exceptions.push(Exception::default());
+            changed = true;
+        }
+        changed
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use egui_kittest::kittest::Queryable;
-    use egui_kittest::Harness;
-
-    use super::*;
-    use crate::analysis::Severity;
-    use crate::index::graph_of_files;
-
-    struct State {
-        view: SimilarView,
-        graph: CodeGraph,
-        actions: Vec<SimilarAction>,
-    }
-
-    fn harness(source: &str, line: u32) -> Harness<'static, State> {
-        let graph = graph_of_files(&[("src/net.c", source)]);
-        let view = SimilarView::open(&graph, "src/net.c", line);
-        let mut harness = crate::app::fonts::test_harness().build_ui_state(
-            |ui, state: &mut State| {
-                let ctx = ui.ctx().clone();
-                if let Some(Some(action)) = state.view.show(&ctx, &state.graph) {
-                    state.actions.push(action);
-                }
-            },
-            State {
-                view,
-                graph,
-                actions: Vec::new(),
-            },
-        );
-        harness.run();
-        harness
-    }
-
-    const SOURCE: &str = "void f(char *b, char *p, int n) {\n  memcpy(b, p, ntohs(n));\n}\n";
-
-    #[test]
-    fn drafts_a_rule_from_the_line_and_loosens_it_on_request() {
-        let mut harness = harness(SOURCE, 2);
-        harness.get_by_label("From src/net.c:2");
-        assert!(harness
-            .state()
-            .view
-            .yaml
-            .contains("memcpy($A, $B, ntohs($C))"));
-        harness.get_by_label("Any values").click();
-        harness.run();
-        assert!(harness
-            .state()
-            .view
-            .yaml
-            .contains("memcpy($A, $B, ntohs(...))"));
-    }
-
-    #[test]
-    fn test_and_save_hand_over_the_rule_as_edited() {
-        let mut harness = harness(SOURCE, 2);
-        harness.state_mut().view.yaml = harness
-            .state()
-            .view
-            .yaml
-            .replace("like-memcpy-2", "my-rule");
-        harness.run();
-        harness.get_by_label("Test").click();
-        harness.run();
-        harness.get_by_label("Save for This Project").click();
-        harness.run();
-        let actions = &harness.state().actions;
-        assert!(matches!(&actions[0], SimilarAction::Test(yaml) if yaml.contains("my-rule")));
-        assert!(matches!(
-            &actions[1],
-            SimilarAction::Save(RuleHome::Project, id, _) if id == "my-rule"
-        ));
-    }
-
-    #[test]
-    fn matches_are_listed_and_picking_one_goes_there() {
-        let mut harness = harness(SOURCE, 2);
-        let found = Finding {
-            tool: "semgrep".into(),
-            rule: "like-memcpy-2".into(),
-            severity: Severity::Medium,
-            message: String::new(),
-            fix: None,
-            cwe: None,
-            file: "src/net.c".into(),
-            line: 2,
-            columns: Some((2, 24)),
-            symbol: None,
-        };
-        harness.state_mut().view.matches = Some(Ok(vec![found.clone()]));
-        harness.run();
-        harness.get_by_label("1 match (the line you started from counts):");
-        harness
-            .get_by_label("src/net.c:2  memcpy(b, p, ntohs(n));")
-            .click();
-        harness.run();
-        assert_eq!(harness.state().actions, [SimilarAction::GoTo(found)]);
-    }
-
-    #[test]
-    fn a_line_without_code_says_so() {
-        let harness = harness("int x;\n\n", 2);
-        harness.get_by_label("No call or statement starts on this line.");
-        assert!(harness.query_by_label("Test").is_none());
-    }
-
-    #[test]
-    fn the_edited_rules_id_names_its_file_if_it_can() {
-        assert_eq!(rule_id_in("rules:\n  - id: my-rule\n"), Some("my-rule"));
-        assert_eq!(rule_id_in("rules:\n  - id: \"q\"\n"), Some("q"));
-        assert_eq!(rule_id_in("rules:\n  - id: ../../evil\n"), None);
-        assert_eq!(rule_id_in("nothing"), None);
-    }
-}
+#[path = "similar_view_tests.rs"]
+mod tests;

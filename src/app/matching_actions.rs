@@ -10,10 +10,12 @@ impl SrcWranglrApp {
     pub(super) fn show_matching_panel(&mut self, ui: &mut egui::Ui) {
         self.matching_panel.poll(ui.ctx());
         let graph = std::sync::Arc::clone(&self.project.graph);
-        if let Some(MatchingAction::GoTo { symbol, file, line }) =
-            self.matching_panel.show(ui, &graph, self.layout)
-        {
-            self.go_to_place(symbol, &file, line);
+        match self.matching_panel.show(ui, &graph, self.layout) {
+            Some(MatchingAction::GoTo { symbol, file, line }) => {
+                self.go_to_place(symbol, &file, line);
+            }
+            Some(MatchingAction::MakeRule(places)) => self.find_similar_in(places),
+            None => {}
         }
     }
 

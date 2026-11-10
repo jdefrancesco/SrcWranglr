@@ -3,6 +3,7 @@
 //! project. The program is looked for where Settings says (see
 //! `programs`), and runs with that search as its `PATH`.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,39 @@ const MAX_ERROR_CHARS: usize = 300;
 pub struct ToolJob {
     tool: Tool,
     results: Receiver<Result<Vec<Finding>, String>>,
+    /// The empty folder a check ran in, removed once it is done.
+    empty: Option<PathBuf>,
+}
+
+impl Drop for ToolJob {
+    fn drop(&mut self) {
+        if let Some(empty) = &self.empty {
+            // Ours and empty; a run still going only reads it.
+            let _ = std::fs::remove_dir(empty);
+        }
+    }
+}
+
+/// A new, empty folder of SrcWranglr's own in the temp folder.
+fn empty_folder() -> std::io::Result<PathBuf> {
+    // Hard to guess, so another user of a shared temp folder can't take
+    // the name first; create_dir fails if they did.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let dir = std::env::temp_dir().join(format!(
+        "srcwranglr-check-{}-{}-{nanos}",
+        std::process::id(),
+        CHECK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir)?;
+    Ok(dir)
 }
 
 /// Which semgrep rules a run uses.
@@ -32,6 +66,9 @@ pub enum SemgrepRules {
     /// Just this rule file, removed once the run is done.
     Only(PathBuf),
 }
+
+/// Tells apart the empty folders of checks started by this process.
+static CHECK_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl ToolJob {
     /// Runs `tool` on `root`; semgrep with your rules (and `project_rules`,
@@ -66,6 +103,24 @@ impl ToolJob {
         )
     }
 
+    /// Has semgrep read the rule in `rule_file` (removed afterwards) and
+    /// say whether it can use it: a run on an empty folder of its own, so
+    /// nothing of the project is read.
+    pub fn spawn_rule_check(
+        rule_file: PathBuf,
+        search: SearchPath,
+        ctx: egui::Context,
+    ) -> Result<Self, String> {
+        let empty = empty_folder().map_err(|e| {
+            let _ = std::fs::remove_file(&rule_file);
+            format!("Could not make a folder to check the rule in: {e}")
+        })?;
+        let rules = SemgrepRules::Only(rule_file);
+        let mut job = Self::start(Tool::Semgrep, empty.clone(), search, rules, ctx);
+        job.empty = Some(empty);
+        Ok(job)
+    }
+
     fn start(
         tool: Tool,
         root: PathBuf,
@@ -90,7 +145,11 @@ impl ToolJob {
             let _ = tx.send(result);
             ctx.request_repaint();
         });
-        Self { tool, results }
+        Self {
+            tool,
+            results,
+            empty: None,
+        }
     }
 
     pub fn tool(&self) -> Tool {
@@ -173,23 +232,39 @@ fn run(
 /// at or above its line) filled in. (Byte columns that don't fall on a
 /// character boundary are ignored when drawn.)
 pub fn with_symbols(findings: Vec<Finding>, graph: &CodeGraph) -> Vec<Finding> {
+    // Each file's functions by line, once: a run can report many places.
+    let mut functions: HashMap<&str, Vec<(u32, SymbolId)>> = HashMap::new();
+    let all = graph
+        .symbols
+        .values()
+        .filter(|s| matches!(s.kind, SymbolKind::Function | SymbolKind::Method));
+    for symbol in all {
+        functions
+            .entry(symbol.file.as_str())
+            .or_default()
+            .push((symbol.line, symbol.id));
+    }
+    for list in functions.values_mut() {
+        list.sort_unstable();
+    }
     findings
         .into_iter()
         .map(|finding| Finding {
-            symbol: enclosing_function(graph, &finding.file, finding.line),
+            symbol: enclosing_function(&functions, &finding.file, finding.line),
             ..finding
         })
         .collect()
 }
 
-fn enclosing_function(graph: &CodeGraph, file: &str, line: u32) -> Option<SymbolId> {
-    graph
-        .symbols
-        .values()
-        .filter(|s| s.file == file && s.line <= line)
-        .filter(|s| matches!(s.kind, SymbolKind::Function | SymbolKind::Method))
-        .max_by_key(|s| (s.line, s.id))
-        .map(|s| s.id)
+/// The last function declared at or above `line` of `file`.
+fn enclosing_function(
+    functions: &HashMap<&str, Vec<(u32, SymbolId)>>,
+    file: &str,
+    line: u32,
+) -> Option<SymbolId> {
+    let list = functions.get(file)?;
+    let at = list.partition_point(|(start, _)| *start <= line);
+    list.get(at.checked_sub(1)?).map(|(_, id)| *id)
 }
 
 #[cfg(test)]

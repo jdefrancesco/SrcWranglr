@@ -108,9 +108,42 @@ Right-click a line of code, then **Find More Like This…**, to hunt for variant
 
 A line whose names are all variables (`return len;`, `x = y;`) is refused, since its rule would match almost anything.
 
-Edit the rule as you like, then **Test** runs it alone on the project and lists every match (the line you started from included). Click one to show it in the source. **Save for This Project** writes it to the project's `.srcwranglr/semgrep/`; **Save for All Projects** writes it to `~/.config/srcwranglr/semgrep/`. **Analyze → Run semgrep** uses your rules, SrcWranglr's own, and the project's. A project's own rules are used only once you trust its files, since a hostile repository could ship rules too. Saving a rule into a project whose files are all yours marks it trusted.
+**Several lines.** Click a line's number to pick it, then Shift-click another to pick the lines between; right-click one of them, then **Find More Like These Lines…**. The statements on them become a sequence, with one metavariable per variable throughout, so the rule follows the same value: `p = malloc(n); … memcpy(p, src, n);` becomes `$A = malloc($B); ... memcpy($A, $C, $B);`. **Other code may come between the statements** puts `...` between them. Lines that hold exactly one statement or a whole function draft that.
+
+**Several places.** While the window is open, right-click another line (or picked lines), then **Add Place to Rule**. The rule becomes what the places share: what is the same in all of them stays, and what differs becomes a metavariable (a string, `"..."`). `memcpy(q, k->data, k->len)` and `memcpy(out, m->data, m->len)` give `memcpy($A, $B->data, $B->len)`. Arguments only some places pass become `...`, and statements not in every place are left out. In the **Matching** pane, **Make a Semgrep Rule From These…** under a group of look-alike code does the same for the whole group.
+
+**Exceptions** leave out matches that are fine. Right-click a line, then **Use as Rule Exception**:
+
+- a check, such as `if (len > sizeof(buf)) return -1;`, leaves out matches after it: `if (<... $C > sizeof($A) ...>) ...` then `...`, whatever the check then does;
+- a call to the same function written safely, such as `memcpy(buf, src, sizeof(buf))`, leaves out matches that look like it;
+- any other statement (`len = MIN(len, sizeof(buf));`) leaves out matches after it.
+
+An exception uses the rule's metavariables, so `len` in the check is the `$C` the rule's `memcpy($A, $B, $C)` binds. Change its kind (**Not when it is**, **Not after**, **Not inside**) or its pattern in the window, or add one by hand with **Add Exception**.
+
+Edit the rule as you like, then **Test** runs it alone on the project and lists every match (the places you started from included). Click one to show it in the source. **Save for This Project** writes it to the project's `.srcwranglr/semgrep/`; **Save for All Projects** writes it to `~/.config/srcwranglr/semgrep/`. Before saving, semgrep checks the rule on an empty folder (nothing of the project is read); a rule it can't use is shown with semgrep's error, and **Save Anyway** saves it as it is.
 
 Everything taken from the code (names, strings, the file's path) is written into the rule escaped, so a crafted line can't change the rule. A string literal that semgrep would read as pattern syntax (`"$HOME"`, `"..."`, `"=~/re/"`) becomes `"..."`.
+
+## Semgrep rules
+
+**Analyze → Run semgrep** uses three sets of rules, all from files on disk (semgrep runs offline, with no registry):
+
+- **SrcWranglr's own:** use after free, double free, unchecked `malloc`, `realloc` leaks, returning a stack buffer, `snprintf`'s result used as a length, and `strncpy` without a NUL. They're written to `~/.config/srcwranglr/semgrep/srcwranglr-builtin.yaml` before each run, so edit a copy, not that file.
+- **Yours**, for every project: any `.yaml` file in `~/.config/srcwranglr/semgrep/` (or `$XDG_CONFIG_HOME/srcwranglr/semgrep/`).
+- **The project's own**, in its `.srcwranglr/semgrep/`: used only once you trust the project's files, since a hostile repository could ship rules too. Saving a rule into a project whose files are all yours marks it trusted.
+
+`SRCWRANGLR_SEMGREP_CONFIG` replaces the first two with whatever it names.
+
+**Analyze → Semgrep Rules…** lists all three. Pick one to read it, **Test** it on the project, edit and **Save** it, copy it to the other place, or **Delete** it. SrcWranglr's own are read-only: **Copy to Yours** makes an editable copy under a new id (the original still runs). **New Rule** starts from a template showing a pattern and two kinds of exception. A project's rules you haven't trusted are shown escaped and read-only, with **Trust This Project's Files**, and every file semgrep could load from its folder is listed, whatever its name, so you can see all of it before trusting it. Files in subfolders are listed too, read-only. Rule files are read without following a project's symlinks (a symlink is listed, not read), at most 1 MB each, 500 and 8 MB per folder; past that the window says not everything is listed. A broken rule now stops a semgrep run with semgrep's error, instead of quietly finding nothing.
+
+**Suggested for This Project** lists the project's wrappers of risky calls: functions that pass their own parameters straight on to one. A call to `log_msg(fmt, ...)` that hands `fmt` to `vprintf` is a call to `vprintf` with the caller's format. Each wrapper gets a rule that finds the calls to it worth a look:
+
+- its format comes from the caller: calls whose format isn't a string literal;
+- its copy size comes from the caller (`memcpy`, `strncpy`): calls whose size isn't `sizeof(...)`, a number or a CAPITALIZED constant;
+- its allocation size comes from the caller (`malloc`, `kmalloc`): calls whose size is a product or a sum, which can overflow;
+- its arguments go to a call that is risky whatever it's passed (`strcpy`, `system`): every call.
+
+A wrapper may check what it is passed before passing it on, so these are leads. The most called come first, with how many places call each. Pick some, then **Edit Rules for the Picked** opens their rules as a new file to test and save. Only one level is followed: a wrapper of a wrapper isn't suggested (save the first, and semgrep finds its calls). Finding them takes milliseconds (20 ms for curl), from what indexing already read.
 
 ## Tracing a value
 
@@ -194,6 +227,8 @@ Hovering a call to a library function in the source shows the one-line summary o
 The **Matching** pane (**Analyze → Semantic Code Matching**) finds code by what it is like, not by name.
 
 **Look-alike code** lists functions, and blocks (loops, `if`s and `switch`es), that have the same shape once names, numbers, strings, comments and layout are set aside: copy-pasted parsers, vendored copies, one pattern written in several places. A fix in one copy may be missing from the others. Click **Find Look-alike Code** to read every function. This takes a moment on big projects (about a second for curl) and runs in the background. Blocks inside look-alike functions aren't listed again.
+
+**Make a Semgrep Rule From These…**, under a group, drafts a rule from what its places share, in **Find More Like This** (see above).
 
 **Find Code Like This Function** (right-click a line, or a function in the **Symbols** list) lists the functions shaped most like that one, likest first, with how alike they are. Exact copies show as 100%, and near copies (a check added, a line changed) lower.
 
@@ -364,6 +399,8 @@ srcwranglr --version
 | Trace where a value goes | Right-click a line, then **Trace Where It Goes**; click a step to mark its path in the source |
 | Trace from a source to a sink | Right-click a line, then **Set as Trace Source**; then right-click the call's line, then **Trace … to Here** |
 | A function's docs or man page | Right-click a line, then **Show Docs**, or a function in **Symbols**; hover a library call for its summary |
+| Find more code like a line, or like several | Right-click a line, then **Find More Like This…**; click line numbers (Shift-click for a range) to pick several lines first; **Add Place to Rule** and **Use as Rule Exception** while it is open |
+| See, write and edit semgrep rules | **Analyze → Semgrep Rules…** |
 | Look-alike code, code like a function, functions by behavior | **Matching** in the menu bar; right-click a line or a function in **Symbols**, then **Find Code Like This…** |
 | Share your audit, or take in someone's | **File → Export Audit Bundle… / Import Audit Bundle…** |
 | Undo dragged pane sizes | **View → Reset Layout** |
@@ -391,7 +428,9 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/analysis/trace/` | Tracing a value back to where it comes from (`walk.rs`) or forward to the risky calls it reaches (`forward/`, `goes.rs`), across functions, by syntax |
 | `src/analysis/tools.rs`, `flawfinder.rs` | Running semgrep, cppcheck and flawfinder, and reading their reports |
 | `src/history/` | Reading the git history with gitoxide in a worker process (`worker.rs`): fix commits by message (`keywords.rs`), the lines each last changed (`read.rs`, `file.rs`), and findings for them |
-| `src/analysis/similar.rs`, `src/app/similar_view.rs` | Drafting a semgrep rule from a line (Find More Like This), testing and saving it |
+| `src/analysis/similar/`, `src/app/similar_view.rs` | Drafting a semgrep rule from a line, several lines (`pick.rs`) or several places (`unify.rs`), with exceptions (`exception.rs`): Find More Like This |
+| `src/analysis/semgrep_rule.rs`, `src/analysis/wrappers.rs` | Writing rules' YAML, escaped; the project's wrappers of risky calls and their rules |
+| `src/app/rules_view.rs`, `rule_library.rs`, `rule_editor.rs`, `rule_files.rs` | The Semgrep Rules window: listing, editing, checking and saving rules |
 | `src/analysis/lookalike.rs`, `behavior.rs` | Look-alike code by token shape, and each function's behaviors from the calls it makes (the Matching pane) |
 | `src/docs/` | A function's docs: its doc comment (`comments.rs`), read as Doxygen (`doxygen.rs`), or this system's man page (`man.rs`) |
 | `src/process.rs` | Running a program with a deadline, an output cap and a stop flag (the history worker, `man`) |

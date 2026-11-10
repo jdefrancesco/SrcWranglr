@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use super::dangerous::{DangerousFunction, DangerousList};
-use super::heuristics::{assess, judged_names, Assessment, Verdict};
+use super::heuristics::{self, assess, judged_names, Assessment, Verdict};
 use super::{Finding, Severity};
 use crate::model::{CodeGraph, EdgeKind, ExternalCall, OccurrenceRole, Span};
 
@@ -124,6 +124,26 @@ pub fn risky_calls(graph: &CodeGraph, list: &DangerousList) -> Vec<Finding> {
         .collect();
     findings.sort_by(|a, b| (&a.file, a.line, &a.rule).cmp(&(&b.file, b.line, &b.rule)));
     findings
+}
+
+/// The finding the built-in rules and argument checks make on `call` in
+/// `file` (your dangerous-functions list aside).
+pub fn built_in_finding(file: &str, call: &ExternalCall) -> Option<Finding> {
+    judge(file, call)
+}
+
+/// Whether `name` is a library function the built-in rules know: a
+/// project function of that name is its own copy of it, not a wrapper.
+pub fn is_library_name(name: &str) -> bool {
+    rules_by_name().contains_key(name)
+        || judged_names().any(|judged| judged == name)
+        || heuristics::format_argument(name).is_some()
+}
+
+/// The library function a call written `called` names, if it names one
+/// by its bare name (`strcpy`, `::strcpy`, `std::strcpy`).
+pub fn bare_library_name(called: &str) -> Option<&str> {
+    library_name(called)
 }
 
 /// The finding on a call to a library function, as `list` or the

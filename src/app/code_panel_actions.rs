@@ -5,6 +5,7 @@ use super::code_panel::PanelAction;
 use super::layout::SourcePlacement;
 use super::pane_bar::Edge;
 use super::SrcWranglrApp;
+use crate::analysis::similar::Example;
 
 impl SrcWranglrApp {
     pub(super) fn show_code_panel(&mut self, ui: &mut egui::Ui) {
@@ -18,6 +19,7 @@ impl SrcWranglrApp {
                 SourcePlacement::Beside => Edge::Right,
                 SourcePlacement::Below => Edge::Bottom,
             };
+            self.code_panel.is_drafting_rule = self.is_drafting_rule();
             let action = self.code_panel.show(
                 ui,
                 &self.project.graph,
@@ -45,7 +47,13 @@ impl SrcWranglrApp {
             PanelAction::ShowFinding(id) => self.explain_finding(id),
             PanelAction::MarkDangerous(name) => self.mark_dangerous(&name),
             PanelAction::AddTodo { file, line } => self.todo_panel.add_here(file, line),
-            PanelAction::FindSimilar { file, line } => self.find_similar(&file, line),
+            PanelAction::FindSimilar { file, first, last } => {
+                self.find_similar(Example::lines(&file, first, last));
+            }
+            PanelAction::AddRulePlace { file, first, last } => {
+                self.add_rule_place(Example::lines(&file, first, last));
+            }
+            PanelAction::UseAsRuleException { file, line } => self.add_rule_exception(&file, line),
             PanelAction::Trace { file, line, column } => self.trace_variable(&file, line, column),
             PanelAction::TraceForward { file, line, column } => {
                 self.trace_forward(&file, line, column);

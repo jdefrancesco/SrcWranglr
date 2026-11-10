@@ -41,7 +41,12 @@ mod pane_bar;
 mod project;
 mod readme;
 mod readme_view;
+mod rule_actions;
+mod rule_editor;
 mod rule_files;
+mod rule_library;
+mod rules_view;
+mod rules_wrappers;
 mod session;
 mod session_actions;
 mod settings;
@@ -160,6 +165,8 @@ pub struct SrcWranglrApp {
     harness_view: Option<harness_view::HarnessView>,
     /// The Find More Like This window, while open.
     similar_view: Option<similar_view::SimilarView>,
+    /// The Semgrep Rules window, while open.
+    rules_view: Option<rules_view::RulesView>,
     /// The Docs window, and the man pages read so far.
     docs: docs::Docs,
     /// The project's README, while its window is open.
@@ -257,6 +264,7 @@ impl SrcWranglrApp {
             survey_view: SurveyView::default(),
             harness_view: None,
             similar_view: None,
+            rules_view: None,
             docs: docs::Docs::default(),
             readme: None,
             layout: Layout::load(storage),
@@ -458,6 +466,7 @@ impl eframe::App for SrcWranglrApp {
         }
         self.show_harness_view(&ctx);
         self.show_similar_view(&ctx);
+        self.show_rules_view(&ctx);
         self.show_docs_window(&ctx);
         readme_view::show(&ctx, &mut self.readme, &self.project.name);
         let notes = if self.palette.is_open() {
@@ -561,6 +570,7 @@ impl SrcWranglrApp {
             Command::MarkDangerous => self.mark_selected_dangerous(),
             Command::TrustProject => self.trust_project_files(),
             Command::RunSemgrep => self.run_tool(analysis::tools::Tool::Semgrep, ctx),
+            Command::SemgrepRules => self.open_rules_view(),
             Command::RunCppcheck => self.run_tool(analysis::tools::Tool::Cppcheck, ctx),
             Command::RunFlawfinder => self.run_tool(analysis::tools::Tool::Flawfinder, ctx),
             Command::Settings => self.open_settings(),
@@ -639,8 +649,11 @@ impl SrcWranglrApp {
                         ui.separator();
                     }
                     match &self.status {
-                        Status::Info(text) => ui.label(text),
-                        Status::Error(text) => ui.label(RichText::new(text).color(ERROR_COLOR)),
+                        // Tools' errors may quote the project's files.
+                        Status::Info(text) => ui.label(visible::visible(text)),
+                        Status::Error(text) => {
+                            ui.label(RichText::new(visible::visible(text)).color(ERROR_COLOR))
+                        }
                     };
                     if !self.warnings.is_empty() {
                         let label = RichText::new(format!("⚠ {} warning(s)", self.warnings.len()))

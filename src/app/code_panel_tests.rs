@@ -533,11 +533,55 @@ fn line_menu_offers_to_find_more_like_the_line() {
     harness.run();
     harness.get_by_label("Find More Like This…").click();
     harness.run();
-    let Some(PanelAction::FindSimilar { line, .. }) = harness.state().last_action.clone() else {
+    let Some(PanelAction::FindSimilar { first, last, .. }) = harness.state().last_action.clone()
+    else {
         panic!(
             "expected FindSimilar, got {:?}",
             harness.state().last_action
         );
     };
-    assert_eq!(line, 2);
+    assert_eq!((first, last), (2, 2));
+}
+
+#[test]
+fn shift_clicking_line_numbers_picks_lines_to_find_more_like() {
+    let source = "void f(char *d, char *s, int n) {\nchar *p = malloc(n);\nmemcpy(p, s, n);\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.get_by_label("    2 ").click();
+    harness.run();
+    harness
+        .get_by_label("    3 ")
+        .click_modifiers(egui::Modifiers::SHIFT);
+    harness.run();
+    harness.get_by_label("memcpy(p, s, n);").click_secondary();
+    harness.run();
+    harness.get_by_label("Find More Like These Lines…").click();
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::FindSimilar {
+            file: "a.cpp".into(),
+            first: 2,
+            last: 3
+        })
+    );
+}
+
+#[test]
+fn while_a_rule_is_drafted_lines_can_add_to_it() {
+    let source = "void f(char *d, char *s) {\nstrcpy(d, s);\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.state_mut().panel.is_drafting_rule = true;
+    harness.run();
+    harness.get_by_label("strcpy(d, s);").click_secondary();
+    harness.run();
+    harness.get_by_label("Use as Rule Exception").click();
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::UseAsRuleException {
+            file: "a.cpp".into(),
+            line: 2
+        })
+    );
 }

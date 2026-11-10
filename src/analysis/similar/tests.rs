@@ -1,4 +1,22 @@
 use super::*;
+use crate::analysis::semgrep_rule::quoted;
+
+/// A rule drafted from one line, as it reads with `looseness`.
+#[derive(Debug)]
+struct RuleDraft {
+    id: String,
+    pattern: String,
+    yaml: String,
+}
+
+fn draft(source: &str, file: &str, line: u32, looseness: Looseness) -> Result<RuleDraft, String> {
+    let draft = draft_from(&[(Example::line(file, line), source)], true)?;
+    Ok(RuleDraft {
+        id: draft.id.clone(),
+        pattern: draft.pattern(looseness).to_string(),
+        yaml: draft.yaml(looseness, &[]),
+    })
+}
 
 /// The pattern drafted from line `line` of `source`.
 fn pattern(source: &str, line: u32, looseness: Looseness) -> String {

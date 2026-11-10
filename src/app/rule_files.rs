@@ -99,9 +99,111 @@ fn free_name(dir: &Path, id: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("Too many rules named {id} already"))
 }
 
+/// Saves `yaml` over `path`, one of `home`'s rule files.
+pub fn overwrite_rule(
+    home: RuleHome,
+    root: Option<&Path>,
+    path: &Path,
+    yaml: &str,
+) -> Result<PathBuf, String> {
+    let (dir, name) = rule_file_in(home, root, path)?;
+    let written = match home {
+        // Yours may be a symlink a dotfile manager keeps; it is followed.
+        RuleHome::Yours => write_user_file(path, yaml),
+        RuleHome::Project => write_atomically(&dir, &name, yaml).map(|()| path.to_path_buf()),
+    };
+    written.map_err(|e| format!("Could not save the rule: {e}"))
+}
+
+/// Deletes `path`, one of `home`'s rule files (a symlink itself, never
+/// what it points to).
+pub fn delete_rule(home: RuleHome, root: Option<&Path>, path: &Path) -> Result<(), String> {
+    rule_file_in(home, root, path)?;
+    std::fs::remove_file(path).map_err(|e| format!("Could not delete the rule: {e}"))
+}
+
+/// `path`'s folder and name, if it is a rule file right in `home`'s
+/// folder (in a project's, not a symlink); else why not.
+fn rule_file_in(
+    home: RuleHome,
+    root: Option<&Path>,
+    path: &Path,
+) -> Result<(PathBuf, String), String> {
+    let folder = match home {
+        RuleHome::Yours => semgrep_rules_dir(),
+        RuleHome::Project => root.and_then(project_rules),
+    }
+    .ok_or("That rules folder isn't there")?;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| is_rule_file_name(home, n))
+        .ok_or("That isn't a rule file")?;
+    if path.parent() != Some(folder.as_path()) {
+        return Err("That rule file isn't in the rules folder".into());
+    }
+    let is_symlink = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if home == RuleHome::Project && is_symlink {
+        return Err("That rule file is a symlink: SrcWranglr doesn't write through those".into());
+    }
+    Ok((folder, name.to_string()))
+}
+
+/// Whether `name` is a rules file of `home`'s: one semgrep may read. In
+/// yours, not SrcWranglr's own (rewritten before each run) or a hidden
+/// one; in a project's, any (a hostile one may use those names too).
+pub fn is_rule_file_name(home: RuleHome, name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let is_yaml = lower.ends_with(".yaml") || lower.ends_with(".yml");
+    match home {
+        RuleHome::Yours => {
+            is_yaml && name != crate::analysis::tools::BUNDLED_RULES_FILE && !name.starts_with('.')
+        }
+        RuleHome::Project => is_yaml,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_rule_is_overwritten_and_deleted_in_place() {
+        let root = tempfile::tempdir().expect("dir");
+        let path = save_rule(RuleHome::Project, Some(root.path()), "r", "a").expect("saved");
+        overwrite_rule(RuleHome::Project, Some(root.path()), &path, "b").expect("over");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "b");
+        delete_rule(RuleHome::Project, Some(root.path()), &path).expect("deleted");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn only_rule_files_in_the_folder_are_written_or_deleted() {
+        let root = tempfile::tempdir().expect("dir");
+        save_rule(RuleHome::Project, Some(root.path()), "r", "a").expect("saved");
+        let outside = root.path().join("notes.yaml");
+        std::fs::write(&outside, "keep").expect("write");
+        let at = |p: &Path| overwrite_rule(RuleHome::Project, Some(root.path()), p, "x");
+        assert!(at(&outside).is_err());
+        let dir = root.path().join(".srcwranglr/semgrep");
+        assert!(at(&dir.join("../../notes.yaml")).is_err());
+        assert!(at(&dir.join("r.txt")).is_err());
+        assert!(delete_rule(RuleHome::Project, Some(root.path()), &outside).is_err());
+        assert_eq!(std::fs::read_to_string(&outside).expect("read"), "keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_project_rule_file_is_not_written_through() {
+        let root = tempfile::tempdir().expect("dir");
+        let target = root.path().join("elsewhere.txt");
+        std::fs::write(&target, "keep").expect("write");
+        save_rule(RuleHome::Project, Some(root.path()), "r", "a").expect("saved");
+        let link = root.path().join(".srcwranglr/semgrep/link.yaml");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        assert!(overwrite_rule(RuleHome::Project, Some(root.path()), &link, "x").is_err());
+        assert_eq!(std::fs::read_to_string(&target).expect("read"), "keep");
+    }
 
     #[test]
     fn a_project_rule_is_saved_under_a_free_name() {

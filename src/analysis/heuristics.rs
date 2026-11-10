@@ -257,6 +257,62 @@ const CURL_VERIFY_OPTIONS: &[&str] = &[
     "CURLOPT_PROXY_SSL_VERIFYHOST",
 ];
 
+/// The `v` printf forms and their format argument. They format what a
+/// wrapper's caller passed (so they aren't flagged), which makes a
+/// function passing its own parameter to one a printf-like wrapper.
+const VPRINTF_FORMAT_ARG: &[(&str, usize)] = &[
+    ("vprintf", 0),
+    ("vwprintf", 0),
+    ("vfprintf", 1),
+    ("vfwprintf", 1),
+    ("vdprintf", 1),
+    ("vsnprintf", 2),
+    ("vswprintf", 2),
+    ("vasprintf", 1),
+    ("vsyslog", 1),
+    ("verr", 1),
+    ("verrx", 1),
+    ("vwarn", 0),
+    ("vwarnx", 0),
+    ("_vsnprintf", 2),
+    ("_vsnwprintf", 2),
+    ("wvsprintf", 1),
+    ("wvsprintfA", 1),
+    ("wvsprintfW", 1),
+    ("vprintk", 0),
+    ("vscnprintf", 2),
+];
+
+/// Which argument of `name` is a format string, if it takes one (the `v`
+/// forms and scanf-likes included).
+pub fn format_argument(name: &str) -> Option<usize> {
+    index_of(PRINTF_FORMAT_ARG, name)
+        .or_else(|| index_of(VPRINTF_FORMAT_ARG, name))
+        .or_else(|| index_of(SCANF_FORMAT_ARG, name))
+}
+
+/// Which argument of `name` is the size it copies, if it copies a counted
+/// amount (memcpy's, strncpy's).
+pub fn copy_size_argument(name: &str) -> Option<usize> {
+    (MEMORY_COPIES.contains(&name) || COUNTED_STRING_COPIES.contains(&name)).then_some(2)
+}
+
+/// Which argument of `name` is the size it allocates, if it is an
+/// allocator.
+pub fn alloc_size_argument(name: &str) -> Option<usize> {
+    index_of(ALLOC_SIZE_ARG, name)
+}
+
+/// Why a format that isn't a literal is risky.
+pub fn non_literal_format() -> Assessment {
+    NON_LITERAL_FORMAT
+}
+
+/// Why an allocation size that is a product or sum is risky.
+pub fn size_overflow() -> Assessment {
+    SIZE_OVERFLOW
+}
+
 /// Every name `assess` can say something about.
 pub fn judged_names() -> impl Iterator<Item = &'static str> {
     let with_args = [SCANF_FORMAT_ARG, PRINTF_FORMAT_ARG, ALLOC_SIZE_ARG]

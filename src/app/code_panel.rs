@@ -45,8 +45,12 @@ pub enum PanelAction {
     MarkDangerous(String),
     /// Write a TODO about `file:line`.
     AddTodo { file: String, line: u32 },
-    /// Draft a rule finding code like `file:line`.
-    FindSimilar { file: String, line: u32 },
+    /// Draft a rule finding code like lines `first..=last` of `file`.
+    FindSimilar { file: String, first: u32, last: u32 },
+    /// Add lines `first..=last` of `file` to the rule being drafted.
+    AddRulePlace { file: String, first: u32, last: u32 },
+    /// Leave code like `file:line` out of the rule being drafted.
+    UseAsRuleException { file: String, line: u32 },
     /// Trace where the variable at `file:line`, byte `column`, gets its value.
     Trace {
         file: String,
@@ -113,6 +117,11 @@ pub struct CodePanel {
     trace_source: Option<String>,
     /// Library functions' man page summaries, for hovering their calls.
     call_summaries: HashMap<String, Option<String>>,
+    /// Lines picked by clicking their numbers: the file, the line clicked
+    /// first, and the line Shift-clicked last.
+    picked_lines: Option<(String, u32, u32)>,
+    /// Whether a rule is being drafted, so lines' menus can add to it.
+    pub is_drafting_rule: bool,
 }
 
 impl CodePanel {
@@ -203,7 +212,19 @@ impl CodePanel {
             CodeEvent::HoveredCall(name) => Some(PanelAction::LookUpDocs(name)),
             CodeEvent::Line(line, LineAction::AddTodo) => Some(PanelAction::AddTodo { file, line }),
             CodeEvent::Line(line, LineAction::FindSimilar) => {
-                Some(PanelAction::FindSimilar { file, line })
+                let (first, last) = self.lines_at(&file, line);
+                Some(PanelAction::FindSimilar { file, first, last })
+            }
+            CodeEvent::Line(line, LineAction::AddRulePlace) => {
+                let (first, last) = self.lines_at(&file, line);
+                Some(PanelAction::AddRulePlace { file, first, last })
+            }
+            CodeEvent::Line(line, LineAction::UseAsRuleException) => {
+                Some(PanelAction::UseAsRuleException { file, line })
+            }
+            CodeEvent::LineNumber { line, extend } => {
+                self.pick_line(file, line, extend);
+                None
             }
             CodeEvent::Line(line, action) => {
                 let target = NoteTarget::Line { file, line };
@@ -218,7 +239,9 @@ impl CodePanel {
                     | LineAction::ShowDocs(_)
                     | LineAction::FindLookAlikes
                     | LineAction::AddTodo
-                    | LineAction::FindSimilar => return None,
+                    | LineAction::FindSimilar
+                    | LineAction::AddRulePlace
+                    | LineAction::UseAsRuleException => return None,
                 })
             }
             CodeEvent::Risk(id) => Some(PanelAction::ShowFinding(id)),
@@ -322,6 +345,8 @@ impl CodePanel {
                 trail: &[],
                 trace_source: None,
                 call_summaries: None,
+                selected_lines: None,
+                is_drafting_rule: false,
                 colors: SourceColors::default(),
             },
             None => focus_for(symbol, location, self.should_scroll, &line_marks, &risks),
@@ -331,12 +356,41 @@ impl CodePanel {
             trail: &trail,
             trace_source: self.trace_source.as_deref(),
             call_summaries: Some(&self.call_summaries),
+            selected_lines: self.picked_in(file),
+            is_drafting_rule: self.is_drafting_rule,
             ..focus
         };
         let event = self.view.show(ui, graph, &focus);
         let file = focus.file.to_string();
         self.should_scroll = false;
         event.map(|e| (file, e))
+    }
+
+    /// Picks `line` of `file` (clicked on its number); with `extend`, the
+    /// lines from the one picked first to it. Clicking the only line
+    /// picked unpicks it.
+    fn pick_line(&mut self, file: String, line: u32, extend: bool) {
+        self.picked_lines = match self.picked_lines.take() {
+            Some((picked, anchor, _)) if extend && picked == file => Some((picked, anchor, line)),
+            Some((picked, anchor, other)) if picked == file && anchor == line && other == line => {
+                None
+            }
+            _ => Some((file, line, line)),
+        };
+    }
+
+    /// The lines picked in `file`, first and last.
+    fn picked_in(&self, file: &str) -> Option<(u32, u32)> {
+        let (picked, a, b) = self.picked_lines.as_ref()?;
+        (picked == file).then(|| (*a.min(b), *a.max(b)))
+    }
+
+    /// The lines an action on `line` of `file` is for: the lines picked if
+    /// it is one of them, else just it.
+    fn lines_at(&self, file: &str, line: u32) -> (u32, u32) {
+        self.picked_in(file)
+            .filter(|(first, last)| (*first..=*last).contains(&line))
+            .unwrap_or((line, line))
     }
 
     /// Where the panel is: the current location of `selected`, else its
@@ -572,6 +626,8 @@ fn focus_for<'a>(
             trail: &[],
             trace_source: None,
             call_summaries: None,
+            selected_lines: None,
+            is_drafting_rule: false,
             colors: SourceColors::default(),
         },
         None => Focus {
@@ -585,6 +641,8 @@ fn focus_for<'a>(
             trail: &[],
             trace_source: None,
             call_summaries: None,
+            selected_lines: None,
+            is_drafting_rule: false,
             colors: SourceColors::default(),
         },
     }

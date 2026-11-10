@@ -18,7 +18,7 @@ pub enum Tool {
 /// semgrep rules to use instead of the default `p/c`.
 const SEMGREP_CONFIG_VAR: &str = "SRCWRANGLR_SEMGREP_CONFIG";
 /// SrcWranglr's own semgrep rules, written next to yours before each run.
-const BUNDLED_RULES: &str = include_str!("semgrep_rules.yaml");
+pub const BUNDLED_RULES: &str = include_str!("semgrep_rules.yaml");
 pub const BUNDLED_RULES_FILE: &str = "srcwranglr-builtin.yaml";
 /// cppcheck ids about cppcheck itself (code it couldn't parse, macros or
 /// includes it couldn't see), not about the code's behavior.
@@ -120,7 +120,15 @@ impl Tool {
 #[derive(Deserialize)]
 struct SemgrepReport {
     results: Vec<SemgrepResult>,
+    /// What went wrong: with the rules (which stops the run), or with
+    /// some files (which doesn't).
+    #[serde(default)]
+    errors: Vec<serde_json::Value>,
 }
+
+/// Rule errors reported at most, each cut to `MAX_RULE_ERROR_CHARS`.
+const MAX_RULE_ERRORS: usize = 3;
+const MAX_RULE_ERROR_CHARS: usize = 600;
 
 #[derive(Deserialize)]
 struct SemgrepResult {
@@ -174,6 +182,13 @@ struct SemgrepExtra {
 fn parse_semgrep(json: &str, root: &Path) -> Result<Vec<Finding>, String> {
     let report: SemgrepReport =
         serde_json::from_str(json).map_err(|e| format!("unexpected semgrep output: {e}"))?;
+    let rule_errors = rule_errors(&report.errors);
+    if report.results.is_empty() && !rule_errors.is_empty() {
+        return Err(format!(
+            "semgrep couldn't use the rules: {}",
+            rule_errors.join("\n")
+        ));
+    }
     let findings = report
         .results
         .into_iter()
@@ -210,6 +225,26 @@ fn parse_semgrep(json: &str, root: &Path) -> Result<Vec<Finding>, String> {
             seen.insert((f.rule.clone(), f.file.clone(), f.line, start))
         })
         .collect())
+}
+
+/// What semgrep said was wrong with the rules (not with the files it
+/// read, which it reports too).
+fn rule_errors(errors: &[serde_json::Value]) -> Vec<String> {
+    errors
+        .iter()
+        .filter(|e| e["level"].as_str() == Some("error"))
+        .filter(|e| {
+            let kind = e["type"].as_str().unwrap_or("");
+            kind.contains("Rule") || kind.contains("Pattern") || kind == "SemgrepError"
+        })
+        .filter_map(|e| {
+            let text = ["long_msg", "message", "short_msg"]
+                .iter()
+                .find_map(|key| e[*key].as_str().filter(|t| !t.trim().is_empty()))?;
+            Some(text.trim().chars().take(MAX_RULE_ERROR_CHARS).collect())
+        })
+        .take(MAX_RULE_ERRORS)
+        .collect()
 }
 
 fn parse_cppcheck(report: &str, root: &Path) -> Vec<Finding> {
@@ -304,6 +339,30 @@ mod tests {
     use super::*;
 
     const ROOT: &str = "/src/proj";
+
+    #[test]
+    fn rules_semgrep_cant_use_are_explained_not_taken_for_no_matches() {
+        let json = r#"{"results": [], "errors": [
+            {"code": 4, "level": "error", "type": "InvalidRuleSchemaError",
+             "long_msg": "One of these properties is missing: 'severity'"},
+            {"code": 7, "level": "error", "type": "SemgrepError",
+             "message": "invalid configuration file found (1 configs were invalid)"},
+            {"code": 3, "level": "warn", "type": "Syntax error", "message": "in a.c"}]}"#;
+        let error = parse_semgrep(json, Path::new(ROOT)).expect_err("rule errors");
+        assert!(
+            error.starts_with("semgrep couldn't use the rules:"),
+            "{error}"
+        );
+        assert!(error.contains("'severity'"), "{error}");
+        assert!(!error.contains("a.c"), "{error}");
+    }
+
+    #[test]
+    fn files_semgrep_couldnt_read_dont_stop_the_findings() {
+        let json = r#"{"results": [], "errors": [
+            {"code": 3, "level": "warn", "type": "Syntax error", "message": "in a.c"}]}"#;
+        assert_eq!(parse_semgrep(json, Path::new(ROOT)).expect("parse"), []);
+    }
 
     #[test]
     fn reads_semgrep_results_relative_to_the_project() {

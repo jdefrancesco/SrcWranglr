@@ -16,6 +16,10 @@ pub(super) struct MenuContext<'a> {
     pub calls: &'a [&'a str],
     /// The variable picked as the source of a trace to a sink, if any.
     pub trace_source: Option<&'a str>,
+    /// The lines picked (first, last), when this is one of several.
+    pub picked_lines: Option<(u32, u32)>,
+    /// Whether a rule is being drafted, to add this line to.
+    pub is_drafting_rule: bool,
 }
 
 /// The right-click menu of a line (on its number or its code).
@@ -49,11 +53,8 @@ pub(super) fn line_menu(response: &Response, menu: &MenuContext) -> Option<LineA
         if ui.button("Add TODO Here…").clicked() {
             action = Some(LineAction::AddTodo);
         }
-        let similar = ui
-            .button("Find More Like This…")
-            .on_hover_text("Draft a semgrep rule matching code like this line, and test it");
-        if similar.clicked() {
-            action = Some(LineAction::FindSimilar);
+        if let Some(rule) = rule_menu(ui, menu) {
+            action = Some(rule);
         }
         let like = ui
             .button("Find Code Like This Function")
@@ -127,6 +128,42 @@ fn trace_menu(ui: &mut egui::Ui, shown: &str) -> Option<LineAction> {
         .inner
         .flatten();
     back.or(forward).or(source)
+}
+
+/// Drafting a semgrep rule from the line (or the lines picked), and, while
+/// one is drafted, adding to it.
+fn rule_menu(ui: &mut egui::Ui, menu: &MenuContext) -> Option<LineAction> {
+    let (label, hint) = match menu.picked_lines {
+        Some((first, last)) => (
+            "Find More Like These Lines…".to_string(),
+            format!("Draft a semgrep rule matching code like lines {first}–{last}, and test it"),
+        ),
+        None => (
+            "Find More Like This…".to_string(),
+            "Draft a semgrep rule matching code like this line, and test it".to_string(),
+        ),
+    };
+    let mut action = None;
+    if ui.button(label).on_hover_text(hint).clicked() {
+        action = Some(LineAction::FindSimilar);
+    }
+    if !menu.is_drafting_rule {
+        return action;
+    }
+    let place = ui.button("Add Place to Rule").on_hover_text(
+        "Draft the rule being written from what this code and its other places share",
+    );
+    if place.clicked() {
+        action = Some(LineAction::AddRulePlace);
+    }
+    let exception = ui.button("Use as Rule Exception").on_hover_text(
+        "Leave matches out of the rule being written: after this check, or that look like \
+         this fixed code",
+    );
+    if exception.clicked() {
+        action = Some(LineAction::UseAsRuleException);
+    }
+    action
 }
 
 /// "Show Docs" with the calls on the line: the one picked.

@@ -229,6 +229,7 @@ impl SrcWranglrApp {
             Command::MarkDangerous,
             Command::TrustProject,
             Command::RunSemgrep,
+            Command::SemgrepRules,
             Command::RunCppcheck,
             Command::RunFlawfinder,
         ]

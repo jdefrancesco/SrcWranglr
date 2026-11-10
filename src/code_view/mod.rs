@@ -73,6 +73,10 @@ pub struct Focus<'a> {
     /// Man page summaries of library functions, by name: `None` where this
     /// system has no page. Names missing aren't looked up yet.
     pub call_summaries: Option<&'a HashMap<String, Option<String>>>,
+    /// The lines picked by clicking their numbers (first, last), if any.
+    pub selected_lines: Option<(u32, u32)>,
+    /// Whether a rule is being drafted, so a line's menu can add to it.
+    pub is_drafting_rule: bool,
     /// The color scheme to draw with.
     pub colors: SourceColors,
 }
@@ -119,8 +123,13 @@ pub enum LineAction {
     TraceForward(u32),
     /// Add a TODO about this line.
     AddTodo,
-    /// Draft a semgrep rule finding code like this line.
+    /// Draft a semgrep rule finding code like this line (or the lines
+    /// picked, if it is one of them).
     FindSimilar,
+    /// Add this line (or the lines picked) to the rule being drafted.
+    AddRulePlace,
+    /// Leave code like this line out of the rule being drafted.
+    UseAsRuleException,
     /// List the functions most like the one holding this line.
     FindLookAlikes,
     /// Make the variable `name` at this byte column the source of a trace
@@ -142,6 +151,9 @@ pub enum CodeEvent {
     Clicked(Occurrence),
     /// Chose a line action for this 1-based line.
     Line(u32, LineAction),
+    /// Clicked this line's number; with Shift held, `extend`s the lines
+    /// picked to it.
+    LineNumber { line: u32, extend: bool },
     /// Clicked a risky snippet: the `RiskSpan::id`.
     Risk(usize),
     /// Hovering a call to a library function whose man page isn't looked
@@ -263,7 +275,17 @@ impl Rows<'_> {
             ui.painter()
                 .layout_job(layout(&shown, &segments, &self.font, &self.focus.colors));
 
+        let is_picked = self
+            .focus
+            .selected_lines
+            .is_some_and(|(first, last)| (first..=last).contains(&line_no));
         ui.horizontal(|ui| {
+            if is_picked {
+                let size = egui::vec2(ui.available_width().max(GUTTER_WIDTH), self.row_height);
+                let row = egui::Rect::from_min_size(ui.cursor().min, size);
+                ui.painter()
+                    .rect_filled(row, 0.0, self.focus.colors.selected_name);
+            }
             if line_no == self.focus.line {
                 // Painted before the labels, so it sits underneath them.
                 let size = egui::vec2(ui.available_width().max(GUTTER_WIDTH), self.row_height);
@@ -298,14 +320,27 @@ impl Rows<'_> {
             };
             let (event, code) = self.show_code(ui, &line);
             let calls = self.calls_on_line(line_no);
+            let picked_lines = self
+                .focus
+                .selected_lines
+                .filter(|(first, last)| is_picked && first != last);
             let menu = MenuContext {
                 shown: &shown,
                 mark,
                 calls: &calls,
                 trace_source: self.focus.trace_source,
+                picked_lines,
+                is_drafting_rule: self.focus.is_drafting_rule,
             };
+            let number_clicked = gutter.clicked().then(|| CodeEvent::LineNumber {
+                line: line_no,
+                extend: ui.input(|i| i.modifiers.shift),
+            });
             let action = line_menu(&gutter, &menu).or_else(|| line_menu(&code, &menu));
-            action.map(|a| CodeEvent::Line(line_no, a)).or(event)
+            action
+                .map(|a| CodeEvent::Line(line_no, a))
+                .or(number_clicked)
+                .or(event)
         })
         .inner
     }

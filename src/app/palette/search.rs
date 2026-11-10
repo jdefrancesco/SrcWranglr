@@ -33,6 +33,7 @@ pub enum Command {
     MarkDangerous,
     TrustProject,
     RunSemgrep,
+    SemgrepRules,
     RunCppcheck,
     RunFlawfinder,
     Settings,
@@ -55,7 +56,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 43] = [
+    pub const ALL: [Command; 44] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -72,6 +73,7 @@ impl Command {
         Command::MarkDangerous,
         Command::TrustProject,
         Command::RunSemgrep,
+        Command::SemgrepRules,
         Command::RunCppcheck,
         Command::RunFlawfinder,
         Command::Settings,
@@ -116,6 +118,7 @@ impl Command {
             Command::MarkDangerous => "Mark Selected Function as Dangerous…",
             Command::TrustProject => "Trust This Project's Verdicts, List and Rules",
             Command::RunSemgrep => "Run semgrep",
+            Command::SemgrepRules => "Semgrep Rules…",
             Command::RunCppcheck => "Run cppcheck",
             Command::RunFlawfinder => "Run flawfinder",
             Command::Settings => "Settings…",

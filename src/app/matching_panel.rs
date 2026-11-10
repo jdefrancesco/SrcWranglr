@@ -16,6 +16,7 @@ use super::pane_bar::{self, Edge};
 use super::visible::visible;
 use crate::analysis::behavior::{Behavior, MAX_CALL_DEPTH};
 use crate::analysis::lookalike::{self, UnitKind};
+use crate::analysis::similar::{Example, MAX_EXAMPLES};
 use crate::model::{CodeGraph, SymbolId};
 
 const DEFAULT_WIDTH: f32 = 440.0;
@@ -36,6 +37,8 @@ pub enum MatchingAction {
         file: String,
         line: u32,
     },
+    /// Draft a semgrep rule from what these places share.
+    MakeRule(Vec<Example>),
 }
 
 /// The functions listed by behavior, for what they were listed for.
@@ -422,6 +425,21 @@ fn group_rows(
     graph: &CodeGraph,
 ) -> Option<MatchingAction> {
     let mut picked = None;
+    let make = ui.button("Make a Semgrep Rule From These…").on_hover_text(
+        "Draft a rule from what these places share, to find more like them; it opens in Find \
+         More Like This",
+    );
+    if make.clicked() {
+        let places = units
+            .iter()
+            .take(MAX_EXAMPLES)
+            .map(|&i| {
+                let unit = &shapes.units[i];
+                Example::lines(&unit.file, unit.first_line, unit.last_line)
+            })
+            .collect();
+        picked = Some(MatchingAction::MakeRule(places));
+    }
     for &i in units {
         let unit = &shapes.units[i];
         let label = format!(

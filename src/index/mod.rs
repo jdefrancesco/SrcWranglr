@@ -502,6 +502,19 @@ mod tests {
              {} risky calls in {judged_in:?}, by rule: {risky_by_rule:?}",
             risky.len()
         );
+        let looking = std::time::Instant::now();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let wrappers = crate::analysis::wrappers::wrappers(graph, &stop).expect("not stopped");
+        println!(
+            "{} wrappers of risky calls in {:?}; most called: {:?}",
+            wrappers.len(),
+            looking.elapsed(),
+            wrappers
+                .iter()
+                .take(8)
+                .map(|w| (w.name.as_str(), w.callee.as_str(), w.passes, w.callers))
+                .collect::<Vec<_>>()
+        );
         for found in crate::analysis::capabilities::capabilities_in(graph) {
             let functions: Vec<(&str, usize)> = found
                 .functions
