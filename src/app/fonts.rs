@@ -1,6 +1,6 @@
 //! The fonts the app adds to egui's own: Ubuntu Regular in place of egui's
-//! Ubuntu Light, so text reads heavier; Ubuntu Medium, for the pane
-//! toggles; Source Code Pro and Iosevka, for the symbol list (picked in
+//! Ubuntu Light, so text reads heavier; Ubuntu Medium, for controls such
+//! as the pane toggles and the graph's toolbar; Source Code Pro and Iosevka, for the symbol list (picked in
 //! Settings). Iosevka is also the last fallback everywhere, for the stars,
 //! arrows and shapes egui's fonts lack (☆, ▸).
 
@@ -73,6 +73,17 @@ impl SymbolFont {
 /// as the pane toggles: Ubuntu Medium, then the proportional fonts.
 pub fn medium() -> FontFamily {
     FontFamily::Name(UBUNTU_MEDIUM.into())
+}
+
+/// Letters of a control's label are set this much further apart.
+const CONTROL_LETTER_SPACING: f32 = 0.4;
+
+/// A control's label (a pane toggle, a toolbar button such as Back): in
+/// Ubuntu Medium, set a little apart, so controls read apart from text.
+pub fn control(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text)
+        .family(medium())
+        .extra_letter_spacing(CONTROL_LETTER_SPACING)
 }
 
 /// egui's fonts plus ours: Ubuntu Regular wherever egui uses Ubuntu Light,

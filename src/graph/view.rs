@@ -18,6 +18,7 @@ use super::overview::build_overview;
 use super::render::{self, font_for, Badge, Frame, Palette, LEGEND_STRIP_HEIGHT};
 use super::scene::{Scene, TextRole};
 use super::trail::build_trail;
+use crate::app::fonts::control;
 use crate::model::{CodeGraph, SymbolId};
 
 /// Extra world-space margin around the scene when fitting it to the view.
@@ -257,15 +258,13 @@ impl GraphView {
         ui.horizontal(|ui| {
             let mut action = None;
             for mode in [ViewMode::Trail, ViewMode::CallHierarchy] {
-                if ui
-                    .selectable_label(self.mode == mode, mode.label())
-                    .clicked()
-                {
+                let label = control(mode.label());
+                if ui.selectable_label(self.mode == mode, label).clicked() {
                     action = Some(ToolbarAction::Mode(mode));
                 }
             }
             ui.separator();
-            let back = egui::Button::new("◀ Back");
+            let back = egui::Button::new(control("◀ Back"));
             if ui.add_enabled(!self.history.is_empty(), back).clicked() {
                 action = Some(ToolbarAction::Back);
             }
@@ -273,19 +272,20 @@ impl GraphView {
                 ViewMode::Trail => "Overview",
                 ViewMode::CallHierarchy => "Entry points",
             };
-            let overview = egui::Button::new(overview_label);
+            let overview = egui::Button::new(control(overview_label));
             if ui.add_enabled(self.selected.is_some(), overview).clicked() {
                 action = Some(ToolbarAction::Overview);
             }
             ui.separator();
-            if ui.button("−").on_hover_text("Zoom out").clicked() {
+            if ui.button(control("−")).on_hover_text("Zoom out").clicked() {
                 action = Some(ToolbarAction::ZoomOut);
             }
             ui.label(format!("{:>3.0}%", self.camera.zoom * 100.0));
-            if ui.button("+").on_hover_text("Zoom in").clicked() {
+            if ui.button(control("+")).on_hover_text("Zoom in").clicked() {
                 action = Some(ToolbarAction::ZoomIn);
             }
-            if ui.button("Fit").on_hover_text("Frame everything").clicked() {
+            let fit = ui.button(control("Fit")).on_hover_text("Frame everything");
+            if fit.clicked() {
                 action = Some(ToolbarAction::Fit);
             }
             ui.separator();

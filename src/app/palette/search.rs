@@ -40,6 +40,8 @@ pub enum Command {
     OpenSession,
     ExportBundle,
     ImportBundle,
+    /// Opens the project's README in a window.
+    ShowReadme,
     About,
     Back,
     Fit,
@@ -53,7 +55,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 42] = [
+    pub const ALL: [Command; 43] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -77,6 +79,7 @@ impl Command {
         Command::OpenSession,
         Command::ExportBundle,
         Command::ImportBundle,
+        Command::ShowReadme,
         Command::TogglePane(Pane::Todos),
         Command::TogglePane(Pane::Trace),
         Command::About,
@@ -120,6 +123,7 @@ impl Command {
             Command::OpenSession => "Open Session…",
             Command::ExportBundle => "Export Audit Bundle…",
             Command::ImportBundle => "Import Audit Bundle…",
+            Command::ShowReadme => "Show Project README",
             Command::About => "About SrcWranglr",
             Command::Back => "Go Back",
             Command::Fit => "Fit Graph to Window",

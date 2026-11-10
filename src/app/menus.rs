@@ -12,9 +12,15 @@ use super::{
     SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
 };
 
+/// Room around the menu bar's contents. egui's default (8 by 2) crowds it
+/// against the window's edges.
+const MENU_BAR_MARGIN: egui::Margin = egui::Margin::symmetric(12, 6);
+
 impl SrcWranglrApp {
     pub(super) fn show_menu_bar(&mut self, ui: &mut egui::Ui) -> Option<Command> {
+        let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(MENU_BAR_MARGIN);
         egui::Panel::top("menu_bar")
+            .frame(frame)
             .show(ui, |ui| {
                 egui::MenuBar::new()
                     .ui(ui, |ui| {
@@ -33,13 +39,17 @@ impl SrcWranglrApp {
                             .or(triage.inner.flatten())
                             .or(help.inner.flatten());
                         ui.separator();
-                        ui.label(RichText::new(&self.project.name).strong());
+                        let name = RichText::new(&self.project.name).strong();
                         let toggled = match self.is_project_open {
                             true => {
+                                let readme = project_name(ui, name);
                                 ui.separator();
-                                self.show_pane_toggles(ui)
+                                readme.or(self.show_pane_toggles(ui))
                             }
-                            false => None,
+                            false => {
+                                ui.label(name);
+                                None
+                            }
                         };
                         action.or(toggled)
                     })
@@ -254,12 +264,25 @@ impl SrcWranglrApp {
     }
 }
 
-/// Opens the Project Triage window on any of its tabs.
+/// The open project's name, which shows its README when clicked.
+fn project_name(ui: &mut egui::Ui, name: RichText) -> Option<Command> {
+    let label = egui::Label::new(name).sense(egui::Sense::click());
+    ui.add(label)
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Show this project's README")
+        .clicked()
+        .then_some(Command::ShowReadme)
+}
+
+/// Opens the Project Triage window on any of its tabs, or the README.
 fn triage_menu(ui: &mut egui::Ui) -> Option<Command> {
     let overview = egui::Button::new("Project Triage…")
         .shortcut_text(ui.ctx().format_shortcut(&TRIAGE_SHORTCUT));
     if ui.add(overview).clicked() {
         return Some(Command::Triage(SurveyTab::Overview));
+    }
+    if ui.button(Command::ShowReadme.label()).clicked() {
+        return Some(Command::ShowReadme);
     }
     ui.separator();
     SurveyTab::ALL

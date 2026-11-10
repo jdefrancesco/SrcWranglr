@@ -18,7 +18,7 @@ mod finding_view;
 mod findings;
 mod findings_actions;
 mod findings_panel;
-mod fonts;
+pub(crate) mod fonts;
 mod harness_view;
 mod history;
 mod history_actions;
@@ -39,6 +39,8 @@ mod opening;
 mod palette;
 mod pane_bar;
 mod project;
+mod readme;
+mod readme_view;
 mod rule_files;
 mod session;
 mod session_actions;
@@ -160,6 +162,8 @@ pub struct SrcWranglrApp {
     similar_view: Option<similar_view::SimilarView>,
     /// The Docs window, and the man pages read so far.
     docs: docs::Docs,
+    /// The project's README, while its window is open.
+    readme: Option<readme_view::ReadmeWindow>,
     /// Where the source pane sits; kept between launches.
     layout: Layout,
     /// Which functions outside input reaches, for the open project.
@@ -254,6 +258,7 @@ impl SrcWranglrApp {
             harness_view: None,
             similar_view: None,
             docs: docs::Docs::default(),
+            readme: None,
             layout: Layout::load(storage),
             reach: Reach::default(),
             open_dialog: None,
@@ -454,6 +459,7 @@ impl eframe::App for SrcWranglrApp {
         self.show_harness_view(&ctx);
         self.show_similar_view(&ctx);
         self.show_docs_window(&ctx);
+        readme_view::show(&ctx, &mut self.readme, &self.project.name);
         let notes = if self.palette.is_open() {
             self.note_candidates()
         } else {
@@ -562,6 +568,10 @@ impl SrcWranglrApp {
             Command::OpenSession => self.open_session_dialog(ctx),
             Command::ExportBundle => self.export_bundle_dialog(ctx),
             Command::ImportBundle => self.import_bundle_dialog(ctx),
+            Command::ShowReadme => {
+                let root = self.project.root.clone();
+                self.readme = Some(readme_view::ReadmeWindow::open(root, ctx));
+            }
             Command::About => self.is_about_open = true,
             Command::EditNote => {
                 if let Some(target) = self.selected_target() {

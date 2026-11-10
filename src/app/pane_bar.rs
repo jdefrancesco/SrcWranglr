@@ -15,8 +15,6 @@ const TOGGLE_GAP: f32 = 6.0;
 const TOGGLE_PADDING: egui::Vec2 = egui::vec2(9.0, 2.0);
 /// Enough to round a toggle's ends fully.
 const TOGGLE_ROUNDING: u8 = 12;
-/// A touch of tracking, so the toggles' labels read as buttons.
-const TOGGLE_LETTER_SPACING: f32 = 0.4;
 
 /// A pane that can be shown or hidden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,10 +152,7 @@ pub fn toggles(
 
 /// One pane's pill: blue when the pane is shown, gray when hidden.
 fn toggle(ui: &mut egui::Ui, pane: Pane, is_lit: bool) -> egui::Response {
-    let label = RichText::new(pane.label())
-        .family(fonts::medium())
-        .extra_letter_spacing(TOGGLE_LETTER_SPACING);
-    let pill = egui::Button::selectable(is_lit, label)
+    let pill = egui::Button::selectable(is_lit, fonts::control(pane.label()))
         .frame_when_inactive(true)
         .corner_radius(TOGGLE_ROUNDING);
     ui.add(pill)

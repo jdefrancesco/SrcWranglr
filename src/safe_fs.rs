@@ -3,7 +3,7 @@
 //! limited, writes replace the file atomically.
 
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -51,22 +51,54 @@ pub fn read_regular_file(path: &Path, max_bytes: usize) -> std::io::Result<Optio
             return Ok(None);
         }
     }
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+    // Checked before opening, so a device or FIFO is never even opened...
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_file() => return Err(not_regular()),
+        Ok(_) => {}
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
-    };
+    }
+    // ...and again on the open file, in case something was swapped in.
+    let file = open_no_follow(path)?;
+    let metadata = file.metadata()?;
     if !metadata.file_type().is_file() {
-        return Err(std::io::Error::other(
-            "not a regular file (symlinks are not followed)",
-        ));
+        return Err(not_regular());
     }
+    let too_large = || std::io::Error::other(format!("larger than {max_bytes} bytes"));
     if metadata.len() > max_bytes as u64 {
-        return Err(std::io::Error::other(format!(
-            "larger than {max_bytes} bytes"
-        )));
+        return Err(too_large());
     }
-    fs::read_to_string(path).map(Some)
+    let mut text = String::new();
+    file.take(max_bytes as u64 + 1).read_to_string(&mut text)?;
+    // It may have grown since.
+    if text.len() > max_bytes {
+        return Err(too_large());
+    }
+    Ok(Some(text))
+}
+
+fn not_regular() -> std::io::Error {
+    std::io::Error::other("not a regular file (symlinks are not followed)")
+}
+
+/// Opens `path` to read, failing on a symlink, and without waiting on a
+/// FIFO swapped in for it.
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| match e.raw_os_error() {
+            Some(libc::ELOOP) => not_regular(),
+            _ => e,
+        })
+}
+
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 /// Replaces `dir/name` with `contents` atomically, creating `dir` (one
@@ -155,6 +187,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_fifo_is_refused_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fifo = dir.path().join("README");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).expect("path");
+        // SAFETY: `c_path` is a valid NUL-terminated path that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let error = read_regular_file(&fifo, 100).expect_err("a FIFO");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+        assert!(open_no_follow(&fifo).is_ok(), "opening never blocks");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn never_follows_symlinks() {
         let elsewhere = tempfile::tempdir().expect("tempdir");
         let dir = tempfile::tempdir().expect("tempdir");
@@ -167,6 +212,11 @@ mod tests {
         let link = dir.path().join("link.toml");
         std::os::unix::fs::symlink(&target, &link).expect("symlink");
         assert!(read_regular_file(&link, 100).is_err());
+        let opened = open_no_follow(&link).expect_err("a symlink");
+        assert!(
+            opened.to_string().contains("not a regular file"),
+            "{opened}"
+        );
         // Nor through a symlinked folder.
         std::fs::write(elsewhere.path().join("a.toml"), "x").expect("write");
         assert!(read_regular_file(&linked.join("a.toml"), 100).is_err());
