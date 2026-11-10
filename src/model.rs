@@ -273,6 +273,11 @@ pub struct CodeGraph {
     pub occurrences: HashMap<String, Vec<Occurrence>>,
     /// Calls to functions outside the project, per file, sorted by span.
     pub external_calls: HashMap<String, Vec<ExternalCall>>,
+    /// Calls to the project's own definitions of library functions that
+    /// risky-call checks watch (the Linux kernel's `strcpy` and
+    /// `copy_from_user`), per file, sorted by span. Kept with their
+    /// arguments, like `external_calls`, so they can be judged the same way.
+    pub library_calls_in_tree: HashMap<String, Vec<ExternalCall>>,
     /// Every function definition's size and complexity.
     pub functions: Vec<FunctionMetrics>,
     /// String literals per file (files with any), in file order.

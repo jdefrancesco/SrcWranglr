@@ -125,7 +125,17 @@ const SIZE_OVERFLOW: Assessment = Assessment {
     cwe: 190,
     why: "The size is a product that can wrap around, allocating less than the code later \
           writes into it.",
-    fix: "Use calloc(n, size), reallocarray, or check n <= SIZE_MAX / size first.",
+    fix: "Use calloc(n, size), reallocarray, or check n <= SIZE_MAX / size first \
+          (kcalloc or kmalloc_array in the Linux kernel).",
+};
+const CERTIFICATE_CHECK_OFF: Assessment = Assessment {
+    label: "certificate check off",
+    severity: Severity::High,
+    cwe: 295,
+    why: "Turns off checking the server's certificate, so anyone on the network path can \
+          pose as the server.",
+    fix: "Leave verification on; to trust a private CA, load it \
+          (SSL_CTX_load_verify_locations, CURLOPT_CAINFO).",
 };
 
 /// printf-like functions and their format argument. `v` forms take the
@@ -146,9 +156,28 @@ const PRINTF_FORMAT_ARG: &[(&str, usize)] = &[
     ("warn", 0),
     ("warnx", 0),
     ("vsprintf", 1),
+    ("_tprintf", 0),
+    ("_ftprintf", 1),
+    ("_stprintf", 1),
+    ("wsprintf", 1),
+    ("wsprintfA", 1),
+    ("wsprintfW", 1),
+    ("_snprintf", 2),
+    ("_snwprintf", 2),
+    ("printk", 0),
+    ("seq_printf", 1),
+    ("scnprintf", 2),
+    ("sysfs_emit", 1),
 ];
 /// sprintf-like: write an unknown amount into a buffer of unknown size.
-const UNSIZED_PRINTF: &[&str] = &["sprintf", "vsprintf"];
+const UNSIZED_PRINTF: &[&str] = &[
+    "sprintf",
+    "vsprintf",
+    "_stprintf",
+    "wsprintf",
+    "wsprintfA",
+    "wsprintfW",
+];
 const SCANF_FORMAT_ARG: &[(&str, usize)] = &[
     ("scanf", 0),
     ("wscanf", 0),
@@ -158,17 +187,97 @@ const SCANF_FORMAT_ARG: &[(&str, usize)] = &[
     ("vscanf", 0),
     ("vfscanf", 1),
     ("vsscanf", 1),
+    ("fwscanf", 1),
+    ("vwscanf", 0),
+    ("vfwscanf", 1),
+    ("vswscanf", 1),
+    ("_tscanf", 0),
+    ("_ftscanf", 1),
+    ("_stscanf", 1),
 ];
-/// Copies taking (destination, source, size).
-const SIZED_COPIES: &[&str] = &[
-    "memcpy", "memmove", "wmemcpy", "wmemmove", "strncpy", "wcsncpy", "strncat", "wcsncat",
+/// Byte copies taking (destination, source, size), where a constant size
+/// is the common, harmless case.
+const MEMORY_COPIES: &[&str] = &[
+    "memcpy",
+    "memmove",
+    "wmemcpy",
+    "wmemmove",
+    "mempcpy",
+    "__builtin_memcpy",
+    "__builtin_memmove",
+    "CopyMemory",
+    "MoveMemory",
+    "RtlCopyMemory",
+    "RtlMoveMemory",
 ];
-/// Byte copies, where a constant size is the common, harmless case.
-const MEMORY_COPIES: &[&str] = &["memcpy", "memmove", "wmemcpy", "wmemmove"];
+/// String copies taking (destination, source, count).
+const COUNTED_STRING_COPIES: &[&str] = &[
+    "strncpy", "wcsncpy", "_tcsncpy", "_mbsncpy", "stpncpy", "wcpncpy", "strncat", "wcsncat",
+    "_tcsncat", "_mbsncat",
+];
 /// Unbounded string copies taking (destination, source).
-const STRING_COPIES: &[&str] = &["strcpy", "wcscpy", "stpcpy", "strcat", "wcscat"];
-const SHELL_COMMANDS: &[&str] = &["system", "_wsystem", "popen", "_popen", "_wpopen"];
-const ALLOC_SIZE_ARG: &[(&str, usize)] = &[("malloc", 0), ("valloc", 0), ("realloc", 1)];
+const STRING_COPIES: &[&str] = &[
+    "strcpy", "wcscpy", "stpcpy", "wcpcpy", "_tcscpy", "_mbscpy", "strcat", "wcscat", "_tcscat",
+    "_mbscat", "lstrcpy", "lstrcpyA", "lstrcpyW", "lstrcat", "lstrcatA", "lstrcatW", "StrCpy",
+    "StrCpyW", "StrCat", "StrCatW",
+];
+const SHELL_COMMANDS: &[&str] = &[
+    "system", "_wsystem", "_tsystem", "popen", "_popen", "_wpopen", "_tpopen",
+];
+const STACK_ALLOCATIONS: &[&str] = &["alloca", "_alloca", "__builtin_alloca"];
+/// Allocators and their size argument, a product of which can overflow.
+const ALLOC_SIZE_ARG: &[(&str, usize)] = &[
+    ("malloc", 0),
+    ("valloc", 0),
+    ("realloc", 1),
+    ("aligned_alloc", 1),
+    ("memalign", 1),
+    ("HeapAlloc", 2),
+    ("LocalAlloc", 1),
+    ("GlobalAlloc", 1),
+    ("kmalloc", 0),
+    ("kzalloc", 0),
+    ("kmalloc_node", 0),
+    ("kzalloc_node", 0),
+    ("vmalloc", 0),
+    ("vzalloc", 0),
+    ("kvmalloc", 0),
+    ("kvzalloc", 0),
+    ("krealloc", 1),
+    ("devm_kmalloc", 1),
+    ("devm_kzalloc", 1),
+];
+/// OpenSSL calls whose mode argument can turn off certificate checks.
+const TLS_VERIFY_MODE: &[&str] = &["SSL_CTX_set_verify", "SSL_set_verify"];
+/// libcurl options that, set to 0, turn off certificate checks.
+const CURL_VERIFY_OPTIONS: &[&str] = &[
+    "CURLOPT_SSL_VERIFYPEER",
+    "CURLOPT_SSL_VERIFYHOST",
+    "CURLOPT_PROXY_SSL_VERIFYPEER",
+    "CURLOPT_PROXY_SSL_VERIFYHOST",
+];
+
+/// Every name `assess` can say something about.
+pub fn judged_names() -> impl Iterator<Item = &'static str> {
+    let with_args = [SCANF_FORMAT_ARG, PRINTF_FORMAT_ARG, ALLOC_SIZE_ARG]
+        .into_iter()
+        .flatten()
+        .map(|&(name, _)| name);
+    let plain = [
+        MEMORY_COPIES,
+        COUNTED_STRING_COPIES,
+        STRING_COPIES,
+        SHELL_COMMANDS,
+        STACK_ALLOCATIONS,
+        TLS_VERIFY_MODE,
+    ]
+    .into_iter()
+    .flatten()
+    .copied();
+    with_args
+        .chain(plain)
+        .chain(["realpath", "curl_easy_setopt"])
+}
 
 /// The verdict on a call to library function `name` with `args`.
 pub fn assess(name: &str, args: &[String]) -> Verdict {
@@ -179,7 +288,7 @@ pub fn assess(name: &str, args: &[String]) -> Verdict {
     if let Some(i) = index_of(PRINTF_FORMAT_ARG, name) {
         return printf_verdict(name, arg(i));
     }
-    if SIZED_COPIES.contains(&name) {
+    if MEMORY_COPIES.contains(&name) || COUNTED_STRING_COPIES.contains(&name) {
         return copy_verdict(name, arg(1), arg(2));
     }
     if STRING_COPIES.contains(&name) {
@@ -188,7 +297,7 @@ pub fn assess(name: &str, args: &[String]) -> Verdict {
     if SHELL_COMMANDS.contains(&name) {
         return flag_if(arg(0).is_some_and(is_string_literal), CONSTANT_COMMAND);
     }
-    if matches!(name, "alloca" | "_alloca") {
+    if STACK_ALLOCATIONS.contains(&name) {
         return match arg(0) {
             Some(size) if is_integer_literal(size) || size.starts_with("sizeof") => {
                 Verdict::Flag(CONSTANT_ALLOCA)
@@ -200,7 +309,33 @@ pub fn assess(name: &str, args: &[String]) -> Verdict {
     if let Some(i) = index_of(ALLOC_SIZE_ARG, name) {
         return flag_if(arg(i).is_some_and(can_overflow), SIZE_OVERFLOW);
     }
-    Verdict::Default
+    if name == "realpath" {
+        // With no buffer, realpath allocates one of the right size.
+        let is_null = arg(1).is_some_and(|a| matches!(a, "NULL" | "nullptr" | "0"));
+        return if is_null {
+            Verdict::Suppress
+        } else {
+            Verdict::Default
+        };
+    }
+    certificate_verdict(name, &arg)
+}
+
+/// Certificate checks turned off: `SSL_VERIFY_NONE`, or a libcurl verify
+/// option set to 0. Other calls to these functions are fine.
+fn certificate_verdict<'a>(name: &str, arg: &impl Fn(usize) -> Option<&'a str>) -> Verdict {
+    let is_off = if TLS_VERIFY_MODE.contains(&name) {
+        arg(1).is_some_and(|mode| mode.contains("SSL_VERIFY_NONE"))
+    } else if name == "curl_easy_setopt" {
+        let is_verify = arg(1).is_some_and(|option| CURL_VERIFY_OPTIONS.contains(&option));
+        is_verify && arg(2).is_some_and(is_off)
+    } else {
+        return Verdict::Default;
+    };
+    match is_off {
+        true => Verdict::Flag(CERTIFICATE_CHECK_OFF),
+        false => Verdict::Suppress,
+    }
 }
 
 fn index_of(table: &[(&str, usize)], name: &str) -> Option<usize> {
@@ -276,6 +411,14 @@ fn copy_verdict(name: &str, source: Option<&str>, size: Option<&str>) -> Verdict
     Verdict::Default
 }
 
+/// A flag turned off: `0`, `0L`, `(long)0`, `FALSE`.
+fn is_off(value: &str) -> bool {
+    let compact: String = value.split_whitespace().collect();
+    let value = compact.strip_prefix("(long)").unwrap_or(&compact);
+    let digits = value.trim_end_matches(['u', 'U', 'l', 'L']);
+    matches!(digits, "0" | "0x0" | "0X0" | "FALSE" | "false")
+}
+
 /// `strlen(source)` or `strlen(source) + 1` (ignoring spaces).
 fn is_size_of_source(size: &str, source: &str) -> bool {
     let compact = |text: &str| -> String { text.split_whitespace().collect() };
@@ -287,8 +430,9 @@ fn is_size_of_source(size: &str, source: &str) -> bool {
         .any(|len| size == format!("{len}({source})"))
 }
 
-/// A string literal (possibly prefixed, concatenated with macros, or
-/// wrapped in a translation macro like `_("…")`).
+/// A string literal: possibly prefixed (`L"…"`), wrapped in a translation
+/// macro (`_("…")`), or joined to constant macros (`KERN_INFO "…"`,
+/// `PACKAGE ": %s"`).
 fn is_string_literal(arg: &str) -> bool {
     let mut text = arg.trim();
     for wrapper in ["_(", "N_(", "gettext(", "TEXT(", "_T("] {
@@ -296,9 +440,37 @@ fn is_string_literal(arg: &str) -> bool {
             text = inner.trim();
         }
     }
-    ["\"", "L\"", "u\"", "U\"", "u8\"", "R\""]
+    let is_quoted = ["\"", "L\"", "u\"", "U\"", "u8\"", "R\""]
         .iter()
-        .any(|prefix| text.starts_with(prefix))
+        .any(|prefix| text.starts_with(prefix));
+    is_quoted || is_literal_with_macros(text)
+}
+
+/// Literals joined to upper-case macro names, such as `KERN_ERR PFX "…"`:
+/// outside the quotes, only names in capitals and spaces, and at least one
+/// literal.
+fn is_literal_with_macros(text: &str) -> bool {
+    let mut has_literal = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                has_literal = true;
+                let mut is_escaped = false;
+                let is_closed = chars.by_ref().any(|c| {
+                    let is_end = c == '"' && !is_escaped;
+                    is_escaped = c == '\\' && !is_escaped;
+                    is_end
+                });
+                if !is_closed {
+                    return false;
+                }
+            }
+            c if c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' || c.is_whitespace() => {}
+            _ => return false,
+        }
+    }
+    has_literal
 }
 
 /// `16`, `0x10`, `64u`, `512UL`.
@@ -458,174 +630,5 @@ fn conversions(format: &str) -> impl Iterator<Item = Conversion> + '_ {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn verdict(name: &str, args: &[&str]) -> Verdict {
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        assess(name, &args)
-    }
-
-    fn label(name: &str, args: &[&str]) -> Option<(&'static str, Severity)> {
-        match verdict(name, args) {
-            Verdict::Flag(a) => Some((a.label, a.severity)),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn non_literal_format_strings_are_flagged() {
-        assert_eq!(
-            label("printf", &["buf"]),
-            Some(("non-literal format", Severity::High))
-        );
-        assert_eq!(
-            label("fprintf", &["stderr", "msg"]),
-            Some(("non-literal format", Severity::High))
-        );
-        assert_eq!(
-            label("snprintf", &["d", "sizeof d", "user"]),
-            Some(("non-literal format", Severity::High))
-        );
-        assert_eq!(verdict("printf", &["\"%s\\n\"", "buf"]), Verdict::Default);
-        assert_eq!(verdict("printf", &["\"%\" PRIu64", "n"]), Verdict::Default);
-        assert_eq!(
-            verdict("printf", &["_(\"Hello %s\")", "n"]),
-            Verdict::Default
-        );
-        assert_eq!(verdict("printf", &[]), Verdict::Default);
-    }
-
-    #[test]
-    fn sprintf_is_judged_by_its_conversions() {
-        assert_eq!(
-            label("sprintf", &["d", "\"name=%s\"", "n"]),
-            Some(("unbounded %s", Severity::High))
-        );
-        assert_eq!(
-            label("sprintf", &["d", "\"%d-%08x\"", "a", "b"]),
-            Some(("fixed-width conversions", Severity::Low))
-        );
-        assert_eq!(
-            label("sprintf", &["d", "\"%f\"", "x"]),
-            Some(("long conversions", Severity::Medium))
-        );
-        assert_eq!(
-            label("sprintf", &["d", "\"%*d\"", "w", "x"]),
-            Some(("long conversions", Severity::Medium))
-        );
-        for unbounded in ["\"%1$s\"", "\"%S\"", "\"%ws\"", "\"%I64d %s\""] {
-            assert_eq!(
-                label("sprintf", &["d", unbounded, "x"]),
-                Some(("unbounded %s", Severity::High)),
-                "{unbounded}"
-            );
-        }
-        // A precision bounds %s.
-        assert_eq!(
-            label("sprintf", &["d", "\"%.16s\"", "n"]),
-            Some(("fixed-width conversions", Severity::Low))
-        );
-    }
-
-    #[test]
-    fn scanf_without_unbounded_strings_is_not_flagged() {
-        assert_eq!(
-            label("sscanf", &["s", "\"%s %d\"", "buf", "&n"]),
-            Some(("unbounded %s", Severity::High))
-        );
-        assert_eq!(
-            label("scanf", &["\"%[^\\n]\"", "line"]),
-            Some(("unbounded %s", Severity::High))
-        );
-        assert_eq!(
-            label("sscanf", &["s", "\"%63s\"", "buf"]),
-            Some(("string widths", Severity::Low))
-        );
-        assert_eq!(
-            verdict("sscanf", &["s", "\"%llu%c\"", "&n", "&c"]),
-            Verdict::Suppress
-        );
-        // Assignment-suppressed conversions write nothing.
-        assert_eq!(
-            verdict("sscanf", &["s", "\"%*s %d\"", "&n"]),
-            Verdict::Suppress
-        );
-    }
-
-    #[test]
-    fn copies_sized_by_their_source_are_flagged() {
-        assert_eq!(
-            label("memcpy", &["dst", "src", "strlen(src)"]),
-            Some(("size from the source", Severity::High))
-        );
-        assert_eq!(
-            label("strncpy", &["d", "s", "strlen( s ) + 1"]),
-            Some(("size from the source", Severity::High))
-        );
-        assert_eq!(verdict("memcpy", &["dst", "src", "n"]), Verdict::Default);
-        assert_eq!(
-            label("memcpy", &["dst", "src", "16"]),
-            Some(("constant size", Severity::Low))
-        );
-        assert_eq!(
-            verdict("memcpy", &["dst", "src", "sizeof(hdr)"]),
-            Verdict::Default
-        );
-    }
-
-    #[test]
-    fn fixed_strings_and_commands_are_downgraded() {
-        assert_eq!(
-            label("strcpy", &["d", "\"none\""]),
-            Some(("fixed string", Severity::Low))
-        );
-        assert_eq!(verdict("strcpy", &["d", "s"]), Verdict::Default);
-        assert_eq!(
-            label("system", &["\"clear\""]),
-            Some(("constant command", Severity::Low))
-        );
-        assert_eq!(verdict("system", &["cmd"]), Verdict::Default);
-    }
-
-    #[test]
-    fn allocation_sizes_that_can_overflow_are_flagged() {
-        assert_eq!(
-            label("malloc", &["n * sizeof(struct item)"]),
-            Some(("size can overflow", Severity::Medium))
-        );
-        assert_eq!(
-            label("realloc", &["p", "count*size"]),
-            Some(("size can overflow", Severity::Medium))
-        );
-        assert_eq!(verdict("malloc", &["4 * sizeof(int)"]), Verdict::Default);
-        // Multiplying by one can't overflow.
-        assert_eq!(
-            verdict("malloc", &["sizeof(char) * str.size()"]),
-            Verdict::Default
-        );
-        assert_eq!(verdict("malloc", &["1 * n"]), Verdict::Default);
-        assert_eq!(verdict("malloc", &["n"]), Verdict::Default);
-        assert_eq!(
-            label("alloca", &["len"]),
-            Some(("variable size", Severity::High))
-        );
-        assert_eq!(
-            label("alloca", &["64"]),
-            Some(("constant size", Severity::Low))
-        );
-        assert_eq!(
-            label("alloca", &["sizeof x"]),
-            Some(("constant size", Severity::Low))
-        );
-        assert_eq!(
-            label("malloc", &["((a * b))"]),
-            Some(("size can overflow", Severity::Medium))
-        );
-        assert_eq!(
-            label("malloc", &["n * *p"]),
-            Some(("size can overflow", Severity::Medium))
-        );
-        assert_eq!(verdict("malloc", &["*len"]), Verdict::Default);
-    }
-}
+#[path = "heuristics_tests.rs"]
+mod tests;

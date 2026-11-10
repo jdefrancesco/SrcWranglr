@@ -43,7 +43,7 @@ Detailed feature behavior, controls, configuration, and development reference fo
 
 ## Project triage
 
-A first look at an unfamiliar codebase. Open it with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has seven tabs:
+A first look at an unfamiliar codebase. Click the project's name in the menu bar (or **Triage → Show Project README**) to read its README in a window: the one at the top of the project, read without following symlinks, with headings and code blocks laid out and nothing in it fetched or run. Open the rest with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has seven tabs:
 
 - **Overview:** size, lines of code, language mix, target platforms (from platform headers and `#if` checks), build systems, docs, license, CI, git branch, repository links, the best fuzz targets, and how many functions and risky calls outside input reaches.
 - **Languages & Size:** files plus code, comment and blank lines for each language.
@@ -70,6 +70,15 @@ A first look at an unfamiliar codebase. Open it with **Triage → Project Triage
 ## Findings
 
 **Analyze → Findings** (⌘⇧R / Ctrl+Shift+R) lists risky calls, most severe first. The calls are judged by their arguments, so a constant-size `memcpy` isn't flagged but `sprintf` with a non-literal format is. The list also includes results from semgrep, cppcheck and flawfinder (**Analyze → Run …**), and the functions on your dangerous-functions list. Filter by severity or text, and record a verdict on each one.
+
+The built-in list covers about 300 functions, each with a severity, a CWE, why it's risky and what to use instead:
+
+- **The C library and POSIX:** unbounded copies and formats, `scanf` without widths, commands and programs run, `dlopen`, predictable temp names, races on paths, `chroot`, unchecked `setuid`, weak random numbers, `atoi`.
+- **Windows:** `lstrcpy`, `wsprintf` and the other unbounded string functions, `_snprintf` (which may leave no NUL), `CreateProcess` with an unquoted path, `LoadLibrary` by search path, `MultiByteToWideChar` sized in bytes, impersonation that fails silently, `IsBadReadPtr`.
+- **The Linux kernel:** `copy_from_user` and `get_user` (data user space controls), the `__` forms that skip `access_ok()`, `copy_to_user` (leaks of uninitialized memory), `memdup_user`, `strncpy_from_user`, `simple_strtoul`; and `kmalloc(n * size)`, `printk` with a non-literal format, and the kernel's own `sprintf` and `strcpy`.
+- **Weak crypto:** DES, 3DES, RC4, RC2, Blowfish, ECB mode, MD4, MD5 and SHA-1, DES-era `crypt()`; and certificate checks turned off (`SSL_VERIFY_NONE`, `CURLOPT_SSL_VERIFYPEER` set to 0).
+
+A project's own definition of a library function counts too, the way the Linux kernel defines `strcpy` in `lib/string.c` and `copy_from_user` in `uaccess.h`: calls to it are judged like calls to the library's. Generic names (`access`, `random`, `warn`) and crypto names are the exceptions; a project's own `MD5_Init` or `BF_set_key` is more likely an implementation (bcrypt has one) than a misuse. A format joined to constant macros, such as `printk(KERN_INFO "…")` or `printf(PACKAGE ": %s", …)`, counts as a literal.
 
 **Silenced warnings.** Code can tell an analyzer not to report a line with a comment: `// nosemgrep`, `/* Flawfinder: ignore */`, `// cppcheck-suppress …`, `// NOLINT`, `// coverity[…]`, `// lgtm[…]`, `// NOSONAR`, `//-V547`. SrcWranglr runs semgrep, cppcheck and flawfinder with these comments ignored, so the code you audit can't hide findings from them that way. Each such comment is also listed as a low finding from **source comments**: someone saw a warning there and silenced it. Up to 2,000 are kept per file (counted apart from TODO-style tags, so those can't crowd them out); a file with more gets a medium finding saying so.
 
@@ -344,6 +353,7 @@ srcwranglr --version
 | Frame everything | **Fit**, or double-click the background |
 | Filter symbols | Type in **Search** |
 | Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
+| Read the project's README | Click the project's name in the menu bar, or **Triage → Show Project README** |
 | Put the source below the graph, or back beside it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
 | Show or hide a pane | The buttons in the menu bar, or the arrow in a pane's heading; **⌘B / Ctrl+B** for Notes, **⌘⇧R / Ctrl+Shift+R** for Findings |
 | Settings (editor, tool folders, source colors, symbol list font) | **⌘, / Ctrl+,**, or **File → Settings…** |
@@ -377,6 +387,7 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/index/signature.rs` | Each function definition's prototype and parameters, for fuzz harnesses |
 | `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`) and libFuzzer harness drafting (`harness/`) |
 | `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
+| `src/analysis/risky/`, `heuristics.rs` | The built-in risky functions (C library, Windows, Linux kernel, weak crypto) and judging a call by its arguments |
 | `src/analysis/trace/` | Tracing a value back to where it comes from (`walk.rs`) or forward to the risky calls it reaches (`forward/`, `goes.rs`), across functions, by syntax |
 | `src/analysis/tools.rs`, `flawfinder.rs` | Running semgrep, cppcheck and flawfinder, and reading their reports |
 | `src/history/` | Reading the git history with gitoxide in a worker process (`worker.rs`): fix commits by message (`keywords.rs`), the lines each last changed (`read.rs`, `file.rs`), and findings for them |

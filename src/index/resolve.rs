@@ -71,13 +71,17 @@ pub fn build_graph(mut files: Vec<SourceFile>) -> CodeGraph {
         })
         .collect();
 
-    let external_calls = files
-        .iter()
-        .filter_map(|file| {
-            let calls = external_calls_in(&file.facts, &by_qname, &mut resolver);
-            (!calls.is_empty()).then(|| (file.path.clone(), calls))
-        })
-        .collect();
+    let mut external_calls = HashMap::new();
+    let mut library_calls_in_tree = HashMap::new();
+    for file in &files {
+        let (outside, inside) = library_calls_in(&file.facts, &by_qname, &mut resolver);
+        if !outside.is_empty() {
+            external_calls.insert(file.path.clone(), outside);
+        }
+        if !inside.is_empty() {
+            library_calls_in_tree.insert(file.path.clone(), inside);
+        }
+    }
 
     let functions = function_metrics(&files, &by_qname);
     let (strings, strings_cut_short) = strings::by_file(&mut files, &functions);
@@ -90,6 +94,7 @@ pub fn build_graph(mut files: Vec<SourceFile>) -> CodeGraph {
         file_contents,
         occurrences,
         external_calls,
+        library_calls_in_tree,
         functions,
         strings,
         strings_cut_short,
@@ -141,31 +146,45 @@ fn resolve_file<'f>(
         .collect()
 }
 
-/// Plain function calls in one file that resolve to no project symbol,
-/// sorted by position.
-fn external_calls_in<'f>(
+/// Plain function calls in one file, sorted by position: those that
+/// resolve to no project symbol, then those that resolve to the project's
+/// own global function of a name the risky-call checks watch.
+fn library_calls_in<'f>(
     facts: &'f FileFacts,
     by_qname: &HashMap<&str, SymbolId>,
     resolver: &mut MemoResolver<'_, 'f>,
-) -> Vec<ExternalCall> {
-    let mut calls: Vec<ExternalCall> = facts
-        .refs
-        .iter()
-        .filter_map(|r| {
-            let site = r.free_call.as_ref()?;
-            let caller = *by_qname.get(&*r.from)?;
-            let span = r.span?;
-            resolver.resolve(r).is_none().then(|| ExternalCall {
-                caller,
-                name: r.target.clone(),
-                span,
-                extent: site.extent.unwrap_or(span),
-                args: site.args.clone(),
-            })
-        })
-        .collect();
-    calls.sort_by_key(|c| c.span);
-    calls
+) -> (Vec<ExternalCall>, Vec<ExternalCall>) {
+    let mut outside = Vec::new();
+    let mut inside = Vec::new();
+    for r in &facts.refs {
+        let (Some(site), Some(&caller), Some(span)) =
+            (r.free_call.as_ref(), by_qname.get(&*r.from), r.span)
+        else {
+            continue;
+        };
+        let call = || ExternalCall {
+            caller,
+            name: r.target.clone(),
+            span,
+            extent: site.extent.unwrap_or(span),
+            args: site.args.clone(),
+        };
+        match resolver.resolve(r) {
+            None => outside.push(call()),
+            Some(callee) if is_watched_global(&r.target, callee, by_qname) => inside.push(call()),
+            Some(_) => {}
+        }
+    }
+    outside.sort_by_key(|c| c.span);
+    inside.sort_by_key(|c| c.span);
+    (outside, inside)
+}
+
+/// Whether `callee`, called as `target`, is the project's global function
+/// of a name risky-call checks watch (not a namespace's or class's own).
+fn is_watched_global(target: &str, callee: SymbolId, by_qname: &HashMap<&str, SymbolId>) -> bool {
+    let name = target.strip_prefix("::").unwrap_or(target);
+    by_qname.get(name) == Some(&callee) && crate::analysis::risky::is_checked_in_tree(name)
 }
 
 /// Declared names and resolved references in one file, sorted by position.

@@ -286,6 +286,27 @@ fn unresolved_free_calls_are_kept_as_external_calls() {
 }
 
 #[test]
+fn calls_to_the_projects_own_library_functions_are_kept_apart() {
+    // Like the Linux kernel's lib/string.c and its callers.
+    let string_c = "char *strcpy(char *d, const char *s) { return d; }\n\
+        int parse(const char *s) { return 0; }\n";
+    let user_c = "namespace net { int strcpy(int x) { return x; } }\n\
+        void f(char *d, char *s) { strcpy(d, s); parse(s); }\n\
+        namespace net { void g() { strcpy(1); } }\n";
+    let graph = graph_of(&[("lib/string.c", string_c), ("user.cpp", user_c)]);
+    let calls: Vec<(&str, u32, &[String])> = graph.library_calls_in_tree["user.cpp"]
+        .iter()
+        .map(|c| (c.name.as_str(), c.span.line, c.args.as_slice()))
+        .collect();
+    // parse() isn't a library name; net::strcpy isn't the global strcpy.
+    assert_eq!(
+        calls,
+        [("strcpy", 2, &["d".to_string(), "s".to_string()][..])]
+    );
+    assert!(!graph.external_calls.contains_key("user.cpp"));
+}
+
+#[test]
 fn external_calls_keep_their_arguments_and_extent() {
     let source = "void f(char *d, char *fmt) {\n  sprintf(d, fmt,\n    1);\n  puts(\"a, b\");\n}\n";
     let graph = graph_of(&[("a.c", source)]);
