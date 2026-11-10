@@ -1,16 +1,13 @@
 ## UI
 
-I like the simple, GUI for the most part. I just need to make some changes to the fonts used for:
+* Choose a different font for the utility bar at the top.
 
-1. The top buttons like 'Back' and such. Not a big change but a font that separates it from regular text.
-2. Top bar add some margin.
-3. When you click a variable maybe highlight and then have an arrow showing where it last came from, different selected vars
-need different colors.
 
 ## Features
 
-1. Add much larger list of potentially dangerous functions. 
-2. CodeQL support
-3. Git history visualizer. Don't need all the the revision info just the info for code currently checked out.
-4. Code to heuristically guess any software patterns in use.
-5. Quick "README" popup feature for the project
+1. Add much larger list of potentially dangerous functions.
+2. Add x-ref support. When a user selects a symbol I want 'x' to show all x-refs that call that symbol.
+3. CodeQL support
+4. Add Markdown rendering to the README popup.
+5. Enumerate all CVEs that currently exist for the program
+

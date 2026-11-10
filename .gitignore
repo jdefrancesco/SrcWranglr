@@ -5,4 +5,5 @@
 .codeinsight/index.db
 .serena/project.yml
 .serena/.gitignore
+.serena/*
 TODO.txt
