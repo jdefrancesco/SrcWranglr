@@ -20,6 +20,7 @@ fn commit(short: &str, summary: &str, strength: Strength) -> FixCommit {
         time: 1_700_000_000,
         keywords: vec!["fix".into()],
         strength,
+        files: Vec::new(),
     }
 }
 
@@ -194,4 +195,45 @@ fn the_selected_function_tab_asks_for_a_function() {
     harness.get_by_label("Selected function").click();
     harness.run();
     harness.get_by_label("Select a function to see who last changed its lines.");
+}
+
+#[test]
+fn the_cves_tab_lists_each_cve_and_shows_its_fix_commit() {
+    let mut history = sample();
+    history.fix_commits[2].keywords = vec!["cve-2024-1234".into()];
+    history.fix_commits[2].files = vec!["net.c".into(), "gone.c".into()];
+    let mut harness = harness_with(Some(history));
+    harness.get_by_label("CVEs").click();
+    harness.run();
+    harness.get_by_label("CVE-2024-1234");
+    harness.get_by_label("NVD ↗");
+    harness.get_by_label("2 files changed").click();
+    harness.run();
+    harness.get_by_label("net.c").click();
+    harness.run();
+    assert_eq!(
+        harness.state().action,
+        Some(HistoryPanelAction::GoTo {
+            symbol: None,
+            file: "net.c".into(),
+            line: 1
+        })
+    );
+    harness.get_by_label_contains("cccc3333  Fix build").click();
+    harness.run();
+    // Shown in Fix commits, picked, though it owns no lines today.
+    let panel = &harness.state().panel;
+    assert_eq!(panel.tab, HistoryTab::FixCommits);
+    let HistoryState::Read(view) = &panel.state else {
+        panic!("read");
+    };
+    assert_eq!(panel.selected.map(|row| view.rows[row].commit), Some(2));
+}
+
+#[test]
+fn without_cves_the_tab_says_why_there_may_be_none() {
+    let mut harness = harness_with(Some(sample()));
+    harness.get_by_label("CVEs").click();
+    harness.run();
+    harness.get_by_label_contains("No CVE ids in the messages of the 40 commits read.");
 }

@@ -585,3 +585,52 @@ fn while_a_rule_is_drafted_lines_can_add_to_it() {
         })
     );
 }
+
+#[test]
+fn clicking_a_name_highlights_it_until_escape() {
+    let source = "void f(void) {\nint copy_everything_now;\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.get_by_label("int copy_everything_now;").click();
+    harness.run();
+    assert_eq!(
+        harness.state().panel.highlighted_word.as_deref(),
+        Some("copy_everything_now")
+    );
+    harness.get_by_label("int copy_everything_now;").hover();
+    harness.run();
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert_eq!(harness.state().panel.highlighted_word, None);
+}
+
+#[test]
+fn clicking_space_or_punctuation_clears_the_highlight() {
+    let source = "void f(char *d) {\nstrcpy(d, d);\n}\n";
+    let mut harness = harness_for(source, "f");
+    let file = "a.cpp".to_string();
+    let selected = harness.state().selected.expect("selected");
+    let state = harness.state_mut();
+    state
+        .panel
+        .event_action(file.clone(), CodeEvent::Word(Some("d".into())), selected);
+    assert_eq!(state.panel.highlighted_word.as_deref(), Some("d"));
+    state
+        .panel
+        .event_action(file, CodeEvent::Word(None), selected);
+    assert_eq!(state.panel.highlighted_word, None);
+}
+
+#[test]
+fn pressing_x_over_a_name_asks_for_its_cross_references() {
+    let source = "void helper_function_here(void) {}\nvoid f(void) {\nhelper_function_here();\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness.get_by_label("helper_function_here();").hover();
+    harness.run();
+    harness.key_press(egui::Key::X);
+    harness.run();
+    let helper = id(&harness.state().graph, "helper_function_here");
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::CrossReferences(Referenced::Symbol(helper)))
+    );
+}

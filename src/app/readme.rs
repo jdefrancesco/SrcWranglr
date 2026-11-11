@@ -1,12 +1,16 @@
 //! The project's README, for a quick read: the one at the top of the
 //! project, read without following symlinks and only up to a size, then
-//! split into headings, code and paragraphs to lay out. It comes from the
-//! audited tree, so it is only ever shown as text, its hidden characters
-//! marked and its size bounded: nothing in it is followed, fetched or run.
+//! read as Markdown (see `markdown`) or split into paragraphs. It comes
+//! from the audited tree, so it is only ever shown as text, its hidden
+//! characters marked and its size bounded: nothing in it is followed,
+//! fetched or run.
 
 use std::fs;
 use std::path::Path;
 
+pub use super::markdown::{Block, Run};
+
+use super::markdown;
 use super::matching::cut;
 use super::visible::{visible, visible_lines};
 use crate::safe_fs::read_regular_file;
@@ -18,6 +22,11 @@ pub const MAX_README_BYTES: usize = 1024 * 1024;
 const MAX_BLOCKS: usize = 2_000;
 /// Each block's text is cut to this many characters.
 const MAX_BLOCK_CHARS: usize = 10_000;
+/// A table shows this many rows and columns at most.
+const MAX_TABLE_ROWS: usize = 500;
+const MAX_TABLE_COLUMNS: usize = 20;
+/// Cells shown in all the README's tables together.
+const MAX_TABLE_CELLS: usize = 5_000;
 
 /// README file names, best first, matched regardless of case.
 const NAMES: &[&str] = &[
@@ -47,17 +56,6 @@ pub enum Readme {
     Unreadable { file_name: String, error: String },
     /// No README at the top of the project.
     Missing,
-}
-
-/// A piece of the README to lay out.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Block {
-    /// A Markdown heading, level 1 to 6.
-    Heading { level: u8, text: String },
-    /// A fenced code block.
-    Code(String),
-    /// A paragraph, line breaks kept.
-    Text(String),
 }
 
 /// The README at the top of `root`, read and split into blocks.
@@ -114,68 +112,85 @@ fn rank(name: &str) -> Option<usize> {
 /// were left out.
 fn ready_to_show(blocks: Vec<Block>) -> (Vec<Block>, bool) {
     let is_cut_short = blocks.len() > MAX_BLOCKS;
+    // Every cell is drawn on its own, so all tables together get this many.
+    let mut cells_left = MAX_TABLE_CELLS;
     let shown = blocks
         .into_iter()
         .take(MAX_BLOCKS)
         .map(|block| match block {
-            Block::Heading { level, text } => Block::Heading {
+            Block::Heading { level, runs } => Block::Heading {
                 level,
-                text: visible(&cut(&text, MAX_BLOCK_CHARS)).into_owned(),
+                runs: capped(runs),
+            },
+            Block::Paragraph(runs) => Block::Paragraph(capped(runs)),
+            Block::Quote(runs) => Block::Quote(capped(runs)),
+            Block::Item {
+                depth,
+                marker,
+                runs,
+            } => Block::Item {
+                depth,
+                marker: visible(&marker).into_owned(),
+                runs: capped(runs),
             },
             Block::Code(code) => Block::Code(visible_lines(&cut(&code, MAX_BLOCK_CHARS))),
-            Block::Text(text) => Block::Text(visible_lines(&cut(&text, MAX_BLOCK_CHARS))),
+            Block::Rule => Block::Rule,
+            Block::Table(rows) => {
+                let mut budget = MAX_BLOCK_CHARS;
+                let mut shown_rows = Vec::new();
+                for row in rows.into_iter().take(MAX_TABLE_ROWS) {
+                    let width = row.len().min(MAX_TABLE_COLUMNS);
+                    if width > cells_left {
+                        break;
+                    }
+                    cells_left -= width;
+                    let cells = row.into_iter().take(width);
+                    shown_rows.push(cells.map(|cell| shown_runs(cell, &mut budget)).collect());
+                }
+                Block::Table(shown_rows)
+            }
         })
         .collect();
     (shown, is_cut_short)
 }
 
-/// `text` split into blocks: paragraphs, plus Markdown headings and fenced
-/// code when `is_markdown`.
-pub fn blocks(text: &str, is_markdown: bool) -> Vec<Block> {
-    if !is_markdown {
-        return paragraphs(&text.lines().collect::<Vec<_>>());
-    }
-    let mut blocks = Vec::new();
-    let mut lines = text.lines();
-    let mut text_lines = Vec::new();
-    while let Some(line) = lines.next() {
-        if let Some(fence) = fence_of(line) {
-            blocks.extend(paragraphs(&text_lines));
-            text_lines.clear();
-            let code: Vec<&str> = lines
-                .by_ref()
-                .take_while(|l| !l.trim_start().starts_with(fence))
-                .collect();
-            blocks.push(Block::Code(code.join("\n")));
-        } else if let Some(heading) = heading_of(line) {
-            blocks.extend(paragraphs(&text_lines));
-            text_lines.clear();
-            blocks.push(heading);
-        } else {
-            text_lines.push(line);
+/// `runs` cut to one block's worth of characters, hidden ones marked.
+fn capped(runs: Vec<Run>) -> Vec<Run> {
+    let mut budget = MAX_BLOCK_CHARS;
+    shown_runs(runs, &mut budget)
+}
+
+/// `runs` cut to the characters left in `budget` (which they use up),
+/// their hidden characters marked, links included.
+fn shown_runs(runs: Vec<Run>, budget: &mut usize) -> Vec<Run> {
+    let mut shown = Vec::new();
+    for run in runs {
+        if *budget == 0 {
+            break;
         }
+        let text = cut(&run.text, *budget);
+        *budget = budget.saturating_sub(run.text.chars().count());
+        shown.push(Run {
+            text: visible_lines(&text),
+            link: run
+                .link
+                .map(|link| visible(&cut(&link, MAX_LINK_CHARS)).into_owned()),
+            ..run
+        });
     }
-    blocks.extend(paragraphs(&text_lines));
-    blocks
+    shown
 }
 
-/// The fence a line opens a code block with: "```" or "~~~".
-fn fence_of(line: &str) -> Option<&'static str> {
-    let trimmed = line.trim_start();
-    ["```", "~~~"]
-        .into_iter()
-        .find(|fence| trimmed.starts_with(fence))
-}
+/// A link's address is shown cut to this many characters.
+const MAX_LINK_CHARS: usize = 300;
 
-/// A `# Title` line as a heading: one to six `#`, then a space.
-fn heading_of(line: &str) -> Option<Block> {
-    let hashes = line.bytes().take_while(|&b| b == b'#').count();
-    let rest = &line[hashes..];
-    let is_heading = (1..=6).contains(&hashes) && (rest.is_empty() || rest.starts_with(' '));
-    is_heading.then(|| Block::Heading {
-        level: hashes as u8,
-        text: rest.trim().trim_end_matches('#').trim_end().to_string(),
-    })
+/// `text` as blocks: Markdown when `is_markdown`, else paragraphs as
+/// written.
+pub fn blocks(text: &str, is_markdown: bool) -> Vec<Block> {
+    match is_markdown {
+        true => markdown::blocks(text),
+        false => paragraphs(&text.lines().collect::<Vec<_>>()),
+    }
 }
 
 /// `lines` as paragraphs: runs of lines between blank ones.
@@ -183,7 +198,12 @@ fn paragraphs(lines: &[&str]) -> Vec<Block> {
     lines
         .split(|line| line.trim().is_empty())
         .filter(|run| !run.is_empty())
-        .map(|run| Block::Text(run.join("\n")))
+        .map(|run| {
+            Block::Paragraph(vec![Run {
+                text: run.join("\n"),
+                ..Run::default()
+            }])
+        })
         .collect()
 }
 
@@ -191,29 +211,34 @@ fn paragraphs(lines: &[&str]) -> Vec<Block> {
 mod tests {
     use super::*;
 
+    fn run(s: &str) -> Run {
+        Run {
+            text: s.into(),
+            ..Run::default()
+        }
+    }
+
     fn text(s: &str) -> Block {
-        Block::Text(s.into())
+        Block::Paragraph(vec![run(s)])
     }
 
     fn heading(level: u8, s: &str) -> Block {
         Block::Heading {
             level,
-            text: s.into(),
+            runs: vec![run(s)],
         }
     }
 
     #[test]
-    fn markdown_splits_into_headings_code_and_text() {
-        let readme = "# zlib\n\nA compression library.\nSmall and fast.\n\n## Build ##\n\
-            ```sh\nmake\n# not a heading\n```\nThen install.\n#hashtag is text\n";
+    fn markdown_is_read_as_markdown() {
+        let readme = "# zlib\n\nA compression library.\n\n## Build ##\n```sh\nmake\n```\n";
         assert_eq!(
             blocks(readme, true),
             [
                 heading(1, "zlib"),
-                text("A compression library.\nSmall and fast."),
+                text("A compression library."),
                 heading(2, "Build"),
-                Block::Code("make\n# not a heading".into()),
-                text("Then install.\n#hashtag is text"),
+                Block::Code("make".into()),
             ]
         );
     }
@@ -241,26 +266,44 @@ mod tests {
 
     #[test]
     fn a_pathological_readme_is_cut_to_size() {
-        let many_headings = "#\n".repeat(MAX_BLOCKS + 10);
+        let many_headings = "# h\n".repeat(MAX_BLOCKS + 10);
         let (shown, is_cut_short) = ready_to_show(blocks(&many_headings, true));
         assert_eq!((shown.len(), is_cut_short), (MAX_BLOCKS, true));
 
         let one_long_line = "x".repeat(MAX_BLOCK_CHARS * 3);
         let (shown, is_cut_short) = ready_to_show(blocks(&one_long_line, true));
-        let [Block::Text(text)] = shown.as_slice() else {
+        let [Block::Paragraph(runs)] = shown.as_slice() else {
             panic!("{shown:?}");
         };
+        let text = &runs[0].text;
         assert_eq!(text.chars().count(), MAX_BLOCK_CHARS + 1);
         assert!(text.ends_with('…') && !is_cut_short);
     }
 
     #[test]
+    fn many_tables_share_one_budget_of_cells() {
+        let table = "| a | b |\n|---|---|\n| 1 | 2 |\n\n";
+        let (shown, _) = ready_to_show(blocks(&table.repeat(MAX_TABLE_CELLS), true));
+        let cells: usize = shown
+            .iter()
+            .map(|b| match b {
+                Block::Table(rows) => rows.iter().map(Vec::len).sum(),
+                _ => 0,
+            })
+            .sum();
+        assert!(cells <= MAX_TABLE_CELLS, "{cells}");
+    }
+
+    #[test]
     fn hidden_characters_are_marked_once_when_read() {
-        let (shown, _) = ready_to_show(blocks("# a\u{202e}b\n\nc\u{200b}d\n", true));
-        let [Block::Heading { text: heading, .. }, Block::Text(body)] = shown.as_slice() else {
+        let readme = "# a\u{202e}b\n\nc\u{200b}d [x](http://e\u{202e}vil)\n";
+        let (shown, _) = ready_to_show(blocks(readme, true));
+        let [Block::Heading { runs: heading, .. }, Block::Paragraph(body)] = shown.as_slice()
+        else {
             panic!("{shown:?}");
         };
-        assert!(!heading.contains('\u{202e}') && !body.contains('\u{200b}'));
+        assert!(!heading[0].text.contains('\u{202e}') && !body[0].text.contains('\u{200b}'));
+        assert!(!body[1].link.as_deref().unwrap_or("").contains('\u{202e}'));
     }
 
     #[test]

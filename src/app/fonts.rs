@@ -69,6 +69,84 @@ impl SymbolFont {
     }
 }
 
+/// The font the top bar (menus, the project's name, the pane toggles) is
+/// drawn in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BarFont {
+    /// Menus and the name in Ubuntu Regular, the toggles in Ubuntu Medium.
+    #[default]
+    Standard,
+    UbuntuMedium,
+    SourceCodePro,
+    Iosevka,
+    /// Hack, egui's monospace font.
+    Monospace,
+}
+
+impl BarFont {
+    pub const ALL: [BarFont; 5] = [
+        BarFont::Standard,
+        BarFont::UbuntuMedium,
+        BarFont::SourceCodePro,
+        BarFont::Iosevka,
+        BarFont::Monospace,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BarFont::Standard => "Standard (Ubuntu, toggles in Medium)",
+            BarFont::UbuntuMedium => "Ubuntu Medium",
+            BarFont::SourceCodePro => "Source Code Pro",
+            BarFont::Iosevka => "Iosevka",
+            BarFont::Monospace => "Monospace (Hack)",
+        }
+    }
+
+    /// The name it is saved as in the settings file.
+    pub fn id(self) -> &'static str {
+        match self {
+            BarFont::Standard => "standard",
+            BarFont::UbuntuMedium => "ubuntu-medium",
+            BarFont::SourceCodePro => "source-code-pro",
+            BarFont::Iosevka => "iosevka",
+            BarFont::Monospace => "monospace",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|font| font.id() == id)
+    }
+
+    /// The family the whole bar is drawn in; `None` for the standard mix.
+    pub fn family(self) -> Option<FontFamily> {
+        match self {
+            BarFont::Standard => None,
+            BarFont::UbuntuMedium => Some(medium()),
+            BarFont::SourceCodePro => Some(FontFamily::Name(SOURCE_CODE_PRO.into())),
+            BarFont::Iosevka => Some(FontFamily::Name(IOSEVKA.into())),
+            BarFont::Monospace => Some(FontFamily::Monospace),
+        }
+    }
+
+    /// `text` for a menu title or the project's name in this font.
+    pub fn text(self, text: impl Into<String>) -> egui::RichText {
+        let text = egui::RichText::new(text);
+        match self.family() {
+            Some(family) => text.family(family),
+            None => text,
+        }
+    }
+
+    /// `text` for a pane toggle in this font.
+    pub fn control(self, text: impl Into<String>) -> egui::RichText {
+        let control = control(text);
+        match self.family() {
+            Some(family) => control.family(family),
+            None => control,
+        }
+    }
+}
+
 /// The family for text that should stand out a little from the rest, such
 /// as the pane toggles: Ubuntu Medium, then the proportional fonts.
 pub fn medium() -> FontFamily {
@@ -244,5 +322,14 @@ mod tests {
             assert_eq!(SymbolFont::from_id(font.id()), Some(font));
         }
         assert_eq!(SymbolFont::from_id("comic-sans"), None);
+    }
+
+    #[test]
+    fn bar_fonts_are_saved_by_id_and_only_the_standard_mix_keeps_its_fonts() {
+        for font in BarFont::ALL {
+            assert_eq!(BarFont::from_id(font.id()), Some(font));
+        }
+        assert_eq!(BarFont::Standard.family(), None);
+        assert_eq!(BarFont::UbuntuMedium.family(), Some(medium()));
     }
 }

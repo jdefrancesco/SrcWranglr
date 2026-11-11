@@ -8,6 +8,7 @@
 //! tool_paths = ["/opt/homebrew/bin"] # searched before PATH
 //! source_colors = "solarized-dark"
 //! symbol_font = "iosevka"            # or "monospace", "source-code-pro"
+//! bar_font = "ubuntu-medium"          # the top bar: or "standard", "iosevka", …
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::dangerous_lists::{config_dir, write_user_file};
-use super::fonts::SymbolFont;
+use super::fonts::{BarFont, SymbolFont};
 use crate::code_view::scheme::Scheme;
 use crate::programs::{fits_in_path, SearchPath};
 
@@ -39,6 +40,8 @@ pub struct Settings {
     pub scheme: Scheme,
     /// The font the symbol list is drawn in.
     pub symbol_font: SymbolFont,
+    /// The font the top bar is drawn in.
+    pub bar_font: BarFont,
 }
 
 impl Settings {
@@ -71,11 +74,22 @@ impl Settings {
             None => SymbolFont::default(),
             Some(item) => symbol_font_of(item)?,
         };
+        let bar_font = match doc.get("bar_font") {
+            None => BarFont::default(),
+            Some(item) => {
+                let id = item.as_str().ok_or("bar_font must be a string")?;
+                BarFont::from_id(id).ok_or_else(|| {
+                    let known: Vec<&str> = BarFont::ALL.iter().map(|f| f.id()).collect();
+                    format!("unknown bar_font {id:?} (one of {})", known.join(", "))
+                })?
+            }
+        };
         let settings = Self {
             editor,
             tool_dirs,
             scheme,
             symbol_font,
+            bar_font,
         };
         settings.check()?;
         Ok(settings)
@@ -103,6 +117,7 @@ impl Settings {
         doc["tool_paths"] = value(dirs);
         doc["source_colors"] = value(self.scheme.id());
         doc["symbol_font"] = value(self.symbol_font.id());
+        doc["bar_font"] = value(self.bar_font.id());
         doc.to_string()
     }
 
@@ -230,6 +245,7 @@ mod tests {
             tool_dirs: vec!["/opt/homebrew/bin".into(), "/Users/me/.local/bin".into()],
             scheme: Scheme::SolarizedDark,
             symbol_font: SymbolFont::Iosevka,
+            bar_font: BarFont::SourceCodePro,
         }
     }
 
@@ -246,6 +262,15 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("symbol_font = \"iosevka\""), "{text}");
+        assert!(text.contains("bar_font = \"source-code-pro\""), "{text}");
+    }
+
+    #[test]
+    fn an_unknown_bar_font_is_refused() {
+        let error = Settings::parse("bar_font = \"comic-sans\"\n").expect_err("unknown");
+        assert!(error.contains("unknown bar_font"), "{error}");
+        let standard = Settings::parse("").expect("parsed");
+        assert_eq!(standard.bar_font, BarFont::Standard);
     }
 
     #[test]

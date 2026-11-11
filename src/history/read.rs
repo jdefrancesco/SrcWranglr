@@ -20,6 +20,8 @@ use crate::safe_fs;
 const SHORT_ID: usize = 8;
 pub(super) const MAX_SUMMARY_CHARS: usize = 200;
 pub(super) const MAX_AUTHOR_CHARS: usize = 100;
+/// Files listed per fix commit, at most.
+const MAX_FILES_LISTED: usize = 200;
 /// Object cache for the walk and blame, in bytes.
 pub(super) const OBJECT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 /// Threads tracing files' lines at once, at most.
@@ -203,11 +205,13 @@ fn walk(
         } else {
             changed_paths(repo, &commit)
         };
-        for path in changed {
-            if files.contains(&path) {
-                *walked.touched.entry(path).or_default() += 1;
+        for path in &changed {
+            if files.contains(path) {
+                *walked.touched.entry(path.clone()).or_default() += 1;
             }
         }
+        let mut changed = changed;
+        changed.truncate(MAX_FILES_LISTED);
         walked.fix_ids.push(commit.id);
         walked.fix_commits.push(FixCommit {
             id: commit.id.to_hex().to_string(),
@@ -220,6 +224,7 @@ fn walk(
             time: commit.time().map_or(0, |t| t.seconds),
             keywords,
             strength,
+            files: changed,
         });
     }
     Ok(walked)

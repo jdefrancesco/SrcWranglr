@@ -25,6 +25,7 @@ pub enum Command {
     Reindex,
     Overview,
     GoToEntryPoint,
+    CrossReferences,
     OpenInEditor,
     ToggleBookmark,
     EditNote,
@@ -36,6 +37,7 @@ pub enum Command {
     SemgrepRules,
     RunCppcheck,
     RunFlawfinder,
+    ImportSarif,
     Settings,
     SaveSession,
     OpenSession,
@@ -56,12 +58,13 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 44] = [
+    pub const ALL: [Command; 46] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
         Command::Overview,
         Command::GoToEntryPoint,
+        Command::CrossReferences,
         Command::OpenInEditor,
         Command::ToggleBookmark,
         Command::EditNote,
@@ -76,6 +79,7 @@ impl Command {
         Command::SemgrepRules,
         Command::RunCppcheck,
         Command::RunFlawfinder,
+        Command::ImportSarif,
         Command::Settings,
         Command::SaveSession,
         Command::OpenSession,
@@ -111,6 +115,7 @@ impl Command {
             Command::Reindex => "Re-index Project",
             Command::Overview => "Show Overview",
             Command::GoToEntryPoint => "Go to Entry Point (main)",
+            Command::CrossReferences => "Cross References to Selected Symbol",
             Command::OpenInEditor => "Open in Editor",
             Command::ToggleBookmark => "Toggle Bookmark on Symbol",
             Command::EditNote => "Note on Symbol…",
@@ -121,6 +126,7 @@ impl Command {
             Command::SemgrepRules => "Semgrep Rules…",
             Command::RunCppcheck => "Run cppcheck",
             Command::RunFlawfinder => "Run flawfinder",
+            Command::ImportSarif => "Import SARIF Results (CodeQL, …)…",
             Command::Settings => "Settings…",
             Command::SaveSession => "Save Session As…",
             Command::OpenSession => "Open Session…",

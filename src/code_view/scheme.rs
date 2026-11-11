@@ -32,6 +32,8 @@ pub struct SourceColors {
     pub active_name: Color32,
     /// Behind the other occurrences of the selected symbol.
     pub selected_name: Color32,
+    /// Behind every occurrence of the word clicked.
+    pub highlighted_word: Color32,
 }
 
 impl Default for SourceColors {
@@ -106,6 +108,7 @@ const CLASSIC: SourceColors = SourceColors {
     active_line: rgb(0x3A3A14),
     active_name: rgb(0x8A6D1C),
     selected_name: rgb(0x2E4563),
+    highlighted_word: rgb(0x2F5236),
 };
 
 const SOLARIZED_DARK: SourceColors = SourceColors {
@@ -120,6 +123,7 @@ const SOLARIZED_DARK: SourceColors = SourceColors {
     active_line: rgb(0x073642),
     active_name: rgb(0x584A00),
     selected_name: rgb(0x1E4A6B),
+    highlighted_word: rgb(0x1F4D3A),
 };
 
 const SOLARIZED_LIGHT: SourceColors = SourceColors {
@@ -134,6 +138,7 @@ const SOLARIZED_LIGHT: SourceColors = SourceColors {
     active_line: rgb(0xEEE8D5),
     active_name: rgb(0xF2D98A),
     selected_name: rgb(0xD6E4EE),
+    highlighted_word: rgb(0xD5E8C4),
 };
 
 const MONOKAI: SourceColors = SourceColors {
@@ -148,6 +153,7 @@ const MONOKAI: SourceColors = SourceColors {
     active_line: rgb(0x3E3D32),
     active_name: rgb(0x75621A),
     selected_name: rgb(0x3A4A63),
+    highlighted_word: rgb(0x3B5229),
 };
 
 const GRUVBOX_DARK: SourceColors = SourceColors {
@@ -162,6 +168,7 @@ const GRUVBOX_DARK: SourceColors = SourceColors {
     active_line: rgb(0x3C3836),
     active_name: rgb(0x79740E),
     selected_name: rgb(0x2B4F5C),
+    highlighted_word: rgb(0x3E4F2C),
 };
 
 const PAPER_LIGHT: SourceColors = SourceColors {
@@ -176,6 +183,7 @@ const PAPER_LIGHT: SourceColors = SourceColors {
     active_line: rgb(0xFFF8C5),
     active_name: rgb(0xF2CC60),
     selected_name: rgb(0xDDF4FF),
+    highlighted_word: rgb(0xD4F0CF),
 };
 
 /// Code shown to preview a scheme.

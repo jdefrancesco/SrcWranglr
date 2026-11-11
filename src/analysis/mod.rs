@@ -11,6 +11,7 @@ pub mod heuristics;
 pub mod lookalike;
 pub mod reach;
 pub mod risky;
+pub mod sarif;
 pub mod semgrep_rule;
 pub mod silenced;
 pub mod similar;

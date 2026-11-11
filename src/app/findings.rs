@@ -102,6 +102,21 @@ impl Findings {
         Self::from_findings(kept.chain(found).collect())
     }
 
+    /// These with each of `tools`' results in place of its earlier ones,
+    /// in one pass.
+    pub fn with_results_of(&self, tools: Vec<(String, Vec<Finding>)>) -> Self {
+        let names: std::collections::HashSet<&str> =
+            tools.iter().map(|(name, _)| name.as_str()).collect();
+        let kept: Vec<Finding> = self
+            .all
+            .iter()
+            .filter(|f| !names.contains(f.tool.as_str()))
+            .cloned()
+            .collect();
+        let found = tools.into_iter().flat_map(|(_, found)| found);
+        Self::from_findings(kept.into_iter().chain(found).collect())
+    }
+
     pub fn all(&self) -> &[Finding] {
         &self.all
     }

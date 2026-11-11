@@ -8,6 +8,7 @@ use egui::{FontId, RichText};
 use std::path::PathBuf;
 
 use super::history::{HistoryJob, HistoryView};
+use super::history_cves::{cve_list, CveAction};
 use super::history_function::FunctionHistory;
 use super::layout::Layout;
 use super::pane_bar::{self, Edge};
@@ -43,6 +44,8 @@ enum HistoryTab {
     FixCommits,
     /// Who last changed the selected function's lines.
     Function,
+    /// The CVEs named in the fix commits.
+    Cves,
 }
 
 /// Where reading the history is.
@@ -180,6 +183,7 @@ impl HistoryPanel {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.tab, HistoryTab::FixCommits, "Fix commits");
             ui.selectable_value(&mut self.tab, HistoryTab::Function, "Selected function");
+            ui.selectable_value(&mut self.tab, HistoryTab::Cves, "CVEs");
         });
         if self.tab == HistoryTab::Function {
             return self
@@ -200,6 +204,16 @@ impl HistoryPanel {
             }
             HistoryState::Read(view) => view,
         };
+        if self.tab == HistoryTab::Cves {
+            let picked = cve_list(ui, view, graph);
+            return match picked? {
+                CveAction::ShowCommit(commit) => {
+                    self.show_commit(commit);
+                    None
+                }
+                CveAction::GoTo(action) => Some(action),
+            };
+        }
         summary(ui, &view.history);
         self.controls(ui);
         ui.separator();
@@ -256,6 +270,20 @@ impl HistoryPanel {
         if self.selected.is_some_and(|s| !self.rows.contains(&s)) {
             self.selected = None;
         }
+    }
+
+    /// Shows `commit` (by index into the fix commits) picked in Fix
+    /// commits, whatever the filter hid.
+    fn show_commit(&mut self, commit: usize) {
+        self.tab = HistoryTab::FixCommits;
+        self.query.clear();
+        self.is_security_only = false;
+        self.is_owning_only = false;
+        self.refresh();
+        let HistoryState::Read(view) = &self.state else {
+            return;
+        };
+        self.selected = view.rows.iter().position(|row| row.commit == commit);
     }
 
     #[cfg(test)]

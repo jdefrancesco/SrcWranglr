@@ -181,6 +181,9 @@ impl SrcWranglrApp {
         self.readme = None;
         self.similar_view = None;
         self.rules_view = None;
+        self.xrefs_view = None;
+        // A report read for the old project mustn't land in this one.
+        self.sarif_import = None;
         self.matching_panel.reset();
         // A bundle read for the old project mustn't be merged into this one.
         self.bundle_preview = None;

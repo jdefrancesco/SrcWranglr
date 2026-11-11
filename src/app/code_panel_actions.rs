@@ -54,6 +54,12 @@ impl SrcWranglrApp {
                 self.add_rule_place(Example::lines(&file, first, last));
             }
             PanelAction::UseAsRuleException { file, line } => self.add_rule_exception(&file, line),
+            PanelAction::CrossReferences(target) => self.show_cross_references(&target),
+            PanelAction::CrossReferencesNamed { file, line, name } => {
+                let target =
+                    super::xrefs::referenced_by_name(&self.project.graph, &file, line, &name);
+                self.show_cross_references(&target);
+            }
             PanelAction::Trace { file, line, column } => self.trace_variable(&file, line, column),
             PanelAction::TraceForward { file, line, column } => {
                 self.trace_forward(&file, line, column);

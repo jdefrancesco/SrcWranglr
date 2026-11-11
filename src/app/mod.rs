@@ -22,11 +22,13 @@ pub(crate) mod fonts;
 mod harness_view;
 mod history;
 mod history_actions;
+mod history_cves;
 mod history_function;
 mod history_panel;
 pub mod launch;
 mod layout;
 mod locations;
+mod markdown;
 mod matching;
 mod matching_actions;
 mod matching_panel;
@@ -47,6 +49,7 @@ mod rule_files;
 mod rule_library;
 mod rules_view;
 mod rules_wrappers;
+mod sarif_actions;
 mod session;
 mod session_actions;
 mod settings;
@@ -74,6 +77,9 @@ mod triage_actions;
 mod trust;
 pub(crate) mod visible;
 mod welcome;
+mod xrefs;
+mod xrefs_actions;
+mod xrefs_view;
 
 use std::path::PathBuf;
 
@@ -167,6 +173,12 @@ pub struct SrcWranglrApp {
     similar_view: Option<similar_view::SimilarView>,
     /// The Semgrep Rules window, while open.
     rules_view: Option<rules_view::RulesView>,
+    /// The Cross References window, while open.
+    xrefs_view: Option<xrefs_view::XrefsView>,
+    /// The font the top bar is drawn in (from Settings).
+    bar_font: fonts::BarFont,
+    /// A SARIF report being picked or read, to import into Findings.
+    sarif_import: Option<sarif_actions::SarifImport>,
     /// The Docs window, and the man pages read so far.
     docs: docs::Docs,
     /// The project's README, while its window is open.
@@ -265,6 +277,9 @@ impl SrcWranglrApp {
             harness_view: None,
             similar_view: None,
             rules_view: None,
+            xrefs_view: None,
+            bar_font: fonts::BarFont::default(),
+            sarif_import: None,
             docs: docs::Docs::default(),
             readme: None,
             layout: Layout::load(storage),
@@ -418,6 +433,7 @@ impl eframe::App for SrcWranglrApp {
         self.poll_open_dialog(&ctx);
         self.poll_session_dialog(&ctx);
         self.poll_bundle_dialog();
+        self.poll_sarif_import(&ctx);
         self.poll_job(&ctx);
         self.poll_tool_jobs();
         self.poll_history();
@@ -441,6 +457,10 @@ impl eframe::App for SrcWranglrApp {
         self.show_status_bar(ui);
         if self.is_project_open {
             self.show_project_panes(ui);
+            // X over a name in the source took the key already.
+            if !self.palette.is_open() && !is_dialog_open {
+                self.handle_cross_reference_key(&ctx);
+            }
         } else {
             self.show_start_page(ui, &ctx);
         }
@@ -467,6 +487,7 @@ impl eframe::App for SrcWranglrApp {
         self.show_harness_view(&ctx);
         self.show_similar_view(&ctx);
         self.show_rules_view(&ctx);
+        self.show_xrefs_view(&ctx);
         self.show_docs_window(&ctx);
         readme_view::show(&ctx, &mut self.readme, &self.project.name);
         let notes = if self.palette.is_open() {
@@ -560,6 +581,7 @@ impl SrcWranglrApp {
             },
             Command::Overview => self.graph_view.show_overview(),
             Command::GoToEntryPoint => self.go_to_entry_point(),
+            Command::CrossReferences => self.cross_references_to_selected(),
             Command::OpenInEditor => self.open_in_editor(),
             Command::ToggleBookmark => {
                 if let Some(target) = self.selected_target() {
@@ -573,6 +595,7 @@ impl SrcWranglrApp {
             Command::SemgrepRules => self.open_rules_view(),
             Command::RunCppcheck => self.run_tool(analysis::tools::Tool::Cppcheck, ctx),
             Command::RunFlawfinder => self.run_tool(analysis::tools::Tool::Flawfinder, ctx),
+            Command::ImportSarif => self.import_sarif_dialog(ctx),
             Command::Settings => self.open_settings(),
             Command::SaveSession => self.save_session_dialog(ctx),
             Command::OpenSession => self.open_session_dialog(ctx),

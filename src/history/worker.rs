@@ -41,7 +41,34 @@ pub fn read_in_worker(
     stop: &AtomicBool,
 ) -> Result<History, String> {
     let deadline = super::Limits::default().budget + PROJECT_GRACE;
-    ask_worker(PROJECT_MODE, root, &files, deadline, stop)
+    let history: History = ask_worker(PROJECT_MODE, root, &files, deadline, stop)?;
+    Ok(bounded(history))
+}
+
+/// Files listed per fix commit, and characters per path, at most: the
+/// worker's answer is read from another process.
+const MAX_FILES_PER_COMMIT: usize = 200;
+const MAX_PATH_CHARS: usize = 1_000;
+
+/// `history` with each fix commit's file list cut to size.
+fn bounded(history: History) -> History {
+    let fix_commits = history
+        .fix_commits
+        .into_iter()
+        .map(|commit| super::FixCommit {
+            files: commit
+                .files
+                .into_iter()
+                .take(MAX_FILES_PER_COMMIT)
+                .map(|file| file.chars().take(MAX_PATH_CHARS).collect())
+                .collect(),
+            ..commit
+        })
+        .collect();
+    History {
+        fix_commits,
+        ..history
+    }
 }
 
 /// Who last changed each line of `file`, read by a worker process.

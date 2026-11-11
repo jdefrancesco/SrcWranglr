@@ -10,6 +10,7 @@
 //! for anything that runs a program), and only committed objects are read:
 //! no working tree filters or diff drivers. Every walk has a limit.
 
+pub mod cves;
 mod file;
 pub mod findings;
 mod keywords;
@@ -38,6 +39,9 @@ pub struct FixCommit {
     /// The words in its message that marked it, lower case.
     pub keywords: Vec<String>,
     pub strength: Strength,
+    /// The files it changed (none listed for a merge), cut short if many.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 /// Lines of the checked-out code last changed by a fix commit.

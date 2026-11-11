@@ -11,7 +11,9 @@ use super::notebook::Notebook;
 use super::pane_bar::{self, Edge};
 use super::session::TraceSource;
 use crate::code_view::scheme::{Scheme, SourceColors};
-use crate::code_view::{CodeEvent, CodeView, Focus, LineAction, LineMark, LineWarning, RiskSpan};
+use crate::code_view::{
+    CodeEvent, CodeView, Focus, LineAction, LineMark, LineWarning, Referenced, RiskSpan,
+};
 use crate::model::{CodeGraph, Location, OccurrenceRole, Span, Symbol, SymbolId};
 use crate::notes::NoteTarget;
 use crate::style::severity_color;
@@ -77,6 +79,14 @@ pub enum PanelAction {
     ShowDocs(String),
     /// List the functions most like the one holding `file:line`.
     FindLookAlikes { file: String, line: u32 },
+    /// List the cross references to what is referenced.
+    CrossReferences(Referenced),
+    /// List the cross references to `name`, used on `file:line`.
+    CrossReferencesNamed {
+        file: String,
+        line: u32,
+        name: String,
+    },
     /// Look up the man page of the library function `name`, hovered.
     LookUpDocs(String),
     /// Its hide arrow was clicked.
@@ -122,6 +132,8 @@ pub struct CodePanel {
     picked_lines: Option<(String, u32, u32)>,
     /// Whether a rule is being drafted, so lines' menus can add to it.
     pub is_drafting_rule: bool,
+    /// The word clicked last, highlighted wherever it is (Esc clears it).
+    highlighted_word: Option<String>,
 }
 
 impl CodePanel {
@@ -176,6 +188,10 @@ impl CodePanel {
             Some(HeaderAction::Step(_)) | None => {}
         }
         let (file, event) = event?;
+        if let CodeEvent::Clicked(clicked) = &event {
+            // A name explored is highlighted wherever it is written, too.
+            self.highlighted_word = name_at(graph, &file, clicked.span);
+        }
         self.event_action(file, event, symbol.id)
     }
 
@@ -226,6 +242,14 @@ impl CodePanel {
                 self.pick_line(file, line, extend);
                 None
             }
+            CodeEvent::Word(word) => {
+                self.highlighted_word = word;
+                None
+            }
+            CodeEvent::CrossReferences(target) => Some(PanelAction::CrossReferences(target)),
+            CodeEvent::Line(line, LineAction::CrossReferences(name)) => {
+                Some(PanelAction::CrossReferencesNamed { file, line, name })
+            }
             CodeEvent::Line(line, action) => {
                 let target = NoteTarget::Line { file, line };
                 Some(match action {
@@ -241,7 +265,8 @@ impl CodePanel {
                     | LineAction::AddTodo
                     | LineAction::FindSimilar
                     | LineAction::AddRulePlace
-                    | LineAction::UseAsRuleException => return None,
+                    | LineAction::UseAsRuleException
+                    | LineAction::CrossReferences(_) => return None,
                 })
             }
             CodeEvent::Risk(id) => Some(PanelAction::ShowFinding(id)),
@@ -346,6 +371,7 @@ impl CodePanel {
                 trace_source: None,
                 call_summaries: None,
                 selected_lines: None,
+                highlighted_word: None,
                 is_drafting_rule: false,
                 colors: SourceColors::default(),
             },
@@ -357,11 +383,18 @@ impl CodePanel {
             trace_source: self.trace_source.as_deref(),
             call_summaries: Some(&self.call_summaries),
             selected_lines: self.picked_in(file),
+            highlighted_word: self.highlighted_word.as_deref(),
             is_drafting_rule: self.is_drafting_rule,
             ..focus
         };
         let event = self.view.show(ui, graph, &focus);
+        // Checked once the code is drawn, so the pointer can be over it.
+        let is_escaped = ui.ui_contains_pointer()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         let file = focus.file.to_string();
+        if is_escaped {
+            self.highlighted_word = None;
+        }
         self.should_scroll = false;
         event.map(|e| (file, e))
     }
@@ -607,6 +640,14 @@ fn show_note(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// The text of the name at `span` of `file`.
+fn name_at(graph: &CodeGraph, file: &str, span: Span) -> Option<String> {
+    let contents = graph.file_contents.get(file)?;
+    let line = contents.lines().nth(span.line.checked_sub(1)? as usize)?;
+    let name = line.get(span.start as usize..span.end as usize)?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn focus_for<'a>(
     symbol: &'a Symbol,
     location: Option<&'a Location>,
@@ -627,6 +668,7 @@ fn focus_for<'a>(
             trace_source: None,
             call_summaries: None,
             selected_lines: None,
+            highlighted_word: None,
             is_drafting_rule: false,
             colors: SourceColors::default(),
         },
@@ -642,6 +684,7 @@ fn focus_for<'a>(
             trace_source: None,
             call_summaries: None,
             selected_lines: None,
+            highlighted_word: None,
             is_drafting_rule: false,
             colors: SourceColors::default(),
         },

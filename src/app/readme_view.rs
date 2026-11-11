@@ -1,14 +1,18 @@
 //! The README window: the project's README, read in the background and
-//! laid out lightly, headings larger and code in monospace. Its text comes
-//! with its hidden characters already marked (see `readme`).
+//! laid out from its Markdown: headings, bold and italic text, code,
+//! lists, quotes and tables. Its text comes with its hidden characters
+//! already marked (see `readme`); links show their address on hover and
+//! are never opened.
 
 use std::path::PathBuf;
 
-use egui::RichText;
+use egui::text::LayoutJob;
+use egui::{Color32, FontId, RichText, Stroke, TextFormat};
 
 use super::background::BackgroundJob;
 use super::fonts;
-use super::readme::{self, Block, Readme};
+use super::markdown::Style;
+use super::readme::{self, Block, Readme, Run};
 use super::visible::visible;
 
 const WIDTH: f32 = 640.0;
@@ -20,6 +24,13 @@ const HEADING_SPACE: f32 = 8.0;
 /// Room inside a code block's box.
 const CODE_MARGIN: i8 = 6;
 const CODE_ROUNDING: u8 = 4;
+/// Room after a paragraph.
+const PARAGRAPH_SPACE: f32 = 4.0;
+/// Links listed when a paragraph is hovered, at most.
+const MAX_LINKS_LISTED: usize = 20;
+/// How far each level of a list is indented, and its markers' width.
+const LIST_INDENT: f32 = 18.0;
+const MARKER_WIDTH: f32 = 22.0;
 
 /// The README window's content: still being read, or read.
 pub enum ReadmeWindow {
@@ -126,14 +137,35 @@ fn shown(ui: &mut egui::Ui, readme: &Readme, project_name: &str) {
 
 fn block(ui: &mut egui::Ui, block: &Block) {
     match block {
-        Block::Heading { level, text } => {
+        Block::Heading { level, runs } => {
             ui.add_space(HEADING_SPACE);
             let index = usize::from(*level).clamp(1, HEADING_SIZES.len()) - 1;
-            let heading = RichText::new(text)
-                .size(HEADING_SIZES[index])
-                .family(fonts::medium())
-                .strong();
-            ui.label(heading);
+            text(ui, runs, Some(HEADING_SIZES[index]));
+        }
+        Block::Paragraph(runs) => {
+            text(ui, runs, None);
+            ui.add_space(PARAGRAPH_SPACE);
+        }
+        Block::Quote(runs) => {
+            egui::Frame::new()
+                .fill(ui.visuals().faint_bg_color)
+                .inner_margin(CODE_MARGIN)
+                .corner_radius(CODE_ROUNDING)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    text(ui, runs, None);
+                });
+        }
+        Block::Item {
+            depth,
+            marker,
+            runs,
+        } => {
+            ui.horizontal_top(|ui| {
+                ui.add_space(LIST_INDENT * f32::from(*depth));
+                ui.add_sized([MARKER_WIDTH, 0.0], egui::Label::new(marker.as_str()));
+                text(ui, runs, None);
+            });
         }
         Block::Code(code) => {
             egui::Frame::new()
@@ -145,10 +177,93 @@ fn block(ui: &mut egui::Ui, block: &Block) {
                     ui.label(RichText::new(code).monospace());
                 });
         }
-        Block::Text(text) => {
-            ui.label(text);
+        Block::Rule => {
+            ui.separator();
         }
+        Block::Table(rows) => table(ui, rows),
     }
+}
+
+/// `rows` as a grid, the first row (the header) in bold.
+fn table(ui: &mut egui::Ui, rows: &[Vec<Vec<Run>>]) {
+    let id = ui.next_auto_id();
+    egui::Grid::new(id).striped(true).show(ui, |ui| {
+        for (i, row) in rows.iter().enumerate() {
+            for cell in row {
+                match i {
+                    0 => {
+                        let bold: Vec<Run> = cell
+                            .iter()
+                            .map(|run| Run {
+                                style: Style {
+                                    is_strong: true,
+                                    ..run.style
+                                },
+                                ..run.clone()
+                            })
+                            .collect();
+                        text(ui, &bold, None);
+                    }
+                    _ => {
+                        text(ui, cell, None);
+                    }
+                }
+            }
+            ui.end_row();
+        }
+    });
+    ui.add_space(PARAGRAPH_SPACE);
+}
+
+/// `runs` as one wrapped label, at `size` (a heading's) or the body's.
+/// Links' addresses show on hover; they aren't opened.
+fn text(ui: &mut egui::Ui, runs: &[Run], size: Option<f32>) -> egui::Response {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let visuals = ui.visuals().clone();
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = ui.available_width();
+    for run in runs {
+        let style = run.style;
+        let size = size.unwrap_or(body.size);
+        let font = match (style.is_code, style.is_strong || size > body.size) {
+            (true, _) => FontId::new(mono.size, mono.family.clone()),
+            (false, true) => FontId::new(size, fonts::medium()),
+            (false, false) => FontId::new(size, body.family.clone()),
+        };
+        let color = match (run.link.is_some(), style.is_image) {
+            (true, _) => visuals.hyperlink_color,
+            (false, true) => visuals.weak_text_color(),
+            (false, false) => visuals.text_color(),
+        };
+        let line = |is_on: bool| match is_on {
+            true => Stroke::new(1.0, color),
+            false => Stroke::NONE,
+        };
+        let format = TextFormat {
+            font_id: font,
+            color,
+            italics: style.is_emphasis,
+            underline: line(run.link.is_some()),
+            strikethrough: line(style.is_struck),
+            background: match style.is_code {
+                true => visuals.code_bg_color,
+                false => Color32::TRANSPARENT,
+            },
+            ..TextFormat::default()
+        };
+        job.append(&run.text, 0.0, format);
+    }
+    let response = ui.label(job);
+    let links: Vec<&str> = runs.iter().filter_map(|r| r.link.as_deref()).collect();
+    if links.is_empty() {
+        return response;
+    }
+    let mut listed = links[..links.len().min(MAX_LINKS_LISTED)].join("\n");
+    if links.len() > MAX_LINKS_LISTED {
+        listed.push_str(&format!("\n… and {} more", links.len() - MAX_LINKS_LISTED));
+    }
+    response.on_hover_text(format!("Links (not opened from here):\n{listed}"))
 }
 
 #[cfg(test)]
@@ -189,7 +304,7 @@ mod tests {
     #[test]
     fn clicking_the_project_name_shows_its_readme() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let readme = "# Demo\n\nRead me first.\n\n```c\nint x;\n```\n";
+        let readme = "# Demo\n\nRead me first.\n\n```c\nint x;\n```\n\n- one\n- **two**\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
         std::fs::write(dir.path().join("README.md"), readme).expect("write");
         let mut app = demo_app();
         app.project.root = Some(dir.path().to_path_buf());
@@ -210,6 +325,8 @@ mod tests {
 
         harness.get_by_label("Read me first.");
         harness.get_by_label("int x;");
+        harness.get_by_label("two");
+        harness.get_by_label("2");
         harness.get_by_label_contains("· README.md");
     }
 

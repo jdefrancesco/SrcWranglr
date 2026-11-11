@@ -68,6 +68,7 @@ mod tests {
             time: 1_700_000_000,
             keywords: vec!["fix".into()],
             strength,
+            files: Vec::new(),
         }
     }
 

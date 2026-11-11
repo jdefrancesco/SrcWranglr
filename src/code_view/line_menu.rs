@@ -4,6 +4,8 @@
 
 use egui::Response;
 
+use crate::app::visible::visible;
+
 use super::variables::variables_in;
 use super::{LineAction, LineMark};
 
@@ -14,6 +16,8 @@ pub(super) struct MenuContext<'a> {
     pub mark: Option<&'a LineMark<'a>>,
     /// The functions called on the line.
     pub calls: &'a [&'a str],
+    /// The names on the line with cross references: its symbols and calls.
+    pub names: &'a [&'a str],
     /// The variable picked as the source of a trace to a sink, if any.
     pub trace_source: Option<&'a str>,
     /// The lines picked (first, last), when this is one of several.
@@ -68,8 +72,16 @@ pub(super) fn line_menu(response: &Response, menu: &MenuContext) -> Option<LineA
         if let Some(to_sink) = sink_menu(ui, menu) {
             action = Some(to_sink);
         }
-        if !calls.is_empty() {
+        if !menu.names.is_empty() {
             ui.separator();
+            if let Some(name) = xrefs_menu(ui, menu.names) {
+                action = Some(LineAction::CrossReferences(name));
+            }
+        }
+        if !calls.is_empty() {
+            if menu.names.is_empty() {
+                ui.separator();
+            }
             if let Some(name) = docs_menu(ui, calls) {
                 action = Some(LineAction::ShowDocs(name));
             }
@@ -166,12 +178,25 @@ fn rule_menu(ui: &mut egui::Ui, menu: &MenuContext) -> Option<LineAction> {
     action
 }
 
+/// "Cross References" with the names on the line: the one picked.
+fn xrefs_menu(ui: &mut egui::Ui, names: &[&str]) -> Option<String> {
+    ui.menu_button("Cross References", |ui| {
+        names.iter().find_map(|name| {
+            let hint = "Every place it is used or called (X over the name does the same)";
+            let item = ui.button(visible(name)).on_hover_text(hint);
+            item.clicked().then(|| name.to_string())
+        })
+    })
+    .inner
+    .flatten()
+}
+
 /// "Show Docs" with the calls on the line: the one picked.
 fn docs_menu(ui: &mut egui::Ui, calls: &[&str]) -> Option<String> {
     ui.menu_button("Show Docs", |ui| {
         calls.iter().find_map(|call| {
             let hint = "Its doc comment if the project defines it, else this system's man page";
-            let item = ui.button(format!("{call}()")).on_hover_text(hint);
+            let item = ui.button(visible(&format!("{call}()"))).on_hover_text(hint);
             item.clicked().then(|| call.to_string())
         })
     })

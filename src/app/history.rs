@@ -58,6 +58,8 @@ pub struct HistoryView {
     pub rows: Vec<CommitRow>,
     /// The function holding each run of owned lines (same order).
     pub functions: Vec<Option<SymbolId>>,
+    /// The CVEs the fix commits name.
+    pub cves: Vec<crate::history::cves::Cve>,
 }
 
 impl HistoryView {
@@ -92,6 +94,7 @@ impl HistoryView {
             }
         }
         Self {
+            cves: crate::history::cves::cves(&history),
             history,
             rows,
             functions,
@@ -135,6 +138,7 @@ mod tests {
             time: 0,
             keywords: vec!["fix".into()],
             strength,
+            files: Vec::new(),
         }
     }
 

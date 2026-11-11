@@ -43,7 +43,7 @@ Detailed feature behavior, controls, configuration, and development reference fo
 
 ## Project triage
 
-A first look at an unfamiliar codebase. Click the project's name in the menu bar (or **Triage → Show Project README**) to read its README in a window: the one at the top of the project, read without following symlinks, with headings and code blocks laid out and nothing in it fetched or run. Open the rest with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has seven tabs:
+A first look at an unfamiliar codebase. Click the project's name in the menu bar (or **Triage → Show Project README**) to read its README in a window: the one at the top of the project, read without following symlinks, its Markdown laid out (headings, bold and italic text, code, lists, quotes, tables) and nothing in it fetched or run: links show their address on hover and aren't opened, images show their description, and HTML shows its text. Open the rest with **Triage → Project Triage…** (⌘⇧T / Ctrl+Shift+T) or `--triage`. It never runs git or anything else in the project, and never follows symlinks. It has seven tabs:
 
 - **Overview:** size, lines of code, language mix, target platforms (from platform headers and `#if` checks), build systems, docs, license, CI, git branch, repository links, the best fuzz targets, and how many functions and risky calls outside input reaches.
 - **Languages & Size:** files plus code, comment and blank lines for each language.
@@ -81,6 +81,8 @@ The built-in list covers about 300 functions, each with a severity, a CWE, why i
 A project's own definition of a library function counts too, the way the Linux kernel defines `strcpy` in `lib/string.c` and `copy_from_user` in `uaccess.h`: calls to it are judged like calls to the library's. Generic names (`access`, `random`, `warn`) and crypto names are the exceptions; a project's own `MD5_Init` or `BF_set_key` is more likely an implementation (bcrypt has one) than a misuse. A format joined to constant macros, such as `printk(KERN_INFO "…")` or `printf(PACKAGE ": %s", …)`, counts as a literal.
 
 **Silenced warnings.** Code can tell an analyzer not to report a line with a comment: `// nosemgrep`, `/* Flawfinder: ignore */`, `// cppcheck-suppress …`, `// NOLINT`, `// coverity[…]`, `// lgtm[…]`, `// NOSONAR`, `//-V547`. SrcWranglr runs semgrep, cppcheck and flawfinder with these comments ignored, so the code you audit can't hide findings from them that way. Each such comment is also listed as a low finding from **source comments**: someone saw a warning there and silenced it. Up to 2,000 are kept per file (counted apart from TODO-style tags, so those can't crowd them out); a file with more gets a medium finding saying so.
+
+**CodeQL and other SARIF tools.** **Analyze → Import SARIF Results (CodeQL, …)…** reads a `.sarif` report into Findings: each tool's results under its own name, with their severity (CodeQL's `security-severity`, else the level), CWE, message and place, and verdicts like any finding. SrcWranglr never builds the code or runs CodeQL itself: building a project runs its build scripts, so run `codeql database create` and `codeql database analyze --format=sarif-latest` where you trust to, then import the report. Importing again replaces that tool's earlier results. Results about files outside the project (absolute paths elsewhere, relative ones that climb out with `..`) are left out, and the status bar says how many. A report's tools may not take the names of SrcWranglr's own findings (`semgrep`, `SrcWranglr`, `git history`…), which they would replace: such a tool's results go under its name plus "(imported)". Reports up to 64 MB are read, in the background, keeping up to 200,000 results and 50 on any one line.
 
 **Input reachability** marks the findings that outside input may get to:
 
@@ -245,6 +247,7 @@ The **Matching** pane (**Analyze → Semantic Code Matching**) finds code by wha
   - Tools run with the same search as their `PATH`.
 - **Source colors:** SrcWranglr Dark, Solarized Dark or Light, Monokai, Gruvbox Dark or Paper Light, with a preview.
 - **Symbol list font:** Monospace (Hack, as in the source), Source Code Pro, or Iosevka, with a preview.
+- **Top bar font:** the menus, the project's name and the pane toggles: Standard (Ubuntu, the toggles in Ubuntu Medium), or all in Ubuntu Medium, Source Code Pro, Iosevka or Hack, with a preview.
 
 ## Panes
 
@@ -281,6 +284,7 @@ When a project that is a git checkout opens, SrcWranglr reads its history in the
 - Those lines are marked as low findings from **git history** (leads, not bugs, so they stay below what the code itself shows). They get a bar in the source's gutter and a verdict like any finding; **Lines fix commits changed** in Findings leaves them out of the list. Up to 5,000 runs of lines are marked, security fixes first.
 - **History** in the menu bar (or **Analyze → Git History (fix commits)**) lists the fix commits, newest first, with how many of today's lines each still owns. Filter by text, show only security fixes, or include commits whose lines are all gone. Pick one to list its lines; click one to show it in the source.
 - Its **Selected function** tab answers who last changed each line of the function you're looking at: every commit, not only fixes, newest first, with fixes picked out. Each file's history is read on demand.
+- Its **CVEs** tab lists each CVE id the fix commits' messages name (`CVE-2024-1234`), with those commits and the files each changed. Click a commit to see it, and the lines it last changed, in Fix commits; click a file to open it. **NVD ↗** opens the CVE's page on nvd.nist.gov in your browser; nothing is looked up otherwise. Fixes are often committed before their CVE is assigned (the Linux kernel's mostly are), so many fixes name none: look for security words in Fix commits too.
 - Only the checked-out commit's history counts. A file you changed since then isn't traced, since its lines can't be matched to commits; the pane says which.
 - Up to 20,000 commits are read, 2,000 fix commits kept and 2,000 files traced, within 90 seconds. On curl's 40,000-commit history that takes about a minute in the background; zlib's takes a tenth of a second.
 
@@ -380,6 +384,8 @@ srcwranglr --version
 | Run a command | **⌘⇧P / Ctrl+Shift+P** (or type `>` in the palette) |
 | Switch graph view | **Trail** / **Call hierarchy** in the graph toolbar |
 | Explore a symbol | Click it in the graph, the symbol list, or the source |
+| Highlight a name everywhere in the file | Click it in the source (any name: a variable, a call); **Esc** or a click on space clears it |
+| Cross references (every use and call), as in IDA | Point at a name in the source and press **X**, or right-click a line, then **Cross References**; **X** elsewhere, or **Go → Cross References to Selected Symbol**, for the symbol selected |
 | Step through a symbol's locations | **◀ / ▶** above the code |
 | Go back | **◀ Back** |
 | See all files | **Overview** |
@@ -389,6 +395,7 @@ srcwranglr --version
 | Filter symbols | Type in **Search** |
 | Size up the project | **⌘⇧T / Ctrl+Shift+T**, or the **Triage** menu |
 | Read the project's README | Click the project's name in the menu bar, or **Triage → Show Project README** |
+| Bring in CodeQL's (or any tool's) results | **Analyze → Import SARIF Results (CodeQL, …)…** |
 | Put the source below the graph, or back beside it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
 | Show or hide a pane | The buttons in the menu bar, or the arrow in a pane's heading; **⌘B / Ctrl+B** for Notes, **⌘⇧R / Ctrl+Shift+R** for Findings |
 | Settings (editor, tool folders, source colors, symbol list font) | **⌘, / Ctrl+,**, or **File → Settings…** |
@@ -431,6 +438,10 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/analysis/similar/`, `src/app/similar_view.rs` | Drafting a semgrep rule from a line, several lines (`pick.rs`) or several places (`unify.rs`), with exceptions (`exception.rs`): Find More Like This |
 | `src/analysis/semgrep_rule.rs`, `src/analysis/wrappers.rs` | Writing rules' YAML, escaped; the project's wrappers of risky calls and their rules |
 | `src/app/rules_view.rs`, `rule_library.rs`, `rule_editor.rs`, `rule_files.rs` | The Semgrep Rules window: listing, editing, checking and saving rules |
+| `src/app/xrefs.rs`, `xrefs_view.rs` | Cross references (X over a name): every reference to a symbol or call to a library function |
+| `src/app/markdown.rs`, `readme.rs`, `readme_view.rs` | The README window: finding and reading the README, Markdown by pulldown-cmark, laid out |
+| `src/analysis/sarif.rs`, `src/app/sarif_actions.rs` | Importing SARIF reports (CodeQL's) into Findings |
+| `src/history/cves.rs`, `src/app/history_cves.rs` | The CVEs fix commits name, and the History pane's CVEs tab |
 | `src/analysis/lookalike.rs`, `behavior.rs` | Look-alike code by token shape, and each function's behaviors from the calls it makes (the Matching pane) |
 | `src/docs/` | A function's docs: its doc comment (`comments.rs`), read as Doxygen (`doxygen.rs`), or this system's man page (`man.rs`) |
 | `src/process.rs` | Running a program with a deadline, an output cap and a stop flag (the history worker, `man`) |

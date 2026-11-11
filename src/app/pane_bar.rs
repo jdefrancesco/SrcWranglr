@@ -5,7 +5,7 @@
 
 use egui::{Align, Layout, RichText};
 
-use super::fonts;
+use super::fonts::BarFont;
 use super::palette::Command;
 use super::{SrcWranglrApp, FINDINGS_SHORTCUT, NOTES_PANEL_SHORTCUT};
 
@@ -129,6 +129,7 @@ pub fn heading(ui: &mut egui::Ui, title: impl Into<RichText>, edge: Edge) -> boo
 /// is each one's tooltip. Returns the one clicked.
 pub fn toggles(
     ui: &mut egui::Ui,
+    font: BarFont,
     is_shown: impl Fn(Pane) -> bool,
     hint: impl Fn(Pane) -> String,
 ) -> Option<Pane> {
@@ -140,7 +141,7 @@ pub fn toggles(
         spacing.item_spacing.x = TOGGLE_GAP;
         spacing.button_padding = TOGGLE_PADDING;
         Pane::ALL.into_iter().fold(None, |clicked, pane| {
-            let toggle = toggle(ui, pane, is_shown(pane)).on_hover_text(hint(pane));
+            let toggle = toggle(ui, font, pane, is_shown(pane)).on_hover_text(hint(pane));
             match toggle.clicked() {
                 true => Some(pane),
                 false => clicked,
@@ -151,8 +152,8 @@ pub fn toggles(
 }
 
 /// One pane's pill: blue when the pane is shown, gray when hidden.
-fn toggle(ui: &mut egui::Ui, pane: Pane, is_lit: bool) -> egui::Response {
-    let pill = egui::Button::selectable(is_lit, fonts::control(pane.label()))
+fn toggle(ui: &mut egui::Ui, font: BarFont, pane: Pane, is_lit: bool) -> egui::Response {
+    let pill = egui::Button::selectable(is_lit, font.control(pane.label()))
         .frame_when_inactive(true)
         .corner_radius(TOGGLE_ROUNDING);
     ui.add(pill)
@@ -210,7 +211,7 @@ impl SrcWranglrApp {
                 None => format!("Show or hide: {}", pane.title()),
             }
         };
-        toggles(ui, |pane| self.is_pane_shown(pane), hint).map(Command::TogglePane)
+        toggles(ui, self.bar_font, |pane| self.is_pane_shown(pane), hint).map(Command::TogglePane)
     }
 }
 
@@ -244,7 +245,9 @@ mod tests {
         let mut harness = crate::app::fonts::test_harness().build_ui_state(
             |ui, clicked: &mut Option<Pane>| {
                 let shown = |pane| pane == Pane::Source;
-                if let Some(pane) = toggles(ui, shown, |p| p.title().to_string()) {
+                if let Some(pane) =
+                    toggles(ui, BarFont::default(), shown, |p| p.title().to_string())
+                {
                     *clicked = Some(pane);
                 }
             },

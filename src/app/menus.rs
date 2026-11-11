@@ -24,12 +24,14 @@ impl SrcWranglrApp {
             .show(ui, |ui| {
                 egui::MenuBar::new()
                     .ui(ui, |ui| {
-                        let file = ui.menu_button("File", |ui| self.file_menu(ui));
-                        let go = ui.menu_button("Go", |ui| self.go_menu(ui));
-                        let view = ui.menu_button("View", |ui| self.view_menu(ui));
-                        let analyze = ui.menu_button("Analyze", |ui| self.analyze_menu(ui));
-                        let triage = ui.menu_button("Triage", triage_menu);
-                        let help = ui.menu_button("Help", help_menu);
+                        let font = self.bar_font;
+                        let file = ui.menu_button(font.text("File"), |ui| self.file_menu(ui));
+                        let go = ui.menu_button(font.text("Go"), |ui| self.go_menu(ui));
+                        let view = ui.menu_button(font.text("View"), |ui| self.view_menu(ui));
+                        let analyze =
+                            ui.menu_button(font.text("Analyze"), |ui| self.analyze_menu(ui));
+                        let triage = ui.menu_button(font.text("Triage"), triage_menu);
+                        let help = ui.menu_button(font.text("Help"), help_menu);
                         let action = file
                             .inner
                             .flatten()
@@ -39,7 +41,7 @@ impl SrcWranglrApp {
                             .or(triage.inner.flatten())
                             .or(help.inner.flatten());
                         ui.separator();
-                        let name = RichText::new(&self.project.name).strong();
+                        let name = font.text(&self.project.name).strong();
                         let toggled = match self.is_project_open {
                             true => {
                                 let readme = project_name(ui, name);
@@ -149,6 +151,14 @@ impl SrcWranglrApp {
             return Some(Command::GoToEntryPoint);
         }
         ui.menu_button("Entry Points", |ui| self.entry_points_menu(ui));
+        let xrefs = egui::Button::new(Command::CrossReferences.label()).shortcut_text("X");
+        if ui
+            .add(xrefs)
+            .on_hover_text("Or press X over a name in the source")
+            .clicked()
+        {
+            return Some(Command::CrossReferences);
+        }
         let editor = egui::Button::new(Command::OpenInEditor.label())
             .shortcut_text(ui.ctx().format_shortcut(&EDITOR_SHORTCUT));
         if ui.add(editor).clicked() {
@@ -232,6 +242,7 @@ impl SrcWranglrApp {
             Command::SemgrepRules,
             Command::RunCppcheck,
             Command::RunFlawfinder,
+            Command::ImportSarif,
         ]
         .into_iter()
         .find(|command| ui.button(command.label()).clicked())

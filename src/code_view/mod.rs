@@ -29,6 +29,10 @@ use scheme::SourceColors;
 use segments::{merge, overlay_risks, Mark, Segment};
 use tokenize::colored_ranges;
 
+/// Names a line's menu lists for cross references, at most.
+const MAX_MENU_NAMES: usize = 20;
+/// Places a highlighted word is marked on one line, at most.
+const MAX_WORD_MARKS: usize = 100;
 const LINK_UNDERLINE_ALPHA: f32 = 0.35;
 /// Risky snippets: a tint of their severity color, underlined.
 const RISK_BACKGROUND_ALPHA: f32 = 0.22;
@@ -75,6 +79,8 @@ pub struct Focus<'a> {
     pub call_summaries: Option<&'a HashMap<String, Option<String>>>,
     /// The lines picked by clicking their numbers (first, last), if any.
     pub selected_lines: Option<(u32, u32)>,
+    /// The word clicked, highlighted wherever it is.
+    pub highlighted_word: Option<&'a str>,
     /// Whether a rule is being drafted, so a line's menu can add to it.
     pub is_drafting_rule: bool,
     /// The color scheme to draw with.
@@ -142,6 +148,16 @@ pub enum LineAction {
     TraceToHere(String),
     /// Show the docs for this function called here.
     ShowDocs(String),
+    /// List the cross references to this name used here.
+    CrossReferences(String),
+}
+
+/// What a cross reference list is for: a project symbol, or a library
+/// function by name (`memcpy`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Referenced {
+    Symbol(SymbolId),
+    Library(String),
 }
 
 /// Something the user did in the code view.
@@ -156,6 +172,10 @@ pub enum CodeEvent {
     LineNumber { line: u32, extend: bool },
     /// Clicked a risky snippet: the `RiskSpan::id`.
     Risk(usize),
+    /// Clicked this word (an identifier), or none (space, punctuation).
+    Word(Option<String>),
+    /// Pressed X over a name: list its cross references.
+    CrossReferences(Referenced),
     /// Hovering a call to a library function whose man page isn't looked
     /// up yet: its name as looked up.
     HoveredCall(String),
@@ -256,7 +276,7 @@ impl Rows<'_> {
         let line_no = u32::try_from(idx + 1).unwrap_or(u32::MAX);
         let (shown, visible_len) = display_text(text);
         let occurrences = self.graph.occurrences_on_line(self.focus.file, line_no);
-        let marks = self.marks_on(line_no, occurrences, visible_len);
+        let marks = self.marks_on(line_no, occurrences, &shown, visible_len);
         let risks = self
             .focus
             .risks
@@ -320,6 +340,7 @@ impl Rows<'_> {
             };
             let (event, code) = self.show_code(ui, &line);
             let calls = self.calls_on_line(line_no);
+            let names = self.names_on_line(line_no);
             let picked_lines = self
                 .focus
                 .selected_lines
@@ -328,6 +349,7 @@ impl Rows<'_> {
                 shown: &shown,
                 mark,
                 calls: &calls,
+                names: &names,
                 trace_source: self.focus.trace_source,
                 picked_lines,
                 is_drafting_rule: self.focus.is_drafting_rule,
@@ -397,9 +419,18 @@ impl Rows<'_> {
             return response.clicked().then_some(CodeEvent::Risk(risk.id));
         }
         let Some(hit) = name.copied() else {
+            if response.clicked() {
+                let word = byte_at_x(line, pointer_x, x_of)
+                    .and_then(|at| word_at(line.shown, at))
+                    .map(str::to_string);
+                return Some(CodeEvent::Word(word));
+            }
             return self.library_call_hover(response, line, pointer_x, x_of);
         };
         let symbol = self.graph.symbols.get(&hit.symbol)?;
+        if pressed_x(ui.ctx()) {
+            return Some(CodeEvent::CrossReferences(Referenced::Symbol(symbol.id)));
+        }
         let brief = self.brief_of(symbol.id);
         let response = response
             .clone()
@@ -415,7 +446,7 @@ impl Rows<'_> {
                 if let Some(brief) = &brief {
                     ui.label(visible_lines(brief));
                 }
-                ui.weak("click to explore · right-click › Show Docs");
+                ui.weak("click to explore · x for cross references · right-click › Show Docs");
             });
         response.clicked().then_some(CodeEvent::Clicked(hit))
     }
@@ -451,6 +482,12 @@ impl Rows<'_> {
             let range = byte_range(c.span, line.visible_len);
             !range.is_empty() && (x_of(range.start)..x_of(range.end)).contains(&pointer_x)
         })?;
+        if pressed_x(&response.ctx) {
+            let bare = crate::analysis::risky::bare_library_name(&call.name).unwrap_or(&call.name);
+            return Some(CodeEvent::CrossReferences(Referenced::Library(
+                bare.to_string(),
+            )));
+        }
         let name = crate::docs::man::lookup_name(&call.name)?;
         let summary = self.focus.call_summaries.and_then(|s| s.get(name));
         response.clone().on_hover_ui_at_pointer(|ui| {
@@ -466,7 +503,7 @@ impl Rows<'_> {
                     ui.weak("Looking up its man page…");
                 }
             }
-            ui.weak("right-click › Show Docs for the whole page");
+            ui.weak("x for cross references · right-click › Show Docs for the whole page");
         });
         summary
             .is_none()
@@ -492,12 +529,33 @@ impl Rows<'_> {
         names
     }
 
+    /// The names on `line` with cross references: the symbols named there
+    /// and the functions called.
+    fn names_on_line(&self, line: u32) -> Vec<&str> {
+        let graph = self.graph;
+        let project = graph
+            .occurrences_on_line(self.focus.file, line)
+            .iter()
+            .filter_map(|o| graph.symbols.get(&o.symbol))
+            .map(|s| s.qualified_name.as_str());
+        let external = graph
+            .external_calls_on_line(self.focus.file, line)
+            .iter()
+            .map(|c| c.name.as_str());
+        let mut names: Vec<&str> = project.chain(external).collect();
+        names.sort_unstable();
+        names.dedup();
+        names.truncate(MAX_MENU_NAMES);
+        names
+    }
+
     /// How the names on line `line_no` are marked: its occurrences, the
     /// trace path's steps, and the focused name.
     fn marks_on(
         &self,
         line_no: u32,
         occurrences: &[Occurrence],
+        shown: &str,
         visible_len: usize,
     ) -> Vec<(Range<usize>, Mark)> {
         let on_line = |s: &&Span| s.line == line_no;
@@ -515,9 +573,17 @@ impl Rows<'_> {
             .iter()
             .filter(on_line)
             .map(|s| (byte_range(*s, visible_len), Mark::Trail));
+        let words = self
+            .focus
+            .highlighted_word
+            .map(|word| word_ranges(shown, visible_len, word))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|range| (range, Mark::Word));
         occurrences
             .iter()
             .map(|o| (byte_range(o.span, visible_len), self.mark_for(o)))
+            .chain(words)
             .chain(traced)
             .chain(focused)
             .collect()
@@ -591,6 +657,64 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
     gutter.on_hover_text(explanations.join("\n\n"))
 }
 
+/// Whether X was just pressed (and not for typing): taken, so nothing else
+/// acts on it too.
+fn pressed_x(ctx: &egui::Context) -> bool {
+    !ctx.egui_wants_keyboard_input()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::X))
+}
+
+/// The byte of `line`'s text under `pointer_x`, if any.
+fn byte_at_x(line: &DrawnLine, pointer_x: f32, x_of: impl Fn(usize) -> f32) -> Option<usize> {
+    let text = line.shown.get(..line.visible_len)?;
+    text.char_indices()
+        .find(|(at, c)| (x_of(*at)..x_of(at + c.len_utf8())).contains(&pointer_x))
+        .map(|(at, _)| at)
+}
+
+/// Whether `c` can be part of a name.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The name around byte `at` of `line`, if one is there (a number isn't).
+fn word_at(line: &str, at: usize) -> Option<&str> {
+    let after = line.get(at..)?;
+    if !after.chars().next().is_some_and(is_word_char) {
+        return None;
+    }
+    let start = line[..at]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_word_char(*c))
+        .last()
+        .map_or(at, |(i, _)| i);
+    let end = after
+        .char_indices()
+        .find(|(_, c)| !is_word_char(*c))
+        .map_or(line.len(), |(i, _)| at + i);
+    let word = &line[start..end];
+    (!word.starts_with(|c: char| c.is_ascii_digit())).then_some(word)
+}
+
+/// Where `word` is in the first `visible_len` bytes of `line`, as a whole
+/// name (not part of a longer one).
+fn word_ranges(line: &str, visible_len: usize, word: &str) -> Vec<Range<usize>> {
+    let text = line.get(..visible_len).unwrap_or(line);
+    if word.is_empty() {
+        return Vec::new();
+    }
+    text.match_indices(word)
+        .filter(|(at, _)| {
+            let before = text[..*at].chars().next_back();
+            let after = text[at + word.len()..].chars().next();
+            !before.is_some_and(is_word_char) && !after.is_some_and(is_word_char)
+        })
+        .map(|(at, _)| at..at + word.len())
+        .take(MAX_WORD_MARKS)
+        .collect()
+}
+
 fn byte_range(span: Span, visible_len: usize) -> Range<usize> {
     let clamp = |column: u32| usize::try_from(column).map_or(visible_len, |c| c.min(visible_len));
     clamp(span.start)..clamp(span.end)
@@ -625,6 +749,7 @@ fn layout(
                 Stroke::new(1.0, segment.color.gamma_multiply(LINK_UNDERLINE_ALPHA)),
             ),
             Some(Mark::Selected) => (colors.selected_name, Stroke::NONE),
+            Some(Mark::Word) => (colors.highlighted_word, Stroke::NONE),
             Some(Mark::Trail) => (
                 TRAIL_COLOR.gamma_multiply(TRAIL_BACKGROUND_ALPHA),
                 Stroke::new(TRAIL_UNDERLINE_WIDTH, TRAIL_COLOR),
@@ -701,6 +826,28 @@ mod tests {
     /// Monospace: every byte is 10 px wide.
     fn mono(byte: usize) -> f32 {
         byte as f32 * 10.0
+    }
+
+    #[test]
+    fn a_click_finds_the_whole_name_under_it() {
+        let line = "  len = strlen(src_len) + 10;";
+        assert_eq!(word_at(line, 2), Some("len"));
+        assert_eq!(word_at(line, 4), Some("len"));
+        assert_eq!(word_at(line, 17), Some("src_len"));
+        assert_eq!(word_at(line, 5), None);
+        assert_eq!(word_at(line, 27), None);
+        assert_eq!(word_at("été x", 1), None);
+        assert_eq!(word_at("été x", 0), Some("été"));
+        assert_eq!(word_at(line, 99), None);
+    }
+
+    #[test]
+    fn a_word_is_marked_only_where_it_is_a_whole_name() {
+        let line = "len = strlen(src_len) + len;";
+        assert_eq!(word_ranges(line, line.len(), "len"), [0..3, 24..27]);
+        let cut = word_ranges(line, 10, "len");
+        assert_eq!((cut.len(), cut.first()), (1, Some(&(0..3))));
+        assert!(word_ranges(line, line.len(), "").is_empty());
     }
 
     #[test]

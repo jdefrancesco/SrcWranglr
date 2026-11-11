@@ -13,6 +13,8 @@ pub enum Mark {
     Link,
     /// An occurrence of the selected symbol.
     Selected,
+    /// An occurrence of the word clicked.
+    Word,
     /// A step of the trace path shown: where the traced value is.
     Trail,
     /// The location the code view is focused on.

@@ -69,6 +69,7 @@ impl SrcWranglrApp {
     fn use_settings(&mut self, settings: Settings) {
         self.code_panel.set_scheme(settings.scheme);
         self.symbol_list.set_font(settings.symbol_font);
+        self.bar_font = settings.bar_font;
         self.settings = settings;
     }
 }

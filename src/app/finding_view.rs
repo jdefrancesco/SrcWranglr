@@ -3,7 +3,7 @@
 
 use egui::{Id, RichText};
 
-use super::visible::visible_lines;
+use super::visible::{visible, visible_lines};
 use crate::analysis::{risky, silenced, Finding};
 use crate::model::SymbolId;
 use crate::notes::triage::TriageStatus;
@@ -74,7 +74,8 @@ impl FindingView {
     fn contents(&mut self, ui: &mut egui::Ui) -> Option<FindingViewAction> {
         let f = &self.finding;
         ui.horizontal(|ui| {
-            ui.heading(&f.rule);
+            // Rules and tools may be named by an imported report.
+            ui.heading(visible(&f.rule));
             let severity = RichText::new(f.severity.label())
                 .strong()
                 .color(severity_text_color(f.severity, ui.visuals()));
@@ -107,10 +108,10 @@ impl FindingView {
         if let Some(fix) = &f.fix {
             ui.add_space(4.0);
             ui.strong("How to fix");
-            ui.label(fix);
+            ui.label(visible_lines(fix));
         }
         ui.add_space(4.0);
-        ui.weak(format!("Found by {}", f.tool));
+        ui.weak(format!("Found by {}", visible(&f.tool)));
         ui.separator();
         let triaged = self.triage_section(ui);
         ui.separator();

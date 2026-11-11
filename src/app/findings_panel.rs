@@ -2,7 +2,7 @@
 //! severe first, filterable by severity, text, and whether outside input
 //! reaches them; click one to go there.
 
-use super::visible::visible_lines;
+use super::visible::{visible, visible_lines};
 use crate::history::findings as history_findings;
 use egui::RichText;
 
@@ -168,13 +168,15 @@ fn finding_row(
             .color(severity_text_color(finding.severity, ui.visuals()))
             .monospace();
         ui.label(severity);
-        let text = format!(
+        // Rules, tools and paths may come from an imported report.
+        let text = visible(&format!(
             "{}  {}:{}  {}",
             finding.rule,
             finding.file,
             finding.line,
             symbol_name(finding, graph)
-        );
+        ))
+        .into_owned();
         let cwe = finding
             .cwe
             .map(|c| format!(" (CWE-{c})"))
@@ -182,7 +184,7 @@ fn finding_row(
         let hover = format!(
             "{}{cwe}\nfound by {}",
             visible_lines(&finding.message),
-            finding.tool
+            visible(&finding.tool)
         );
         ui.selectable_label(false, text)
             .on_hover_text(hover)

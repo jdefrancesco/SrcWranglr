@@ -8,12 +8,17 @@ use std::path::PathBuf;
 use egui::{Id, RichText};
 
 use super::dialogs::{self, DialogState, PendingDialog};
-use super::fonts::SymbolFont;
+use super::fonts::{BarFont, SymbolFont};
 use super::settings::Settings;
 use crate::analysis::tools::Tool;
 use crate::code_view::scheme::{show_sample, Scheme};
 use crate::programs::SearchPath;
 
+/// Room the window's heading, footer and margins take, besides the
+/// sections.
+const MODAL_CHROME: f32 = 160.0;
+/// The sections get at least this much room, however short the screen.
+const MIN_SECTIONS_HEIGHT: f32 = 240.0;
 const WIDTH: f32 = 520.0;
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x6C, 0x6C);
 const TOOLS: [Tool; 3] = [Tool::Semgrep, Tool::Cppcheck, Tool::Flawfinder];
@@ -61,6 +66,7 @@ pub struct SettingsView {
     tool_dirs: String,
     scheme: Scheme,
     symbol_font: SymbolFont,
+    bar_font: BarFont,
     /// The settings in use; edits that differ from them are applied.
     applied: Settings,
     /// Why the last change couldn't be saved, or a folder couldn't be
@@ -105,6 +111,7 @@ impl SettingsView {
             tool_dirs,
             scheme: settings.scheme,
             symbol_font: settings.symbol_font,
+            bar_font: settings.bar_font,
             applied: settings.clone(),
             error: None,
             is_typing: false,
@@ -137,6 +144,7 @@ impl SettingsView {
             tool_dirs,
             scheme: self.scheme,
             symbol_font: self.symbol_font,
+            bar_font: self.bar_font,
         };
         settings.check()?;
         Ok(settings)
@@ -160,15 +168,24 @@ impl SettingsView {
             ui.set_width(WIDTH);
             ui.heading("Settings");
             ui.separator();
-            let is_typing_command = self.editor_section(ui);
+            // The sections scroll on a short screen; Done stays in view.
+            let room = (ctx.content_rect().height() - MODAL_CHROME).max(MIN_SECTIONS_HEIGHT);
+            let is_typing = egui::ScrollArea::vertical()
+                .max_height(room)
+                .min_scrolled_height(room)
+                .show(ui, |ui| {
+                    let is_typing_command = self.editor_section(ui);
+                    ui.separator();
+                    let is_typing_folders = self.tools_section(ui, ctx);
+                    ui.separator();
+                    self.colors_section(ui);
+                    ui.separator();
+                    self.font_section(ui);
+                    is_typing_command || is_typing_folders
+                })
+                .inner;
             ui.separator();
-            let is_typing_folders = self.tools_section(ui, ctx);
-            ui.separator();
-            self.colors_section(ui);
-            ui.separator();
-            self.font_section(ui);
-            ui.separator();
-            self.is_typing = is_typing_command || is_typing_folders;
+            self.is_typing = is_typing;
             // Before the footer, so it doesn't show an error this clears.
             let change = self.change_to_apply();
             (change, self.footer(ui))
@@ -328,6 +345,24 @@ impl SettingsView {
             .response
             .labelled_by(caption.id);
         ui.label(RichText::new(FONT_SAMPLE).family(self.symbol_font.family()));
+        ui.add_space(6.0);
+        let caption = ui.strong("Top bar font");
+        egui::ComboBox::from_id_salt("settings_bar_font")
+            .selected_text(self.bar_font.label())
+            .show_ui(ui, |ui| {
+                for font in BarFont::ALL {
+                    ui.selectable_value(&mut self.bar_font, font, font.text(font.label()));
+                }
+            })
+            .response
+            .labelled_by(caption.id);
+        ui.horizontal(|ui| {
+            for title in ["File", "Go", "View", "Analyze"] {
+                ui.label(self.bar_font.text(title));
+            }
+            ui.label(self.bar_font.control("Symbols"));
+            ui.label(self.bar_font.control("Source"));
+        });
     }
 
     /// Why the settings as edited can't be saved, and Done. Returns
@@ -394,18 +429,20 @@ mod tests {
 
     fn harness_for(view: SettingsView) -> Harness<'static, State> {
         // The fonts the app installs at launch, which the font picker uses.
-        let mut harness = crate::app::fonts::test_harness().build_ui_state(
-            |ui, state: &mut State| {
-                let ctx = ui.ctx().clone();
-                if let Some(action) = state.view.show(&ctx) {
-                    state.actions.push(action);
-                }
-            },
-            State {
-                view,
-                actions: Vec::new(),
-            },
-        );
+        let mut harness = crate::app::fonts::test_harness()
+            .with_size(egui::vec2(900.0, 1500.0))
+            .build_ui_state(
+                |ui, state: &mut State| {
+                    let ctx = ui.ctx().clone();
+                    if let Some(action) = state.view.show(&ctx) {
+                        state.actions.push(action);
+                    }
+                },
+                State {
+                    view,
+                    actions: Vec::new(),
+                },
+            );
         harness.run();
         harness
     }
@@ -483,6 +520,7 @@ mod tests {
             tool_dirs: vec!["/opt/tools".into()],
             scheme: Scheme::Monokai,
             symbol_font: SymbolFont::SourceCodePro,
+            bar_font: BarFont::Iosevka,
         };
         let mut harness = harness(&settings);
         harness.get_by_label("Done").click();
