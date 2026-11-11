@@ -46,18 +46,21 @@ The **Trail** view keeps the selected symbol in the center, its callers on the l
 - Follow calls, inheritance, type and member uses, and containment.
 - Switch to **Call hierarchy** to explore a tree of calls from entry points or a function you select. Callees appear in source order, with recursion and additional callers marked.
 - Click a resolved name in the source or a node in the graph to explore it. Step through declaration and use locations, then go back through your navigation history.
+- Press **X** over any name for IDA-style cross references: every use and call, with the function each is in. It works for library functions like `memcpy` too.
+- Click any name in the source to highlight it everywhere in the file.
 - Jump to a symbol with fuzzy search, pan and zoom the graph, and open the current location in your preferred editor.
 
 ### Investigate code and find audit leads
 
 | Task | What SrcWranglr provides |
 |---|---|
-| Review risky calls | Argument-aware checks, a custom dangerous-functions list, and findings from `Semgrep`, `cppcheck`, and `flawfinder`. Filter results and record verdicts. |
+| Review risky calls | Argument-aware checks of about 300 C library, POSIX, Windows, Linux kernel, and weak-crypto functions, a custom dangerous-functions list, and findings from `Semgrep`, `cppcheck`, and `flawfinder`. Filter results and record verdicts. |
+| Import CodeQL results | Load SARIF reports from CodeQL or any other tool into Findings, with severity, CWE, and verdicts. SrcWranglr never builds your code or runs CodeQL itself. |
 | Follow a value | Trace backward to its origin, forward to risky calls, or between a source variable and a call you choose. Each path links to its source lines. |
-| Find related code | Draft a `Semgrep` rule from a line with **Find More Like This…**, find functions and blocks with similar syntax, or filter functions by library-call behavior. |
+| Find related code | Draft `Semgrep` rules from a line, a range of lines, or several places that share a pattern, with exceptions for checks and fixed code. Manage your own and the project's rules in the **Semgrep Rules** window, which also suggests rules for the project's wrappers of risky calls. Find functions and blocks with similar syntax, or filter functions by library-call behavior. |
 | Choose fuzz targets | Rank candidates using input reach-ability, risky calls, complexity, and signatures. Draft editable `libFuzzer` harnesses, with `TODO`s where manual work is needed. |
 | Survey a project | Inspect languages, build metadata, function complexity, IPC and capabilities, and ELF/PE/Mach-O binaries with hardening information. |
-| Review past fixes | Find commits whose messages suggest bug or security fixes and inspect the lines they still own in the current checkout. |
+| Review past fixes | Find commits whose messages suggest bug or security fixes, inspect the lines they still own in the current checkout, and list the CVEs they name, with links to NVD. |
 
 Input reach-ability helps prioritize findings. Value traces follow assignments, calls, returns, copies, out-parameters, and struct fields where supported. Both use syntax and heuristics; review the source to establish what a path means.
 
@@ -68,8 +71,8 @@ See the [user guide](docs/guide.md) for analysis behavior, examples, tool config
 - **Notes, bookmarks, and TODOs:** attach context to symbols and source lines, and browse TODO-style comments already in the code.
 - **Sessions:** reopen a project where you left off, or save a `.srcwranglr-session` file.
 - **Audit bundles:** export notes, bookmarks, TODOs, verdicts, and your exploration position to a `.srcwranglr-audit` file. A teammate can preview and merge it into their own checkout.
-- **Strings and documentation:** find string literals and their use sites, read project doc comments and Doxygen documentation, or look up library functions in system man pages.
-- **Customizable workspace:** arrange panes, choose source themes and symbol fonts, and configure your editor and tool locations.
+- **Strings and documentation:** find string literals and their use sites, read project doc comments and Doxygen documentation, look up library functions in system man pages, or click the project's name to read its README, rendered from Markdown.
+- **Customizable workspace:** arrange panes, choose source themes, symbol-list and top-bar fonts, and configure your editor and tool locations.
 
 ## Essential controls
 
@@ -79,8 +82,11 @@ See the [user guide](docs/guide.md) for analysis behavior, examples, tool config
 | Find a symbol | ⌘P / Ctrl+P |
 | Open the command palette | ⌘⇧P / Ctrl+Shift+P |
 | Explore a symbol | Click it in the graph, symbol list, or linked source |
+| Cross references to a name | Point at it in the source and press **X** |
+| Highlight a name in the file | Click it in the source; **Esc** clears |
 | Return to the previous symbol | **◀ Back** |
-| Trace a value, find similar code, or show docs | Right-click a source line |
+| Trace a value, find similar code, or show docs | Right-click a source line (Shift-click line numbers to pick several) |
+| Manage semgrep rules | **Analyze → Semgrep Rules…** |
 | Open Project Triage | ⌘⇧T / Ctrl+Shift+T |
 | Open settings | ⌘, / Ctrl+, |
 
@@ -93,7 +99,7 @@ SrcWranglr uses tree-sitter for syntax-based indexing and heuristic name resolut
 - **Symbol identity:** overloads with the same name merge into one symbol. Same-named `static` functions in different files also merge in the index, which can affect graph relationships and reachability.
 - **Language coverage:** macros are not expanded and `using namespace` is not followed. Global variables, enums, and general `typedef`/`using` aliases are not indexed yet; named `typedef struct` declarations are supported. Ambiguous references are left unlinked.
 - **Analysis coverage:** unresolved indirect calls, function pointers, pointer aliases, and checks that constrain a value are not fully modeled. Reachability can include calls that do not receive the input, and a finding without an input tag is not proven unreachable. A displayed trace describes a possible path, not a confirmed vulnerability.
-- **Resource limits:** indexing defaults to 20,000 source files and skips files larger than 2 MiB with a warning. Analysis also has time and traversal limits and reports when a trace is cut short.
+- **Resource limits:** indexing defaults to 100,000 source files and skips files larger than 2 MiB with a warning. Analysis also has time and traversal limits and reports when a trace is cut short.
 - **Harness drafts:** generated fuzz harnesses need review and may need changes before they compile, particularly around macros, include order, and project-specific types.
 
 Detailed behavior is documented in the [user guide](docs/guide.md#limitations).
@@ -160,8 +166,7 @@ Planned additions include:
 - Following values through pointer aliases.
 - Richer semantic indexing and search beyond syntax shapes and call behaviors.
 - Collecting useful seed corpora for fuzz targets.
-- Exploring lightweight language-model assistance for understanding large codebases.
-- Adding CodeQL rule generation and querying
+- Exploring lightweight language-model assistance for understanding large codebases: explaining a function, triaging a finding, and drafting a rule from a description.
 
 
 ## AI Policy
@@ -186,7 +191,7 @@ project,
 - Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail) by Coati Software, now archived. `SrcWranglr` is an independent implementation and shares no code with it.
 - Screenshots show [LevelDB](https://github.com/google/leveldb) (BSD-3-Clause, © The LevelDB Authors).
 - Bundles the fonts [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) (© Adobe) and [Iosevka](https://github.com/be5invis/Iosevka) (© Renzhi Li), both under the SIL Open Font License 1.1, and [Ubuntu](https://github.com/google/fonts/tree/main/ufl/ubuntu) Regular and Medium (© Canonical Ltd.) under the Ubuntu Font License 1.0; see [assets/fonts](assets/fonts).
-- Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), [rfd](https://github.com/PolyMeilleur/rfd), and [nucleo-matcher](https://github.com/helix-editor/nucleo).
+- Built on [egui/eframe](https://github.com/emilk/egui), [tree-sitter](https://github.com/tree-sitter/tree-sitter) with [tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp), [ignore](https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore), [rfd](https://github.com/PolyMeilleur/rfd), [nucleo-matcher](https://github.com/helix-editor/nucleo), [gitoxide](https://github.com/GitoxideLabs/gitoxide), and [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark).
 
 ## License
 
