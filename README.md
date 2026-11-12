@@ -8,7 +8,7 @@ Written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](htt
 
 ![SrcWranglr showing interactive code graphs, linked source, findings, project triage, and fuzz targets](docs/screenshots/slideshow.webp)
 
-[Quick start](#quick-start) · [Features](#features) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) · [AI policy](#ai-policy)
+[Quick start](#quick-start) · [Features](#features) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) · [Algorithms](docs/algorithms.md) · [AI policy](#ai-policy)
 
 
 ## About
@@ -35,7 +35,7 @@ cargo run --release --locked -- ~/code/myproject
 
 Indexing reads source directly; you do not need to build the project or provide a compilation database. It runs in the background, supports cancellation, and respects `.gitignore`. See [limitations](#limitations) for indexing and analysis boundaries.
 
-`Semgrep`, `cppcheck`, and `flawfinder` are **optional**. Install them separately to use their integrations; the graph, navigation, and built-in analysis work without them. **File → Settings…** shows tool discovery and editor options.
+`Semgrep`, `cppcheck`, and `flawfinder` are **optional**. Install them separately to use their integrations; the graph, navigation, and built-in analysis work without them. See [external analyzers](#bring-in-external-analyzers) for what each adds, and **File → Settings…** for tool discovery and editor options.
 
 ## Features
 
@@ -65,6 +65,21 @@ The **Trail** view keeps the selected symbol in the center, its callers on the l
 Input reach-ability helps prioritize findings. Value traces follow assignments, calls, returns, copies, out-parameters, and struct fields where supported. Both use syntax and heuristics; review the source to establish what a path means.
 
 See the [user guide](docs/guide.md) for analysis behavior, examples, tool configuration, and limits.
+
+### Bring in external analyzers
+
+SrcWranglr runs these tools on the project and puts their results in **Findings**, next to its own checks, where you can filter them and record verdicts. Each one is optional. **File → Settings… → Tools** shows where each was found and how to install it.
+
+| Tool | How SrcWranglr uses it |
+|---|---|
+| [Semgrep](https://semgrep.dev) | **Analyze → Run semgrep** runs offline (no registry, no metrics) with three sets of rules: SrcWranglr's own (use after free, double free, unchecked `malloc`, `realloc` leaks, and others), yours in `~/.config/srcwranglr/semgrep/`, and the project's in `.srcwranglr/semgrep/` once you trust the project. Write, test, and edit rules in **Analyze → Semgrep Rules…**, or draft them from code with **Find More Like This…**. A rule is checked with semgrep before it is saved. |
+| [cppcheck](https://cppcheck.sourceforge.io) | **Analyze → Run cppcheck**. |
+| [flawfinder](https://dwheeler.com/flawfinder/) | **Analyze → Run flawfinder**. |
+| [CodeQL](https://codeql.github.com), or any tool that writes SARIF | Run CodeQL yourself (`codeql database create`, then `codeql database analyze --format=sarif-latest`), then **Analyze → Import SARIF Results…**. SrcWranglr never builds the project or runs CodeQL, because building runs the project's own build scripts. |
+
+The audited code can't silence these tools: SrcWranglr ignores its `// nosemgrep`, `cppcheck-suppress`, and `Flawfinder: ignore` comments, and lists each such comment as a finding of its own.
+
+Install them with `brew install semgrep cppcheck flawfinder`, or `pipx install semgrep flawfinder` and your system's `cppcheck` package.
 
 ### Keep your investigation organized
 
@@ -155,7 +170,7 @@ The core pipeline is:
 discover files → extract syntax → resolve names → CodeGraph → layout → render
 ```
 
-Indexing lives in `src/index/`, graph layout and rendering in `src/graph/`, value tracing and analysis in `src/analysis/`, and application behavior in `src/app/`. See the [source map](docs/guide.md#how-it-works) and [development reference](docs/guide.md#development) for individual modules, headless indexing measurements, and harness export commands.
+Indexing lives in `src/index/`, graph layout and rendering in `src/graph/`, value tracing and analysis in `src/analysis/`, and application behavior in `src/app/`. See the [source map](docs/guide.md#how-it-works) and [development reference](docs/guide.md#development) for individual modules, headless indexing measurements, and harness export commands. [Algorithms](docs/algorithms.md) explains the techniques behind each feature: name resolution, tracing, input reachability, fuzz-target scoring, code matching, rule drafting, and git history.
 
 Bug reports are especially useful with a small C/C++ example, the expected relationship or trace, the observed result, and your platform. [Open an issue](https://github.com/jdefrancesco/SrcWranglr/issues).
 
