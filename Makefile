@@ -16,6 +16,8 @@
 # Variables: SIGN_IDENTITY (macOS codesign identity; default "-" = ad-hoc),
 # BUNDLE_ID, APPLICATIONS (default /Applications), PREFIX (default /usr/local),
 # DESTDIR (staging root for packagers).
+#
+# NOTICE: Large majority of this Makefile is LLM generated.
 
 APP           := srcwranglr
 # The name people see: the macOS app bundle and disk image.
@@ -79,7 +81,7 @@ package-unsupported:
 	@echo "No package format for $(UNAME); 'make build' gives you $(RELEASE)/$(APP)." >&2
 	@exit 1
 
-# --- macOS ------------------------------------------------------------------
+# macOS 
 
 package-macos: dmg
 
@@ -127,9 +129,8 @@ install-macos: app
 uninstall-macos:
 	@test -d "$(APPLICATIONS)" || { echo "No folder $(APPLICATIONS)" >&2; exit 1; }
 	rm -rf "$(APPLICATIONS)/$(APP_NAME).app"
-
-# --- Linux ------------------------------------------------------------------
-
+ 
+# Linux
 package-linux: build
 	rm -rf "dist/$(LINUX_NAME)"
 	mkdir -p "dist/$(LINUX_NAME)"
@@ -160,8 +161,8 @@ install: install-$(PLATFORM)
 
 uninstall: uninstall-$(PLATFORM)
 
-# --- Windows (Git Bash or MSYS2, with the Rust MSVC or GNU toolchain) -------
 
+# Windows 
 package-windows: build
 	rm -rf "dist/$(WINDOWS_NAME)"
 	rm -f "dist/$(WINDOWS_NAME).zip"
@@ -171,8 +172,8 @@ package-windows: build
 	rm -rf "dist/$(WINDOWS_NAME)"
 	@echo "Built dist/$(WINDOWS_NAME).zip"
 
-# --- Shared -----------------------------------------------------------------
 
+# Shared 
 icons:
 	rsvg-convert -w 1024 -h 1024 $(ICON_SVG) -o $(ICON_1024)
 	rsvg-convert -w 256 -h 256 $(ICON_SVG) -o $(ICON_256)

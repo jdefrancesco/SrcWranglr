@@ -271,7 +271,7 @@ flowchart TD
     A -- the sink, a counting argument --> SINK[record a path: reaches the sink]
     A -- a library copy: strcpy, memcpy, s.append --> H3[Held = its destination] --> U
     A -- a project function --> IN[Held = the parameter, in each definition] --> U
-    A -- any call --> RES[its result goes on] --> G
+    A -- a library or unresolved call --> RES[its result goes on] --> G
     G -- returned --> RET[back to the call stepped in from,<br/>or every caller] --> G
     G -- used: condition, comparison, index --> END[not passed on]
 ```
@@ -279,16 +279,16 @@ flowchart TD
 Step by step (`Follower::follow_here` and `goes_on_here`):
 
 1. **Uses.** `uses_of` lists the uses of `name` in the function. `uses_after` keeps those after `from`, plus earlier ones inside a loop around `from` (the loop brings the value back to them), up to 64.
-2. **Is the value still there?** For each use, `reaches` asks `defs::Writes::reaching` which writes reach it. The use counts if one of the held writes is among them, or if this is a value from before and no write replaces it on every path. Writes in the other arm of an `if`, to a shadowing variable, or to a different field don't count.
+2. **Is the value still there?** For each use, `reaches` asks `defs::Writes::reaching` which writes reach it. The use counts if one of the held writes is among them, or if this is a value from before and no write replaces it on every path. Writes in the other arm of an `if`, to a shadowing variable, or to a different field don't count. When more writes reach the use than are kept (6), the use counts as reached: missing a path is worse than showing one too many.
 3. **Where the value goes** (`goes`) walks up from the use, through what passes a value on: arithmetic, casts, `*`, `&`, and methods called on it. It ends in one of four ways:
    - **Stored** in a variable, field or element. The new place becomes the next `Held`, from the end of the write.
      - A global or member is noted as a stop: it is used elsewhere and isn't followed there.
      - A store through a pointer parameter (`*out = v`, `p->f = v`) also goes back out through the caller's argument (`out_through`).
    - **An argument** of a call (`argument`):
-     - If this call is a sink and the argument counts, a path is recorded: the trail of steps so far plus this one.
+     - If this call is a sink and the argument counts, a path is recorded: the trail of steps so far plus this one. Following goes on past it, since the value may reach other sinks too.
      - If the call copies the argument somewhere (`strcpy(dst, src)`, `s.append(x)`), the destination is followed.
-     - Otherwise, if a project function is called, the value is followed into the matching parameter of each of its definitions (up to 4), with the call pushed onto `returns_to`.
-     - Whatever the call returns may be made from it (`strlen(s)`, `strdup(s)`), so the call's result goes on too.
+     - Otherwise, if a project function is called, the value is followed into the matching parameter of each of its definitions (up to 4), with the call pushed onto `returns_to`. The call's result is then not followed at the call: it comes back only if the callee returns the value (**Returned**, below).
+     - For a library call, an unresolved one, or a project function whose parameter can't be found, whatever the call returns may be made from the value (`strlen(s)`, `strdup(s)`), so the call's result goes on.
      - A call through a function pointer is a stop.
    - **Returned:** back to the call stepped in from. When the trace started inside the function, it goes back to every caller (up to 8), and recursion is cut off.
    - **Used** without passing it on, as in a condition, a comparison or an index: the path ends there.

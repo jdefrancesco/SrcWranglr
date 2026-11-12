@@ -418,6 +418,8 @@ The window opens maximized the first time. After that it reopens with the size, 
 
 ## How it works
 
+For the algorithms behind each feature (name resolution, tracing, input reachability, fuzz-target scoring, code matching, rule drafting, git history), see [Algorithms](algorithms.md); matching and source → sink tracing are covered step by step in [How semantic matching and source → sink tracing work](matching-and-tracing.md).
+
 ```
 discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail / overview layout ──▶ render
  (ignore)   (tree-sitter)  (names → edges)         (columns, class boxes)      (egui)
