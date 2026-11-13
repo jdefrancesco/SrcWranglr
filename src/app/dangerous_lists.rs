@@ -147,7 +147,21 @@ impl DangerousLists {
 }
 
 /// `$XDG_CONFIG_HOME/srcwranglr`, else `~/.config/srcwranglr`.
+#[cfg(not(test))]
 pub fn config_dir() -> Option<PathBuf> {
+    real_config_dir()
+}
+
+/// In tests, a folder of this test run's own: tests save settings, trust
+/// projects and write rules, and must never do it to yours.
+#[cfg(test)]
+pub fn config_dir() -> Option<PathBuf> {
+    let run = format!("srcwranglr-tests-{}", std::process::id());
+    Some(std::env::temp_dir().join(run).join("srcwranglr"))
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn real_config_dir() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -192,6 +206,14 @@ pub fn write_user_file(path: &Path, contents: &str) -> std::io::Result<PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tests_never_touch_the_real_configuration() {
+        let home = std::env::var_os("HOME").map(PathBuf::from).expect("HOME");
+        let dir = config_dir().expect("a folder");
+        assert!(!dir.starts_with(home.join(".config")), "{}", dir.display());
+        assert!(dir.starts_with(std::env::temp_dir()), "{}", dir.display());
+    }
     use crate::analysis::Severity;
 
     fn entry(name: &str, reason: &str) -> DangerousFunction {
