@@ -5,15 +5,20 @@ use super::*;
 use crate::index::graph_of_files;
 use crate::model::Param;
 
-/// The harness for the definition of `name` among `sources`.
+/// The libFuzzer harness for the definition of `name` among `sources`.
 fn harness_for(sources: &[(&str, &str)], name: &str) -> Harness {
+    drafted_for(sources, name, Engine::LibFuzzer)
+}
+
+/// The harness for `engine` for the definition of `name` among `sources`.
+fn drafted_for(sources: &[(&str, &str)], name: &str, engine: Engine) -> Harness {
     let graph = graph_of_files(sources);
     let function = graph
         .functions
         .iter()
         .find(|f| graph.symbols[&f.symbol].qualified_name == name)
         .unwrap_or_else(|| panic!("no definition of {name}"));
-    draft(&graph, function).expect("a harness")
+    draft(&graph, function, engine).expect("a harness")
 }
 
 fn assert_has(harness: &Harness, needle: &str) {
@@ -136,6 +141,31 @@ fn static_functions_include_their_own_file() {
 }
 
 #[test]
+fn an_included_files_main_is_renamed_around_the_include() {
+    // The file the harness compiles in may have a main() of its own, which
+    // would clash with the harness's (or libFuzzer's).
+    let tool = "static int parse(const char *s) { return s[0]; }\nint main(void) { return parse(\"x\"); }\n";
+    for engine in Engine::ALL {
+        let harness = drafted_for(&[("src/tool.c", tool)], "parse", engine);
+        assert_has(
+            &harness,
+            "#define main project_main  // its main() would clash with the harness's\n\
+             extern \"C\" {\n#include \"src/tool.c\"\n}\n#undef main\n",
+        );
+    }
+}
+
+#[test]
+fn the_afl_harness_suggests_asan_options() {
+    let harness = drafted_for(&[PNG_H, PNG_C], "parse_chunk", Engine::Afl);
+    assert_has(
+        &harness,
+        "ASAN_OPTIONS=abort_on_error=1:symbolize=0:detect_leaks=0:\
+         detect_stack_use_after_return=1:max_malloc_fill_size=1073741824",
+    );
+}
+
+#[test]
 fn without_a_header_the_prototype_is_declared() {
     let harness = harness_for(
         &[(
@@ -247,7 +277,7 @@ fn a_type_that_could_break_out_is_not_written() {
     let mut function = graph.functions[0].clone();
     function.signature.params[0].type_text = "int; system(\"x\")".into();
     function.signature.prototype = "int parse(int x) \\".into();
-    let harness = draft(&graph, &function).expect("a harness");
+    let harness = draft(&graph, &function, Engine::LibFuzzer).expect("a harness");
     assert!(!harness.code.contains("system"), "{}", harness.code);
     assert!(!harness.code.contains('\\'), "{}", harness.code);
     assert_has(&harness, "TODO: parameter 1's type couldn't be read");
@@ -263,10 +293,19 @@ fn functions_without_parameters_need_no_provider() {
 
 #[test]
 fn file_names_keep_only_identifier_characters() {
-    assert_eq!(file_name_for("ns::Parse"), "fuzz_Parse.cc");
-    assert_eq!(file_name_for("weird$name"), "fuzz_weird_name.cc");
-    assert_eq!(file_name_for(""), "fuzz_target.cc");
-    assert_eq!(file_name_for(&"x".repeat(200)).len(), "fuzz_.cc".len() + 64);
+    assert_eq!(
+        file_name_for("ns::Parse", Engine::LibFuzzer),
+        "fuzz_Parse.cc"
+    );
+    assert_eq!(
+        file_name_for("weird$name", Engine::LibFuzzer),
+        "fuzz_weird_name.cc"
+    );
+    assert_eq!(file_name_for("", Engine::LibFuzzer), "fuzz_target.cc");
+    assert_eq!(
+        file_name_for(&"x".repeat(200), Engine::LibFuzzer).len(),
+        "fuzz_.cc".len() + 64
+    );
 }
 
 #[test]
@@ -379,4 +418,74 @@ fn lengths_passed_by_address_start_at_the_buffer_size() {
         .expect("dest");
     let length_at = harness.code.find("destLen = dest.size()").expect("destLen");
     assert!(buffer_at < length_at);
+}
+
+#[test]
+fn an_afl_harness_runs_the_same_setup_in_persistent_mode() {
+    let harness = drafted_for(&[PNG_H, PNG_C], "parse_chunk", Engine::Afl);
+    let libfuzzer = harness_for(&[PNG_H, PNG_C], "parse_chunk");
+    assert_eq!(harness.file_name, "fuzz_parse_chunk_afl.cc");
+    assert!(!harness.code.contains("LLVMFuzzerTestOneInput"));
+    assert_has(
+        &harness,
+        "static int fuzz_one_input(const uint8_t *data, size_t size) {",
+    );
+    let setup = |code: &str| {
+        let start = code.find("  FuzzedDataProvider").expect("setup");
+        code[start..start + code[start..].find("\n}").expect("end")].to_string()
+    };
+    assert_eq!(setup(&harness.code), setup(&libfuzzer.code));
+    assert_has(&harness, "__AFL_FUZZ_INIT();");
+    assert_has(&harness, "unsigned char *buf = __AFL_FUZZ_TESTCASE_BUF;");
+    assert_has(&harness, "while (__AFL_LOOP(10000)) {");
+    assert_has(&harness, "fuzz_one_input(buf, __AFL_FUZZ_TESTCASE_LEN);");
+}
+
+#[test]
+fn an_afl_harness_says_how_to_build_and_run_it() {
+    let harness = drafted_for(&[PNG_H, PNG_C], "parse_chunk", Engine::Afl);
+    assert_has(
+        &harness,
+        "// AFL++ persistent-mode harness for parse_chunk (src/png.c:1)",
+    );
+    assert_has(
+        &harness,
+        "afl-clang-fast++ -g -O1 -I. fuzz_parse_chunk_afl.cc",
+    );
+    assert_has(&harness, "AFL_LLVM_CMPLOG=1");
+    assert_has(
+        &harness,
+        "afl-fuzz -i seeds -o out -c ./fuzz_parse_chunk.cmplog -- ./fuzz_parse_chunk",
+    );
+    assert_has(&harness, "-x fuzz_parse_chunk.dict");
+}
+
+#[test]
+fn built_without_afl_it_replays_one_input_from_stdin() {
+    let harness = drafted_for(&[PNG_H, PNG_C], "parse_chunk", Engine::Afl);
+    assert_has(
+        &harness,
+        "#ifdef __AFL_FUZZ_TESTCASE_LEN\n#include <unistd.h>",
+    );
+    assert_has(&harness, "#else");
+    assert_has(&harness, "std::fread(chunk, 1, sizeof chunk, stdin)");
+    assert_has(
+        &harness,
+        "return fuzz_one_input(input.data(), input.size());",
+    );
+    assert_has(&harness, "#include <cstdio>");
+    assert_eq!(harness.code.matches("#include <vector>").count(), 1);
+}
+
+#[test]
+fn both_engines_name_the_same_binary() {
+    assert_eq!(stem_for("png::parse_chunk"), "fuzz_parse_chunk");
+    assert_eq!(
+        file_name_for("png::parse_chunk", Engine::LibFuzzer),
+        "fuzz_parse_chunk.cc"
+    );
+    assert_eq!(
+        file_name_for("png::parse_chunk", Engine::Afl),
+        "fuzz_parse_chunk_afl.cc"
+    );
 }

@@ -25,7 +25,6 @@ mod history_actions;
 mod history_cves;
 mod history_function;
 mod history_panel;
-pub(crate) mod includes;
 mod journal_actions;
 mod journal_view;
 pub mod launch;

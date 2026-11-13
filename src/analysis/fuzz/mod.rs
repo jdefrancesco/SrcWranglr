@@ -5,7 +5,9 @@
 //! paths, a caller that reads input. Ease: a buffer and its length is
 //! best; values built by hand, needing an object, or being `static` cost.
 
+pub mod dictionary;
 pub mod harness;
+pub mod makefile;
 pub mod params;
 mod worth;
 

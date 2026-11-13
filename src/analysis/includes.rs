@@ -8,6 +8,7 @@
 //! files are ever opened.
 
 use std::cmp::Reverse;
+use std::collections::HashMap;
 
 use crate::model::CodeGraph;
 
@@ -73,6 +74,44 @@ pub fn file_name_at(line: &str, at: usize) -> Option<&str> {
 /// The project file `name` (as written in `from`) means, if one is
 /// indexed.
 pub fn resolve(graph: &CodeGraph, from: &str, name: &str) -> Option<String> {
+    resolve_among(graph, from, name, graph.file_contents.keys())
+}
+
+/// Resolves many names in one project quickly: the project's files are
+/// indexed by file name once, instead of all scanned for each name.
+pub struct Resolver<'a> {
+    graph: &'a CodeGraph,
+    by_file_name: HashMap<&'a str, Vec<&'a String>>,
+}
+
+impl<'a> Resolver<'a> {
+    pub fn new(graph: &'a CodeGraph) -> Self {
+        let mut by_file_name: HashMap<&str, Vec<&String>> = HashMap::new();
+        for file in graph.file_contents.keys() {
+            let leaf = file.rsplit('/').next().unwrap_or(file);
+            by_file_name.entry(leaf).or_default().push(file);
+        }
+        Self {
+            graph,
+            by_file_name,
+        }
+    }
+
+    /// Like `resolve`.
+    pub fn resolve(&self, from: &str, name: &str) -> Option<String> {
+        let leaf = name.rsplit('/').next().unwrap_or(name);
+        let candidates = self.by_file_name.get(leaf).into_iter().flatten().copied();
+        resolve_among(self.graph, from, name, candidates)
+    }
+}
+
+/// `name` beside `from`, or else the best of `candidates` ending with it.
+fn resolve_among<'a>(
+    graph: &CodeGraph,
+    from: &str,
+    name: &str,
+    candidates: impl Iterator<Item = &'a String>,
+) -> Option<String> {
     if !is_plausible(name) {
         return None;
     }
@@ -86,9 +125,7 @@ pub fn resolve(graph: &CodeGraph, from: &str, name: &str) -> Option<String> {
     }
     let name = normalized(name)?;
     let suffix = format!("/{name}");
-    graph
-        .file_contents
-        .keys()
+    candidates
         .filter(|file| **file == name || file.ends_with(&suffix))
         // Most folders shared, then the shortest path, then the first.
         .max_by_key(|file| {
@@ -103,7 +140,7 @@ pub fn resolve(graph: &CodeGraph, from: &str, name: &str) -> Option<String> {
 
 /// `path` with `.` steps dropped and `..` steps applied; `None` if it
 /// climbs above where it starts.
-fn normalized(path: &str) -> Option<String> {
+pub fn normalized(path: &str) -> Option<String> {
     let mut parts: Vec<&str> = Vec::new();
     for part in path.split('/') {
         match part {
@@ -118,12 +155,12 @@ fn normalized(path: &str) -> Option<String> {
 }
 
 /// The folder `path` is in (`""` at the top).
-fn folder_of(path: &str) -> &str {
+pub fn folder_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(folder, _)| folder)
 }
 
 /// How many leading folders `a` and `b` share.
-fn shared_folders(a: &str, b: &str) -> usize {
+pub fn shared_folders(a: &str, b: &str) -> usize {
     let (a, b) = (folder_of(a), folder_of(b));
     if a.is_empty() || b.is_empty() {
         return 0;
@@ -208,6 +245,26 @@ mod tests {
             Some("include/linux/slab.h")
         );
         assert_eq!(resolve(&graph, "drivers/net/eth.c", "ab.h"), None);
+    }
+
+    #[test]
+    fn the_resolver_finds_what_resolve_does() {
+        let graph = graph();
+        let resolver = Resolver::new(&graph);
+        for (from, name) in [
+            ("drivers/net/eth.c", "eth.h"),
+            ("drivers/net/eth.c", "../../lib/util.h"),
+            ("drivers/net/eth.c", "linux/slab.h"),
+            ("arch/arm/kernel/setup.c", "asm/io.h"),
+            ("drivers/net/eth.c", "stdio.h"),
+            ("drivers/net/eth.c", "ab.h"),
+        ] {
+            assert_eq!(
+                resolver.resolve(from, name),
+                resolve(&graph, from, name),
+                "{name}"
+            );
+        }
     }
 
     #[test]

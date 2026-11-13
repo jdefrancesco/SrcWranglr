@@ -1,6 +1,7 @@
-//! The harness's `LLVMFuzzerTestOneInput`: a local for each parameter
+//! The statements that run one input: a local for each parameter
 //! (numbers and hand-built values first, buffers last so the final one
-//! can take the rest of the input), then the call.
+//! can take the rest of the input), then the call. `entry` puts them in
+//! the function the fuzzer calls.
 
 use std::collections::BTreeSet;
 
@@ -17,6 +18,7 @@ const RESERVED: &[&str] = &[
     "object",
     "std",
     "LLVMFuzzerTestOneInput",
+    "fuzz_one_input",
 ];
 /// Words C allows as names that C++ doesn't.
 const CPP_KEYWORDS: &[&str] = &[
@@ -83,7 +85,8 @@ const CPP_KEYWORDS: &[&str] = &[
 const INDENT: &str = "  ";
 
 pub(super) struct Body {
-    pub code: String,
+    /// The statements, indented, reading the input from `data` and `size`.
+    pub statements: String,
     pub uses_provider: bool,
     /// Standard headers the body needs, e.g. `<vector>`.
     pub includes: BTreeSet<&'static str>,
@@ -138,10 +141,7 @@ pub(super) fn body(
     lines.push("return 0;".into());
     let indented: Vec<String> = lines.iter().map(|l| format!("{INDENT}{l}")).collect();
     Body {
-        code: format!(
-            "extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {{\n{}\n}}",
-            indented.join("\n")
-        ),
+        statements: indented.join("\n"),
         uses_provider: !fills.is_empty(),
         includes: locals
             .iter()

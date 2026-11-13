@@ -21,7 +21,7 @@ The audited project is treated as hostile throughout: every walk has a limit, fi
 | Input reachability | multi-source BFS over the call graph, shortest paths | `src/analysis/reach/` |
 | Trace Back | depth-first search over syntactic reaching definitions, call-string context | `src/analysis/trace/walk.rs`, `defs.rs` |
 | Trace Where It Goes / source → sink | forward def-use following, interprocedural with a return stack | `src/analysis/trace/forward/` |
-| Fuzz targets | additive scoring with reasons; harness drafts for libFuzzer | `src/analysis/fuzz/` |
+| Fuzz targets | additive scoring with reasons; harness drafts for libFuzzer and AFL++; dictionaries of compared constants; Makefiles from the files a function needs | `src/analysis/fuzz/` |
 | Look-alike code | token-shape normalization, hashing, polynomial rolling hash | `src/analysis/lookalike/` |
 | Code like a function | 5-token shingles, bottom-k MinHash sketch, Jaccard estimate | `src/analysis/lookalike/tokens.rs` |
 | Behavior tags | call classification, BFS a few calls deep | `src/analysis/behavior.rs` |
@@ -246,6 +246,26 @@ Candidates need a total of 4, or worth of 6. `main`, operators, destructors and 
 - a TODO wherever a value must be built by hand.
 
 Names from the project go into the draft only if they can't break out of it (no quotes, `..`, absolute paths, trigraphs).
+
+The **AFL++ draft** runs the same statements in a `static` function, called from a `main` in AFL++'s persistent mode: `__AFL_FUZZ_INIT`, then `__AFL_INIT` (the fork server starts there), then `__AFL_LOOP(10000)` around each input, read from `__AFL_FUZZ_TESTCASE_BUF` (memory shared with `afl-fuzz`). The `main` is chosen at compile time: `#ifdef __AFL_FUZZ_TESTCASE_LEN` (defined by AFL++'s compilers) picks that one; otherwise a `main` reads one input from stdin, so a crash replays with any compiler.
+
+**Dictionaries** list the constants a fuzzer should splice into inputs:
+1. The function and the functions it calls, breadth-first over call edges, two calls deep (at most 100), nearest first.
+2. **Compared:** the constant arguments of calls such as `strcmp`, `strncmp`, `memcmp`, `strstr`, `strchr` and `strcspn` (library calls, and in-tree definitions of them). For calls taking a set of characters (`strspn`, `strcspn`, `strpbrk`, `strtok`, `strchr`, …), each character is a token, and the whole set isn't unless it is also compared whole. `sscanf` formats aren't tokens.
+3. **Written:** each function's character constants (found by a small lexer that skips comments, strings, raw strings, `L'x'` and C++ digit separators like `1'000`), then its string literals that aren't printf formats.
+4. Literals are decoded as the compiler would: escapes (`\n`, `\x41`, `\101`, `\u00e9`), adjacent literals joined, `u8` and raw strings; wide strings are skipped.
+5. Repeats, empty tokens, lone NUL bytes and tokens over 128 bytes (AFL++ refuses those) are dropped, and the list stops at 200. Bytes outside printable ASCII are written as `\xNN`, which both AFL++ and libFuzzer read.
+
+**Makefiles** list the files a fuzzer must link:
+1. A breadth-first walk from the function over call and use edges. Each function maps to one defining file: of several (a version per architecture), the one sharing the most leading folders with the function's own file.
+2. Linking works by file, so when a file is added, every function in it joins the walk too.
+3. A name defined in more than two files is taken for a macro written like a function (`CMD_FUNC(cmd_join) { … }`) and not followed: as one symbol, it would carry every module's handler body. Versions under `#if` in one file count once.
+4. Files under a `windows`, `win32`, `win64` or `msvc` folder are left out. Files with no function definitions in the folders already listed are added, for their globals (the index has no variables).
+5. Non-static functions (other than `main` and macro-made names) defined in two listed files are reported as clashes.
+6. `-I` folders: a breadth-first walk over the `#include` lines of the listed files, resolving each name as **G** does (beside the including file, else the project file ending with it that shares the most folders). A folder is needed when the header isn't beside the file including it: the resolved path minus the name as written.
+7. At most 300 files and 2,000 scanned for includes. Paths go in only if they are made of letters, digits and `/._-+`, so nothing is read as make syntax.
+
+Measured on UnrealIRCd (`b64_decode`, in `support.c`): the walk gives 49 of its 57 core files plus `dispatch.c` and `ircd_vars.c`, leaves out the Windows sources and `include/windows`, and flags `url_curl.c` against `url_unreal.c`. With one of those removed, `ircd.c` and the four files only it calls added, and the configure-generated `version.c`, it links and fuzzes at about 69,000 runs a second. (The harness also needed its `#include` swapped for the function's prototype: UnrealIRCd's headers aren't valid C++.)
 
 ## 8. Code matching
 

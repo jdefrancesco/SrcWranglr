@@ -14,7 +14,7 @@ impl SrcWranglrApp {
     /// Shows the project file `name` (as written in `from`) names, or says
     /// it isn't one of the project's.
     pub(super) fn open_named_file(&mut self, from: &str, name: &str) {
-        match super::includes::resolve(&self.project.graph, from, name) {
+        match crate::analysis::includes::resolve(&self.project.graph, from, name) {
             Some(file) => self.go_to_place(None, &file, 1),
             None => {
                 self.status = Status::Info(format!(

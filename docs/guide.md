@@ -62,7 +62,17 @@ A first look at an unfamiliar codebase. Click the project's name in the menu bar
     - outside input reaching it (see **Findings** below).
   - Ease favors a buffer and its length (or a string). These cost ease: values built by hand, needing an object, being `static`, and taking a file name instead of content.
   - Code under `examples/` or `tests/` counts for less, and error and logging helpers are left out.
-  - **Harness…** drafts a libFuzzer harness (`LLVMFuzzerTestOneInput` with `FuzzedDataProvider`; AFL++ builds it too) in a window where you can edit it, copy it, or save it somewhere you choose. Nothing is written unless you pick a path.
+  - **Harness…** opens what SrcWranglr drafts to fuzz the function, a tab for each. Edit each in place, copy it, or save it somewhere you choose; **Save All…** writes every file into a folder you pick, keeping any file of the same name already there. Nothing is written unless you pick a path. The window opens on the harness you looked at last.
+    - **libFuzzer harness:** `LLVMFuzzerTestOneInput` with `FuzzedDataProvider`. AFL++ can build it too, with `afl-clang-fast++ -fsanitize=fuzzer`.
+    - **AFL++ harness:** the same setup in AFL++'s persistent mode. Each input arrives in memory shared with `afl-fuzz` (no file to read), and one process runs up to 10,000 of them, so the code under test mustn't keep state between calls. Its comments give the build lines (with ASan and UBSan), a CMPLOG build to get past magic values and checksums, and the `afl-fuzz` command with `ASAN_OPTIONS` that catch more (stack use after return, and reads of fresh allocations of any size), as suggested in Chris Wellons's [tips for fuzzing with AFL++](https://nullprogram.com/blog/2025/02/05/). Built with plain clang++ instead, it runs one input from stdin, to replay a crash.
+    - **Dictionary:** tokens for `afl-fuzz -x` or libFuzzer's `-dict=`. First the constants the function and the functions it calls (two calls deep) pass to comparisons such as `strcmp`, `memcmp` and `strchr`; then the strings and characters they write. A set of characters (`strcspn(s, " \t")`, `strchr("\"'", c)`) gives each one. Format strings, wide strings and lone NUL bytes are left out. Up to 200 tokens of at most 128 bytes (AFL++'s limit), with bytes that aren't printable written as `\xNN`. Remove ones that only go into messages.
+    - **Makefile** (`fuzz_<name>.mk`, so it can't replace the project's own Makefile): `make -f fuzz_<name>.mk` builds the AFL++ fuzzer and its CMPLOG copy; `fuzz` runs afl-fuzz on `seeds/` with the dictionary; `libfuzzer` and `replay` build the other two. Each fuzzer gets its own build of the project's files, with its compiler; C files are built as C.
+      - **Sources:** the files defining the functions it calls, all the way down, and then whole files: every function in a needed file is followed too, since the linker needs all of it. Files with only globals (no functions) beside them are added, since the index doesn't follow variables. Names a macro defines like a function in many files (`CMD_FUNC(cmd_join) { … }`) aren't followed, so they don't tie every module together. Files under a `windows`, `win32`, `win64` or `msvc` folder are left out.
+      - **Include folders:** from the `#include` lines of those files and the headers they include, found the way **G** finds them.
+      - **main():** each project file's `main` is renamed (`main_src_ircd`), so a file you add by hand can't clash with the harness's. When the harness compiles in a static function's own file, it wraps the `#include` in `#define main project_main` … `#undef main` for the same reason.
+      - `make fuzz` runs afl-fuzz with the same `ASAN_OPTIONS` (the `ASAN_OPTIONS` setting).
+      - **ROOT**, the project's folder, is filled in when you save, from where you save it.
+      - **TODOs** name what it can't do: a function defined in two listed files (`url_curl.c` and `url_unreal.c`: pick one), or a path that can't be written into a Makefile safely. If the link says a symbol is undefined (usually a global), add the file defining it; files the project's configure step generates need it run first. Paths from the project go in only if they are plain path characters, so a file name can't add make syntax.
     - Lengths are set from their buffer's size, even in/out lengths passed by pointer, as in zlib's `uncompress`.
     - Anything it can't work out becomes a `TODO`.
     - Names, types and paths from the source are checked before they go into the code.
@@ -443,7 +453,7 @@ discover ──▶ extract ──▶ resolve ──▶ CodeGraph ──▶ trail
 | `src/index/extract.rs` | tree-sitter pass: declarations and unresolved references, per file |
 | `src/index/resolve.rs` | Merges declarations across files and resolves names to typed edges |
 | `src/index/signature.rs` | Each function definition's prototype and parameters, for fuzz harnesses |
-| `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`) and libFuzzer harness drafting (`harness/`) |
+| `src/analysis/fuzz/` | Fuzz target scoring (`worth.rs`, `params.rs`), libFuzzer and AFL++ harness drafting (`harness/`), dictionaries (`dictionary/`), and Makefiles (`makefile/`) |
 | `src/analysis/reach/` | Which functions and findings outside input reaches, and by what call path |
 | `src/analysis/risky/`, `heuristics.rs` | The built-in risky functions (C library, Windows, Linux kernel, weak crypto) and judging a call by its arguments |
 | `src/analysis/trace/` | Tracing a value back to where it comes from (`walk.rs`) or forward to the risky calls it reaches (`forward/`, `goes.rs`), across functions, by syntax |
@@ -500,7 +510,7 @@ cargo run --example dump_tree -- path/to/file.cpp
 SRCWRANGLR_INDEX_PATH=~/code/myproject \
   cargo test --release index_real_project -- --ignored --nocapture
 
-# ...and also write those targets' harnesses to a folder
+# ...and also write those targets' harnesses (libFuzzer and AFL++), dictionaries and Makefiles to a folder
 SRCWRANGLR_INDEX_PATH=~/code/myproject SRCWRANGLR_HARNESS_OUT=/tmp/harnesses \
   cargo test --release index_real_project -- --ignored --nocapture
 ```

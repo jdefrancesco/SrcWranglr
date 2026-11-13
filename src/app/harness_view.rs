@@ -1,49 +1,96 @@
-//! The window showing a drafted fuzz harness: edit it in place, copy it,
-//! or save it where you choose. Nothing is written unless you pick a path.
+//! The window showing what SrcWranglr drafted to fuzz a function: a
+//! harness for libFuzzer, one for AFL++, a dictionary of the constants it
+//! compares, and a Makefile building them all. Edit each in place, copy
+//! it, or save it (or all of them) where you choose. Nothing is written
+//! unless you pick a path.
 
 use std::path::{Path, PathBuf};
 
-use super::dialogs::{self, DialogState, PendingDialog};
+use super::dialogs::PendingDialog;
 use super::survey_view::{plural, ERROR_COLOR};
 use super::{SrcWranglrApp, Status};
-use crate::analysis::fuzz::harness::{draft, todo_count, Harness};
+use crate::analysis::fuzz::dictionary::{self, Dictionary};
+use crate::analysis::fuzz::harness::{draft, todo_count, Engine, Harness};
+use crate::analysis::fuzz::makefile::{self, Makefile};
 use crate::model::SymbolId;
-use crate::safe_fs;
+
+#[path = "harness_saving.rs"]
+mod saving;
+
+use saving::{Draft, Saved};
 
 const DEFAULT_SIZE: [f32; 2] = [720.0, 560.0];
 const CODE_ROWS: usize = 28;
 
-/// What the last save did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Saved {
-    To(PathBuf),
-    Failed(String),
+/// Everything drafted for one function.
+pub struct Drafts {
+    pub libfuzzer: Harness,
+    pub afl: Harness,
+    /// `None` when the function has no constants to list.
+    pub dictionary: Option<Dictionary>,
+    pub makefile: Makefile,
+}
+
+/// What the window shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Harness(Engine),
+    Dictionary,
+    Makefile,
 }
 
 pub struct HarnessView {
     function: String,
-    file_name: String,
-    /// The harness text, as edited.
-    code: String,
-    saved: Option<Saved>,
-    /// The Save As… dialog, while it is open.
-    save_dialog: Option<PendingDialog<PathBuf>>,
+    tab: Tab,
+    /// Whether the engine picked last has been looked up yet.
+    is_tab_restored: bool,
+    libfuzzer: Draft,
+    afl: Draft,
+    dictionary: Option<Draft>,
+    makefile: Draft,
+    /// The project's folder, which a saved Makefile's ROOT points to.
+    root: Option<PathBuf>,
+    /// The Save As… dialog, while it is open, and the tab it saves.
+    save_dialog: Option<(Tab, PendingDialog<PathBuf>)>,
+    /// The Save All… folder dialog, while it is open.
+    save_all_dialog: Option<PendingDialog<PathBuf>>,
+    /// What the last Save All did.
+    saved_all: Option<String>,
 }
 
 impl HarnessView {
-    pub fn new(harness: Harness, function: &str) -> Self {
+    pub fn new(drafts: Drafts, function: &str) -> Self {
+        let Drafts {
+            libfuzzer,
+            afl,
+            dictionary,
+            makefile,
+        } = drafts;
         Self {
             function: function.to_string(),
-            file_name: harness.file_name,
-            code: harness.code,
-            saved: None,
+            tab: Tab::Harness(Engine::LibFuzzer),
+            is_tab_restored: false,
+            libfuzzer: Draft::new(libfuzzer.file_name, libfuzzer.code),
+            afl: Draft::new(afl.file_name, afl.code),
+            dictionary: dictionary.map(|d| Draft::new(d.file_name, d.text)),
+            makefile: Draft::new(makefile.file_name, makefile.text),
+            root: None,
             save_dialog: None,
+            save_all_dialog: None,
+            saved_all: None,
         }
     }
 
-    /// Draws the window; returns `false` once it is closed. `root` is where
-    /// Save As… starts.
+    /// Draws the window; returns `false` once it is closed. `root` is the
+    /// project's folder: where saving starts, and what a saved Makefile's
+    /// ROOT points to.
     pub fn show(&mut self, ctx: &egui::Context, root: Option<&Path>) -> bool {
+        self.root = root.map(Path::to_path_buf);
+        if !std::mem::replace(&mut self.is_tab_restored, true) {
+            if let Some(engine) = ctx.data(|d| d.get_temp::<Engine>(engine_id())) {
+                self.tab = Tab::Harness(engine);
+            }
+        }
         let mut is_open = true;
         egui::Window::new(format!("Fuzz Harness: {}", self.function))
             .id(egui::Id::unique("fuzz_harness"))
@@ -51,31 +98,50 @@ impl HarnessView {
             .default_size(DEFAULT_SIZE)
             .resizable(true)
             .collapsible(false)
-            .show(ctx, |ui| self.contents(ui, root));
+            .show(ctx, |ui| self.contents(ui));
         is_open
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, root: Option<&Path>) {
-        self.poll_save_dialog();
+    fn draft_mut(&mut self, tab: Tab) -> Option<&mut Draft> {
+        match tab {
+            Tab::Harness(Engine::LibFuzzer) => Some(&mut self.libfuzzer),
+            Tab::Harness(Engine::Afl) => Some(&mut self.afl),
+            Tab::Dictionary => self.dictionary.as_mut(),
+            Tab::Makefile => Some(&mut self.makefile),
+        }
+    }
+
+    fn is_saving(&self) -> bool {
+        self.save_dialog.is_some() || self.save_all_dialog.is_some()
+    }
+
+    fn contents(&mut self, ui: &mut egui::Ui) {
+        self.poll_dialogs();
+        self.tabs(ui);
+        let tab = self.tab;
+        let can_save = !self.is_saving();
+        let Some(draft) = self.draft_mut(tab) else {
+            return;
+        };
+        let mut wants_save = false;
         let heading = ui.horizontal(|ui| {
-            let heading = ui.strong(&self.file_name);
-            let todos = todo_count(&self.code);
-            ui.weak(format!("{todos} {} to look at", plural(todos, "TODO")));
+            let heading = ui.strong(&draft.file_name);
+            ui.weak(summary(tab, &draft.text));
             if ui.button("Copy").clicked() {
-                ui.ctx().copy_text(self.code.clone());
+                ui.ctx().copy_text(draft.text.clone());
             }
-            let can_save = self.save_dialog.is_none();
-            if ui
+            wants_save = ui
                 .add_enabled(can_save, egui::Button::new("Save As…"))
-                .clicked()
-            {
-                self.save_as(ui.ctx(), root);
-            }
+                .clicked();
             heading.id
         });
-        match &self.saved {
+        match &draft.saved {
             Some(Saved::To(path)) => {
                 ui.weak(format!("Saved to {}", path.display()));
+            }
+            Some(Saved::Note(path, note)) => {
+                ui.weak(format!("Saved to {}.", path.display()));
+                ui.colored_label(ERROR_COLOR, note);
             }
             Some(Saved::Failed(error)) => {
                 ui.colored_label(ERROR_COLOR, format!("Could not save: {error}"));
@@ -85,80 +151,106 @@ impl HarnessView {
         ui.separator();
         egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
             ui.add(
-                egui::TextEdit::multiline(&mut self.code)
+                egui::TextEdit::multiline(&mut draft.text)
                     .code_editor()
                     .desired_rows(CODE_ROWS)
                     .desired_width(f32::INFINITY),
             )
             .labelled_by(heading.inner);
         });
+        if wants_save {
+            self.save_as(ui.ctx(), tab);
+        }
     }
 
-    /// Asks where to save, off the UI code (see `dialogs`);
-    /// `poll_save_dialog` saves there.
-    fn save_as(&mut self, ctx: &egui::Context, root: Option<&Path>) {
-        let file_name = self.file_name.clone();
-        let root = root.map(Path::to_path_buf);
-        let dialog = dialogs::spawn(ctx, move || {
-            let dialog = rfd::FileDialog::new()
-                .set_title("Save the fuzz harness")
-                .set_file_name(file_name);
-            match root {
-                Some(root) => dialog.set_directory(root),
-                None => dialog,
+    /// The harnesses, the dictionary and the Makefile; and Save All.
+    fn tabs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            for engine in Engine::ALL {
+                let label = format!("{} harness", engine.label());
+                let tab = Tab::Harness(engine);
+                if ui.selectable_label(self.tab == tab, label).clicked() {
+                    self.tab = tab;
+                    ui.ctx().data_mut(|d| d.insert_temp(engine_id(), engine));
+                }
             }
-            .save_file()
-        });
-        match dialog {
-            Ok(dialog) => self.save_dialog = Some(dialog),
-            Err(error) => self.saved = Some(Saved::Failed(error)),
-        }
-    }
-
-    fn poll_save_dialog(&mut self) {
-        let Some(state) = self.save_dialog.as_ref().map(PendingDialog::poll) else {
-            return;
-        };
-        if state != DialogState::Open {
-            self.save_dialog = None;
-        }
-        match state {
-            DialogState::Open | DialogState::Cancelled => {}
-            DialogState::Picked(path) => self.save_to(&path),
-            DialogState::Failed(error) => self.saved = Some(Saved::Failed(error)),
-        }
-    }
-
-    /// Writes the harness to `path`, replacing what's there but never
-    /// writing through a symlink.
-    fn save_to(&mut self, path: &Path) {
-        let parts = path.parent().zip(path.file_name().and_then(|n| n.to_str()));
-        let result = match parts {
-            Some((dir, name)) => {
-                safe_fs::write_atomically(dir, name, &self.code).map_err(|e| e.to_string())
+            let has_dictionary = self.dictionary.is_some();
+            let is_shown = self.tab == Tab::Dictionary;
+            let dictionary = ui
+                .add_enabled(
+                    has_dictionary,
+                    egui::Button::selectable(is_shown, "Dictionary"),
+                )
+                .on_hover_text("Tokens for afl-fuzz -x, or libFuzzer's -dict=")
+                .on_disabled_hover_text(
+                    "It and the functions it calls compare or write no strings or characters",
+                );
+            if dictionary.clicked() {
+                self.tab = Tab::Dictionary;
             }
-            None => Err("that isn't a file path".into()),
-        };
-        self.saved = Some(match result {
-            Ok(()) => Saved::To(path.to_path_buf()),
-            Err(error) => Saved::Failed(error),
+            let makefile = ui
+                .selectable_label(self.tab == Tab::Makefile, "Makefile")
+                .on_hover_text("Builds the fuzzers: make -f <file>");
+            if makefile.clicked() {
+                self.tab = Tab::Makefile;
+            }
+            ui.separator();
+            let save_all = ui
+                .add_enabled(!self.is_saving(), egui::Button::new("Save All…"))
+                .on_hover_text("Save every file into a folder you pick");
+            if save_all.clicked() {
+                self.save_all(ui.ctx());
+            }
         });
+        if let Some(saved) = &self.saved_all {
+            ui.weak(saved);
+        }
+        ui.separator();
+    }
+}
+
+/// Where the engine picked last is remembered, so the next harness opens
+/// on it.
+fn engine_id() -> egui::Id {
+    egui::Id::unique("fuzz_harness_engine")
+}
+
+/// What needs a look in a harness or the Makefile, or how many tokens a
+/// dictionary has.
+fn summary(tab: Tab, text: &str) -> String {
+    match tab {
+        Tab::Harness(_) | Tab::Makefile => {
+            let todos = todo_count(text);
+            format!("{todos} {} to look at", plural(todos, "TODO"))
+        }
+        Tab::Dictionary => {
+            let tokens = text.lines().filter(|l| l.starts_with('"')).count();
+            format!("{tokens} {}", plural(tokens, "token"))
+        }
     }
 }
 
 impl SrcWranglrApp {
-    /// Opens a drafted harness for the function defined at `file:line`.
+    /// Opens what is drafted to fuzz the function defined at `file:line`.
     pub(super) fn open_harness(&mut self, symbol: SymbolId, file: &str, line: u32) {
         let graph = &self.project.graph;
-        let drafted = graph
+        let function = graph
             .functions
             .iter()
-            .find(|f| f.symbol == symbol && f.file == file && f.line == line)
-            .and_then(|f| draft(graph, f));
+            .find(|f| f.symbol == symbol && f.file == file && f.line == line);
+        let drafted = function.and_then(|f| {
+            let dictionary = dictionary::draft(graph, f);
+            Some(Drafts {
+                libfuzzer: draft(graph, f, Engine::LibFuzzer)?,
+                afl: draft(graph, f, Engine::Afl)?,
+                makefile: makefile::draft(graph, f, dictionary.is_some())?,
+                dictionary,
+            })
+        });
         let name = graph.symbols.get(&symbol).map(|s| s.qualified_name.clone());
         match (drafted, name) {
-            (Some(harness), Some(name)) => {
-                self.harness_view = Some(HarnessView::new(harness, &name));
+            (Some(drafts), Some(name)) => {
+                self.harness_view = Some(HarnessView::new(drafts, &name));
             }
             _ => {
                 self.status = Status::Error(
@@ -181,89 +273,5 @@ impl SrcWranglrApp {
 }
 
 #[cfg(test)]
-mod tests {
-    use egui_kittest::kittest::Queryable;
-
-    use super::*;
-
-    fn view() -> HarnessView {
-        let harness = Harness {
-            file_name: "fuzz_parse.cc".into(),
-            code: "// TODO: one\nint x;  // TODO: two\n".into(),
-        };
-        HarnessView::new(harness, "parse")
-    }
-
-    #[test]
-    fn shows_the_file_name_and_what_needs_a_look() {
-        let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(900.0, 700.0))
-            .build_ui_state(
-                |ui, view: &mut HarnessView| {
-                    let ctx = ui.ctx().clone();
-                    view.show(&ctx, None);
-                },
-                view(),
-            );
-        harness.run();
-        assert!(harness.query_by_label("fuzz_parse.cc").is_some());
-        assert!(harness.query_by_label("2 TODOs to look at").is_some());
-        assert!(harness.query_by_label("Copy").is_some());
-        assert!(harness.query_by_label("Save As…").is_some());
-    }
-
-    #[test]
-    fn saving_writes_the_edited_text() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("fuzz_parse.cc");
-        let mut view = view();
-        view.code.push_str("// edited\n");
-        view.save_to(&path);
-        assert_eq!(view.saved, Some(Saved::To(path.clone())));
-        let written = std::fs::read_to_string(&path).expect("read");
-        assert!(written.ends_with("// edited\n"));
-    }
-
-    #[test]
-    fn a_path_picked_in_the_save_dialog_gets_the_harness() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("fuzz_parse.cc");
-        let picked = path.clone();
-        let mut view = view();
-        view.save_dialog =
-            Some(dialogs::spawn(&egui::Context::default(), move || Some(picked)).expect("spawn"));
-        let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(900.0, 700.0))
-            .build_ui_state(
-                |ui, view: &mut HarnessView| {
-                    let ctx = ui.ctx().clone();
-                    view.show(&ctx, None);
-                },
-                view,
-            );
-        for _ in 0..400 {
-            harness.step();
-            if harness.state().save_dialog.is_none() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(harness.state().saved, Some(Saved::To(path.clone())));
-        let written = std::fs::read_to_string(&path).expect("read");
-        assert!(written.contains("TODO: one"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn saving_never_writes_through_a_symlink() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let victim = dir.path().join("victim.txt");
-        std::fs::write(&victim, "keep").expect("write");
-        let link = dir.path().join("fuzz_parse.cc");
-        std::os::unix::fs::symlink(&victim, &link).expect("symlink");
-        let mut view = view();
-        view.save_to(&link);
-        assert!(matches!(view.saved, Some(Saved::Failed(_))));
-        assert_eq!(std::fs::read_to_string(&victim).expect("read"), "keep");
-    }
-}
+#[path = "harness_view_tests.rs"]
+mod tests;

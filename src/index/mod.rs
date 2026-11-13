@@ -561,9 +561,20 @@ mod tests {
             let definition = graph.functions.iter().find(|f| {
                 f.symbol == target.symbol && f.file == target.file && f.line == target.line
             });
-            let drafted = definition.and_then(|f| crate::analysis::fuzz::harness::draft(graph, f));
-            if let (Some(dir), Some(harness)) = (&harness_dir, drafted) {
-                std::fs::write(dir.join(&harness.file_name), &harness.code).expect("write harness");
+            use crate::analysis::fuzz::{dictionary, harness, makefile};
+            let harnesses = harness::Engine::ALL
+                .iter()
+                .filter_map(|engine| definition.and_then(|f| harness::draft(graph, f, *engine)));
+            let dictionary = definition.and_then(|f| dictionary::draft(graph, f));
+            let has_dictionary = dictionary.is_some();
+            let makefile = definition.and_then(|f| makefile::draft(graph, f, has_dictionary));
+            let drafted = harnesses
+                .map(|h| (h.file_name, h.code))
+                .chain(dictionary.map(|d| (d.file_name, d.text)))
+                .chain(makefile.map(|m| (m.file_name, m.text)));
+            for (file_name, text) in drafted {
+                let Some(dir) = &harness_dir else { break };
+                std::fs::write(dir.join(file_name), text).expect("write harness");
             }
             let reasons: Vec<String> = target
                 .reasons

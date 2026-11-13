@@ -58,7 +58,7 @@ The **Trail** view keeps the selected symbol in the center, its callers on the l
 | Import CodeQL results | Load SARIF reports from CodeQL or any other tool into Findings, with severity, CWE, and verdicts. SrcWranglr never builds your code or runs CodeQL itself. |
 | Follow a value | Trace backward to its origin, forward to risky calls, or between a source variable and a call you choose. Each path links to its source lines. |
 | Find related code | Draft `Semgrep` rules from a line, a range of lines, or several places that share a pattern, with exceptions for checks and fixed code. Manage your own and the project's rules in the **Semgrep Rules** window, which also suggests rules for the project's wrappers of risky calls. Find functions and blocks with similar syntax, or filter functions by library-call behavior. |
-| Choose fuzz targets | Rank candidates using input reach-ability, risky calls, complexity, and signatures. Draft editable `libFuzzer` harnesses, with `TODO`s where manual work is needed. |
+| Choose fuzz targets | Rank candidates using input reach-ability, risky calls, complexity, and signatures. Draft editable harnesses for `libFuzzer` and for AFL++'s persistent mode, with `TODO`s where manual work is needed, a dictionary of the constants the code compares, and a Makefile that builds them from the files the function needs. |
 | Survey a project | Inspect languages, build metadata, function complexity, IPC and capabilities, and ELF/PE/Mach-O binaries with hardening information. |
 | Review past fixes | Find commits whose messages suggest bug or security fixes, inspect the lines they still own in the current checkout, and list the CVEs they name, with links to NVD. |
 

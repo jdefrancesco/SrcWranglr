@@ -11,7 +11,7 @@ mod segments;
 mod tokenize;
 mod variables;
 
-use crate::app::includes::{file_name_at, included};
+use crate::analysis::includes::{file_name_at, included};
 use crate::app::visible::{visible, visible_lines};
 use std::borrow::Cow;
 use std::cell::RefCell;
