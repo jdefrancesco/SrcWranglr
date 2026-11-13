@@ -155,7 +155,7 @@ Everything taken from the code (names, strings, the file's path) is written into
 - its allocation size comes from the caller (`malloc`, `kmalloc`): calls whose size is a product or a sum, which can overflow;
 - its arguments go to a call that is risky whatever it's passed (`strcpy`, `system`): every call.
 
-A wrapper may check what it is passed before passing it on, so these are leads. The most called come first, with how many places call each. Pick some, then **Edit Rules for the Picked** opens their rules as a new file to test and save. Only one level is followed: a wrapper of a wrapper isn't suggested (save the first, and semgrep finds its calls). Finding them takes milliseconds (20 ms for curl), from what indexing already read.
+A wrapper may check what it is passed before passing it on, so these are leads. The most called come first, with how many places call each. Pick some, then **Add the Picked to This Project** (or **for All Projects**) has semgrep check their rules and saves them, as one file (`wrappers.yaml`); **Edit the Picked First** opens them in the editor to change and test before saving. Only one level is followed: a wrapper of a wrapper isn't suggested (save the first, and semgrep finds its calls). Finding them takes milliseconds (20 ms for curl), from what indexing already read.
 
 ## Tracing a value
 

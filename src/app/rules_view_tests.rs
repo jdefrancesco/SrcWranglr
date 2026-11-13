@@ -187,7 +187,7 @@ fn wrappers_are_looked_for_and_their_rules_edited() {
     harness.get_by_label("copy_name()");
     harness.get_by_label("Include its rule").click();
     harness.run();
-    harness.get_by_label("Edit Rules for the 1 Picked").click();
+    harness.get_by_label("Edit the 1 Picked First").click();
     harness.run();
     let yaml = &harness.state().view.editor.yaml;
     assert!(yaml.contains("id: wraps-strcpy-copy-name"), "{yaml}");
@@ -248,4 +248,69 @@ fn a_reload_keeps_edits_and_forgets_a_pick_waiting_on_them() {
     harness.run();
     assert!(harness.query_by_label("Discard Them").is_none());
     assert!(harness.state().view.editor.yaml.ends_with("# changed\n"));
+}
+
+fn found_wrapper() -> Wrapper {
+    Wrapper {
+        name: "copy_name".into(),
+        symbol: 1,
+        file: "a.c".into(),
+        line: 3,
+        callee: "strcpy".into(),
+        call_line: 3,
+        passes: Passes::Arguments,
+        passed: vec!["name".into()],
+        callers: 2,
+        severity: Severity::High,
+        why: "Unbounded.".into(),
+    }
+}
+
+#[test]
+fn picked_suggestions_are_added_in_one_step() {
+    let folders = folders();
+    let mut harness = harness(&folders, true);
+    harness.get_by_label("Suggested for This Project").click();
+    harness.run();
+    harness
+        .state_mut()
+        .view
+        .wrappers
+        .set_found(vec![found_wrapper()]);
+    harness.run();
+    harness.get_by_label("Include its rule").click();
+    harness.run();
+    harness
+        .get_by_label("Add the 1 Picked to This Project")
+        .click();
+    harness.run();
+    let Some(RulesAction::Editor(EditorAction::Check(target, yaml))) =
+        harness.state().actions.last().cloned()
+    else {
+        panic!("a check, to save: {:?}", harness.state().actions.last());
+    };
+    assert_eq!(
+        target,
+        SaveTarget::New(RuleHome::Project, "wrappers".into())
+    );
+    assert!(yaml.contains("id: wraps-strcpy-copy-name"), "{yaml}");
+    // The Rules tab shows them, with the check's progress.
+    assert!(harness
+        .state()
+        .view
+        .editor
+        .yaml
+        .contains("wraps-strcpy-copy-name"));
+    assert!(harness.query_by_label("Save for This Project").is_some());
+}
+
+#[test]
+fn a_long_rule_keeps_its_buttons_in_view() {
+    let folders = folders();
+    let mut harness = harness(&folders, true);
+    let long: String = (0..400).map(|i| format!("# line {i}\n")).collect();
+    harness.state_mut().view.edit_new(long, "long");
+    harness.run();
+    let save = harness.get_by_label("Save for This Project").rect();
+    assert!(save.bottom() < 800.0, "below the window: {save:?}");
 }

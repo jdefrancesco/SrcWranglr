@@ -16,6 +16,8 @@ use crate::analysis::Finding;
 use crate::model::CodeGraph;
 
 const RULE_ROWS: usize = 10;
+/// A rule taller than this many rows scrolls in its box.
+const MAX_RULE_ROWS: usize = 20;
 /// Matches listed at most; the count says if there were more.
 const MAX_LISTED: usize = 2_000;
 
@@ -192,14 +194,23 @@ impl RuleEditor {
             true => "Rule (semgrep YAML; read only):",
             false => "Rule (semgrep YAML; edit it as you like):",
         });
-        ui.add(
-            egui::TextEdit::multiline(&mut self.yaml)
-                .code_editor()
-                .interactive(!self.is_read_only)
-                .desired_rows(RULE_ROWS)
-                .desired_width(f32::INFINITY),
-        )
-        .labelled_by(title.id);
+        // A long rule (a suggestion for every wrapper) scrolls inside its
+        // box, so the buttons below it stay in view.
+        let max_height = ui.text_style_height(&egui::TextStyle::Monospace) * MAX_RULE_ROWS as f32;
+        egui::ScrollArea::vertical()
+            .id_salt("rule_yaml")
+            .max_height(max_height)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.yaml)
+                        .code_editor()
+                        .interactive(!self.is_read_only)
+                        .desired_rows(RULE_ROWS)
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(title.id);
+            });
         action = self.buttons(ui, saves).or(action);
         action = self.status(ui).or(action);
         action = action.or_else(|| self.match_list(ui, graph));
@@ -341,17 +352,20 @@ impl RuleEditor {
     }
 }
 
-/// The `id:` of the first rule in `yaml`, if it can name a file.
+/// The `id:` of the rule in `yaml`, if it has just one and that can name
+/// a file.
 pub fn rule_id_in(yaml: &str) -> Option<&str> {
-    let id = yaml
-        .lines()
-        .find_map(|line| {
-            line.trim_start()
-                .trim_start_matches("- ")
-                .strip_prefix("id:")
-        })?
-        .trim()
-        .trim_matches(|c| c == '"' || c == '\'');
+    let mut ids = yaml.lines().filter_map(|line| {
+        line.trim_start()
+            .trim_start_matches("- ")
+            .strip_prefix("id:")
+    });
+    let id = ids.next()?;
+    if ids.next().is_some() {
+        // Several rules: the file isn't named after the first.
+        return None;
+    }
+    let id = id.trim().trim_matches(|c| c == '"' || c == '\'');
     let is_plain = !id.is_empty()
         && id
             .chars()
@@ -455,5 +469,7 @@ mod tests {
         assert_eq!(rule_id_in("rules:\n  - id: \"q\"\n"), Some("q"));
         assert_eq!(rule_id_in("rules:\n  - id: ../../evil\n"), None);
         assert_eq!(rule_id_in("nothing"), None);
+        // A file of several rules isn't named after the first.
+        assert_eq!(rule_id_in("rules:\n  - id: a\n    x: 1\n  - id: b\n"), None);
     }
 }

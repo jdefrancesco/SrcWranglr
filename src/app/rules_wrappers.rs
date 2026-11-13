@@ -6,6 +6,7 @@
 use egui::RichText;
 
 use super::background::BackgroundJob;
+use super::rule_files::RuleHome;
 use super::survey_view::ERROR_COLOR;
 use super::visible::visible;
 use crate::analysis::wrappers::{rules_for, Passes, Wrapper};
@@ -24,6 +25,8 @@ pub enum WrapperAction {
     },
     /// Edit the rules for the wrappers picked (this text).
     Edit(String),
+    /// Check the rules for the wrappers picked, and save them there.
+    Add(RuleHome, String),
 }
 
 #[derive(Default)]
@@ -52,7 +55,9 @@ impl WrapperList {
         self.state = State::Found(Found::new(wrappers));
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<WrapperAction> {
+    /// Draws the list; `has_project`: whether rules can be added to the
+    /// project (it is a folder on disk).
+    pub fn show(&mut self, ui: &mut egui::Ui, has_project: bool) -> Option<WrapperAction> {
         self.poll();
         ui.label(
             "Functions of this project that pass their parameters straight on to a risky \
@@ -76,7 +81,7 @@ impl WrapperList {
                     .clicked()
                     .then_some(WrapperAction::Find)
             }
-            State::Found(found) => found.show(ui, &mut self.filter),
+            State::Found(found) => found.show(ui, &mut self.filter, has_project),
         }
     }
 
@@ -115,12 +120,17 @@ impl Found {
         }
     }
 
-    fn show(&mut self, ui: &mut egui::Ui, filter: &mut String) -> Option<WrapperAction> {
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        filter: &mut String,
+        has_project: bool,
+    ) -> Option<WrapperAction> {
         if self.wrappers.is_empty() {
             ui.weak("None found: no function here passes its parameters on to a risky call.");
             return None;
         }
-        let mut action = self.buttons(ui);
+        let mut action = self.buttons(ui, has_project);
         ui.add(egui::TextEdit::singleline(filter).hint_text("Filter by name or file…"));
         let needle = filter.to_lowercase();
         let shown: Vec<usize> = (0..self.wrappers.len())
@@ -138,7 +148,7 @@ impl Found {
         action
     }
 
-    fn buttons(&mut self, ui: &mut egui::Ui) -> Option<WrapperAction> {
+    fn buttons(&mut self, ui: &mut egui::Ui, has_project: bool) -> Option<WrapperAction> {
         let mut action = None;
         let count = self.picked.iter().filter(|p| **p).count();
         ui.horizontal_wrapped(|ui| {
@@ -152,25 +162,54 @@ impl Found {
             if ui.button("Pick None").clicked() {
                 self.picked.iter_mut().for_each(|p| *p = false);
             }
-            let edit = ui.add_enabled(
-                count > 0,
-                egui::Button::new(format!("Edit Rules for the {count} Picked")),
-            );
-            if edit
-                .on_hover_text("Open their rules in the editor, to test and save")
-                .clicked()
-            {
-                let chosen: Vec<&Wrapper> = self
-                    .wrappers
-                    .iter()
-                    .zip(&self.picked)
-                    .filter(|(_, p)| **p)
-                    .map(|(w, _)| w)
-                    .collect();
-                action = Some(WrapperAction::Edit(rules_for(&chosen)));
+        });
+        ui.horizontal_wrapped(|ui| {
+            let can_add = count > 0;
+            let project = ui
+                .add_enabled(
+                    can_add && has_project,
+                    egui::Button::new(format!("Add the {count} Picked to This Project")),
+                )
+                .on_hover_text(
+                    "Check their rules with semgrep and save them in the project's \
+                     .srcwranglr/semgrep/",
+                )
+                .on_disabled_hover_text("Pick some, in a project folder on disk");
+            if project.clicked() {
+                action = Some(WrapperAction::Add(RuleHome::Project, self.picked_rules()));
+            }
+            let yours = ui
+                .add_enabled(
+                    can_add,
+                    egui::Button::new(format!("Add the {count} Picked for All Projects")),
+                )
+                .on_hover_text("Check their rules with semgrep and save them in your rules");
+            if yours.clicked() {
+                action = Some(WrapperAction::Add(RuleHome::Yours, self.picked_rules()));
+            }
+            let edit = ui
+                .add_enabled(
+                    can_add,
+                    egui::Button::new(format!("Edit the {count} Picked First")),
+                )
+                .on_hover_text("Open their rules in the editor, to change and test before saving");
+            if edit.clicked() {
+                action = Some(WrapperAction::Edit(self.picked_rules()));
             }
         });
         action
+    }
+
+    /// The rules for the wrappers picked, as one file.
+    fn picked_rules(&self) -> String {
+        let chosen: Vec<&Wrapper> = self
+            .wrappers
+            .iter()
+            .zip(&self.picked)
+            .filter(|(_, p)| **p)
+            .map(|(w, _)| w)
+            .collect();
+        rules_for(&chosen)
     }
 }
 

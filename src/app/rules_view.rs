@@ -21,6 +21,9 @@ const DEFAULT_SIZE: [f32; 2] = [920.0, 620.0];
 const MAX_IDS_SHOWN: usize = 5;
 const MAX_COPY_ID_CHARS: usize = 60;
 const LIST_WIDTH: f32 = 260.0;
+/// What a file of wrappers' rules is named after, if its first rule's id
+/// can't name it.
+const WRAPPERS_ID: &str = "wrappers";
 /// What a new rule's file is named after if its id can't name one.
 const NEW_ID: &str = "my-rule";
 
@@ -240,7 +243,7 @@ impl RulesView {
     }
 
     fn wrappers_tab(&mut self, ui: &mut egui::Ui) -> Option<RulesAction> {
-        match self.wrappers.show(ui)? {
+        match self.wrappers.show(ui, self.has_project)? {
             WrapperAction::Find => Some(RulesAction::FindWrappers),
             WrapperAction::GoTo { symbol, file, line } => Some(RulesAction::GoTo {
                 symbol: Some(symbol),
@@ -248,8 +251,16 @@ impl RulesView {
                 line,
             }),
             WrapperAction::Edit(yaml) => {
-                self.edit_new(yaml, "wrappers");
+                self.edit_new(yaml, WRAPPERS_ID);
                 None
+            }
+            WrapperAction::Add(home, yaml) => {
+                self.edit_new(yaml.clone(), WRAPPERS_ID);
+                // Unsaved edits to the rule shown come first: once they are
+                // kept or discarded, Save does the rest.
+                let target = SaveTarget::New(home, WRAPPERS_ID.into());
+                let check = EditorAction::Check(target, yaml);
+                self.pending.is_none().then_some(RulesAction::Editor(check))
             }
         }
     }
