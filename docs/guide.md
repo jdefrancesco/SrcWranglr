@@ -251,7 +251,7 @@ The **Matching** pane (**Analyze → Semantic Code Matching**) finds code by wha
 
 ## Panes
 
-The source pane sits beside the graph; **⌘⇧L / Ctrl+Shift+L** moves it below. Show or hide any pane with the buttons in the menu bar, after the project's name (**Symbols**, **Source**, **Notes**, **Findings**, **Strings**, **History**, **Matching**, **TODO**, **Trace**), or hide one with the arrow in its heading. Side panes slide in and out, and dragging one shut hides it too.
+The source pane sits beside the graph; **⌘⇧L / Ctrl+Shift+L** moves it below. Show or hide any pane with the buttons in the menu bar, after the project's name (**Symbols**, **Source**, **Notes**, **Findings**, **Strings**, **History**, **Matching**, **TODO**, **Trace**), or hide one with the arrow in its heading. The Notes pane has two tabs: **Notes & Bookmarks** and the **Journal**. Side panes slide in and out, and dragging one shut hides it too.
 
 ## Sessions
 
@@ -262,7 +262,7 @@ Reopening a project puts you back where you were:
 - which of the Notes, Findings and TODO panes were open,
 - the last trace, run again.
 
-**File → Save Session As…** writes the same to a `.srcwranglr-session` file, with the project's folder, to come back to later or to hand to someone. **File → Open Session…** opens one: it indexes the project if it isn't the one open, then restores the session. A session file from someone else is checked before anything in it is used: the project folder must be a full path, and files must be inside the project.
+**File → Save Session As…** writes the same to a `.srcwranglr-session` file, with the project's folder, to come back to later or to hand to someone. After that, **File → Save Session** (**⌘S / Ctrl+S**) writes to that file again without asking; it asks for a file the first time, and for each project. **File → Open Session…** opens one (and Save Session then writes to it): it indexes the project if it isn't the one open, then restores the session. A session file from someone else is checked before anything in it is used: the project folder must be a full path, and files must be inside the project.
 
 ## Sharing an audit
 
@@ -303,6 +303,15 @@ The repository is the audited project's, so it is never read by running `git`: a
 - Right-click a line of code, then **Add TODO Here…**, to write one about that line. Its `file:line` link takes you back there.
 - **In the source** lists the `TODO`, `FIXME`, `XXX`, `HACK` and `BUG` comments in the code (and Doxygen's `\todo` and `\bug`), colored by how worrying the tag is. Filter by text or file, or show one tag. Click one to show it in the source. Tags count only in comments, in capitals, as whole words, so "a todo list" or `BUG_ON` don't. Up to 2,000 marked comments are kept per file and 100,000 in all.
 
+## Journal
+
+**Go → Write in the Journal** (**⌘J / Ctrl+J**) opens the Journal tab of the Notes pane, a free-form log of the audit saved next to the notes in `.srcwranglr/journal.json`. Write what you looked at, what you think and what to try next; entries read best as a running diary.
+
+- Write an entry in Markdown (headings, lists, `code`, links) and press **Add Entry** or **⌘Enter / Ctrl+Enter**. Each entry records when it was written, in UTC.
+- An entry is linked to where you are (the line the source shows, in the selected symbol) unless you untick **Link to …**. Click its `file:line` later to go back there.
+- Entries are listed newest first. Search them by text, file or symbol; **Edit** one in place (it is marked edited) or **Delete…** it (asked twice).
+- Like the notes file, the journal sits in a source tree that may not be yours, so it is checked when read: entries can't hold control or text-direction characters, and a place must be inside the project. A bad file leaves the journal read-only, with the reason.
+
 ## Strings
 
 **Strings** in the menu bar (or **Analyze → Strings in the Source**) lists every string literal in the project once, with how many places write it. Filter it, sort it A–Z or by use, and pick a string to see each place: file, line and the function it is in. Click one to show it in the source.
@@ -319,6 +328,7 @@ The repository is the audited project's, so it is never read by running `git`: a
 ## Source and navigation
 
 - **Clickable source:** every name the indexer resolved is underlined in the code view. Click it to explore that symbol, or hover it to see what it is.
+- **Open a header:** point at an `#include`'s file name (or a file name such as `net/core.c` in a comment) and press **G**, or right-click the line, then **Open …**. The file beside the one you're in is tried first, then the project's files whose path ends with the name; the one sharing the most folders wins (`asm/io.h` from `arch/arm/…` opens ARM's). System headers that aren't in the project can't be opened, nor yet a header with nothing the indexer picks up (only macros, say), since the source pane shows a file through its symbols.
 - **Every location, one click apart:** the code panel lists every place the selected symbol is declared or used (**◀ 3 / 11 ▶**) and names the function each use is in (*call in `DBImpl::Write`*). Click that name to explore it.
 - **Code view** with syntax highlighting that highlights the selected symbol everywhere it appears in the file, and stays smooth on large files.
 - **Searchable symbol list** with case-insensitive substring filtering, which stays fast with thousands of symbols.
@@ -385,6 +395,7 @@ srcwranglr --version
 | Switch graph view | **Trail** / **Call hierarchy** in the graph toolbar |
 | Explore a symbol | Click it in the graph, the symbol list, or the source |
 | Highlight a name everywhere in the file | Click it in the source (any name: a variable, a call); **Esc** or a click on space clears it |
+| Open an `#include`d header, or a file named in a comment | Point at it in the source and press **G**, or right-click the line, then **Open …** |
 | Cross references (every use and call), as in IDA | Point at a name in the source and press **X**, or right-click a line, then **Cross References**; **X** elsewhere, or **Go → Cross References to Selected Symbol**, for the symbol selected |
 | Step through a symbol's locations | **◀ / ▶** above the code |
 | Go back | **◀ Back** |
@@ -399,7 +410,8 @@ srcwranglr --version
 | Put the source below the graph, or back beside it | **⌘⇧L / Ctrl+Shift+L**, or **View → Source Beside / Below the Graph** |
 | Show or hide a pane | The buttons in the menu bar, or the arrow in a pane's heading; **⌘B / Ctrl+B** for Notes, **⌘⇧R / Ctrl+Shift+R** for Findings |
 | Settings (editor, tool folders, source colors, symbol list font) | **⌘, / Ctrl+,**, or **File → Settings…** |
-| Save or reopen where you were | **File → Save Session As… / Open Session…** (reopening a project restores it too) |
+| Save or reopen where you were | **⌘S / Ctrl+S** (**File → Save Session**), **File → Save Session As… / Open Session…** (reopening a project restores it too) |
+| Keep a journal of the audit | **⌘J / Ctrl+J**, or **Go → Write in the Journal**; **⌘Enter / Ctrl+Enter** adds the entry |
 | TODO list | **TODO** in the menu bar, or **Go → TODO List**; right-click a line, then **Add TODO Here…** |
 | Strings in the source, and where each is used | **Strings** in the menu bar, or **Analyze → Strings in the Source** |
 | Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Where It Comes From** |

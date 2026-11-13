@@ -11,6 +11,7 @@ mod segments;
 mod tokenize;
 mod variables;
 
+use crate::app::includes::{file_name_at, included};
 use crate::app::visible::{visible, visible_lines};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -150,6 +151,8 @@ pub enum LineAction {
     ShowDocs(String),
     /// List the cross references to this name used here.
     CrossReferences(String),
+    /// Open the file this line's `#include` names, as written.
+    OpenFile(String),
 }
 
 /// What a cross reference list is for: a project symbol, or a library
@@ -176,6 +179,9 @@ pub enum CodeEvent {
     Word(Option<String>),
     /// Pressed X over a name: list its cross references.
     CrossReferences(Referenced),
+    /// Pressed G over a file's name (an `#include`'s): open the file it
+    /// names, as written.
+    OpenFile(String),
     /// Hovering a call to a library function whose man page isn't looked
     /// up yet: its name as looked up.
     HoveredCall(String),
@@ -341,6 +347,7 @@ impl Rows<'_> {
             let (event, code) = self.show_code(ui, &line);
             let calls = self.calls_on_line(line_no);
             let names = self.names_on_line(line_no);
+            let include = included(&shown);
             let picked_lines = self
                 .focus
                 .selected_lines
@@ -350,6 +357,7 @@ impl Rows<'_> {
                 mark,
                 calls: &calls,
                 names: &names,
+                include,
                 trace_source: self.focus.trace_source,
                 picked_lines,
                 is_drafting_rule: self.focus.is_drafting_rule,
@@ -398,6 +406,18 @@ impl Rows<'_> {
         }
 
         let pointer_x = response.hover_pos()?.x;
+        // A file named under the pointer (an `#include`'s, `foo.c` in a
+        // comment): G opens it.
+        let named_file =
+            byte_at_x(line, pointer_x, x_of).and_then(|at| file_named_at(line.shown, at));
+        if let Some(file) = named_file {
+            if pressed_g(ui.ctx()) {
+                return Some(CodeEvent::OpenFile(file.to_string()));
+            }
+            response
+                .clone()
+                .on_hover_text_at_pointer(format!("G: open {}", visible(file)));
+        }
         let name = occurrence_at_x(line.occurrences, line.visible_len, pointer_x, x_of);
         let risk = line.risks.iter().find(|r| {
             let range = risk_range(r, line.line_no, line.visible_len);
@@ -655,6 +675,18 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
         });
     }
     gutter.on_hover_text(explanations.join("\n\n"))
+}
+
+/// Whether G was just pressed (and not for typing), taken.
+fn pressed_g(ctx: &egui::Context) -> bool {
+    !ctx.egui_wants_keyboard_input()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::G))
+}
+
+/// The file named at byte `at` of `line`: anywhere on an `#include` line,
+/// its header; else a C or C++ file name right under it.
+fn file_named_at(line: &str, at: usize) -> Option<&str> {
+    included(line).or_else(|| file_name_at(line, at))
 }
 
 /// Whether X was just pressed (and not for typing): taken, so nothing else

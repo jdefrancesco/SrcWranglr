@@ -12,10 +12,12 @@ use crate::graph::ViewMode;
 
 /// A session file dialog that is open.
 pub enum SessionDialog {
-    /// Saving this session file's text where the user picks.
+    /// Saving this session file's text, for the project at `root`, where
+    /// the user picks.
     Save {
         dialog: PendingDialog<PathBuf>,
         text: String,
+        root: PathBuf,
     },
     /// Picking a session file to open.
     Open(PendingDialog<PathBuf>),
@@ -114,6 +116,43 @@ impl SrcWranglrApp {
         }
     }
 
+    /// Saves the open project's session into the file it was last opened
+    /// from or saved to, or asks where if it has none.
+    pub(super) fn save_session(&mut self, ctx: &egui::Context) {
+        if !self.is_project_open {
+            return self.status = Status::Info("Open a project first.".into());
+        }
+        let Some(root) = self.project.root.clone() else {
+            return self.save_session_dialog(ctx);
+        };
+        let Some(file) = self.session_file_for(&root) else {
+            return self.save_session_dialog(ctx);
+        };
+        let text = match session::to_file(&root, &self.capture_session()) {
+            Ok(text) => text,
+            Err(error) => return self.status = Status::Error(error),
+        };
+        self.write_session(&root, &file, &text);
+    }
+
+    /// The session file last opened or saved for the project at `root`.
+    fn session_file_for(&self, root: &Path) -> Option<PathBuf> {
+        let (project, file) = self.session_file.as_ref()?;
+        same_folder(project, root).then(|| file.clone())
+    }
+
+    /// Writes `text`, the session of the project at `root`, to `path`, and
+    /// remembers it as that project's session file.
+    fn write_session(&mut self, root: &Path, path: &Path, text: &str) {
+        self.status = match write_user_file(path, text) {
+            Ok(saved) => {
+                self.session_file = Some((root.to_path_buf(), saved.clone()));
+                Status::Info(format!("Session saved to {}.", saved.display()))
+            }
+            Err(e) => Status::Error(format!("Could not save {}: {e}", path.display())),
+        };
+    }
+
     /// Asks where to save the session of the open project.
     pub(super) fn save_session_dialog(&mut self, ctx: &egui::Context) {
         let Some(root) = self.project.root.clone() else {
@@ -136,7 +175,9 @@ impl SrcWranglrApp {
                 .save_file()
         });
         match dialog {
-            Ok(dialog) => self.session_dialog = Some(SessionDialog::Save { dialog, text }),
+            Ok(dialog) => {
+                self.session_dialog = Some(SessionDialog::Save { dialog, text, root });
+            }
             Err(error) => self.status = Status::Error(error),
         }
     }
@@ -167,11 +208,8 @@ impl SrcWranglrApp {
             return;
         };
         match (state, finished) {
-            (DialogState::Picked(path), SessionDialog::Save { text, .. }) => {
-                self.status = match write_user_file(&path, &text) {
-                    Ok(saved) => Status::Info(format!("Session saved to {}.", saved.display())),
-                    Err(e) => Status::Error(format!("Could not save {}: {e}", path.display())),
-                };
+            (DialogState::Picked(path), SessionDialog::Save { text, root, .. }) => {
+                self.write_session(&root, &path, &text);
             }
             (DialogState::Picked(path), SessionDialog::Open(_)) => self.open_session(&path, ctx),
             (DialogState::Failed(error), _) => {
@@ -196,6 +234,8 @@ impl SrcWranglrApp {
                 .as_deref()
                 .is_some_and(|open| same_folder(open, &root));
         if is_open {
+            // Saving goes back into this file from now on.
+            self.session_file = Some((root, path.to_path_buf()));
             self.restore_session(&session);
             self.status = Status::Info(format!("Opened the session in {}.", path.display()));
             return;
@@ -208,21 +248,31 @@ impl SrcWranglrApp {
             return;
         }
         let is_known = self.recent.paths().iter().any(|p| same_folder(p, &root));
+        let file = path.to_path_buf();
         if is_known {
-            self.index_for_session(root, session, ctx);
+            self.index_for_session(root, session, file, ctx);
         } else {
-            self.session_to_confirm = Some((root, session));
+            self.session_to_confirm = Some((root, session, file));
         }
     }
 
-    fn index_for_session(&mut self, root: PathBuf, session: Session, ctx: &egui::Context) {
+    /// Indexes the project of the session file `file`, then restores it.
+    fn index_for_session(
+        &mut self,
+        root: PathBuf,
+        session: Session,
+        file: PathBuf,
+        ctx: &egui::Context,
+    ) {
+        // Saving goes back into this file from now on.
+        self.session_file = Some((root.clone(), file));
         self.pending_session = Some((root.clone(), session));
         self.start_indexing(root, ctx);
     }
 
     /// Asks before indexing a session file's project you haven't opened.
     pub(super) fn show_session_confirm(&mut self, ctx: &egui::Context) {
-        let Some((root, _)) = &self.session_to_confirm else {
+        let Some((root, _, _)) = &self.session_to_confirm else {
             return;
         };
         let folder = root.display().to_string();
@@ -239,8 +289,8 @@ impl SrcWranglrApp {
         });
         let (open, cancel) = response.inner;
         if open {
-            if let Some((root, session)) = self.session_to_confirm.take() {
-                self.index_for_session(root, session, ctx);
+            if let Some((root, session, file)) = self.session_to_confirm.take() {
+                self.index_for_session(root, session, file, ctx);
             }
         } else if cancel || response.should_close() {
             self.session_to_confirm = None;
@@ -397,8 +447,9 @@ mod tests {
         let waiting = app
             .session_to_confirm
             .as_ref()
-            .map(|(root, _)| root.clone());
+            .map(|(root, _, _)| root.clone());
         assert_eq!(waiting.as_deref(), Some(elsewhere.path()));
+        assert_eq!(app.session_file, None, "not until you agree");
     }
 
     #[test]
@@ -415,5 +466,44 @@ mod tests {
         other.open_session(&file, &egui::Context::default());
         assert_eq!(other.graph_view.selected(), Some(main));
         assert!(other.job.is_none(), "the open project isn't indexed again");
+        // Saving goes back into the file it was opened from.
+        assert_eq!(other.session_file_for(dir.path()), Some(file));
+    }
+
+    #[test]
+    fn save_waits_for_a_project_to_open() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut app = app_with_project(dir.path());
+        app.is_project_open = false;
+        app.save_session(&egui::Context::default());
+        assert!(app.session_dialog.is_none());
+        assert!(matches!(&app.status, Status::Info(m) if m == "Open a project first."));
+    }
+
+    #[test]
+    fn save_writes_into_the_projects_session_file_without_asking() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut app = app_with_project(dir.path());
+        let file = dir.path().join(format!("mine.{SESSION_EXTENSION}"));
+        std::fs::write(&file, "old").expect("write");
+        app.session_file = Some((dir.path().to_path_buf(), file.clone()));
+        let main = app.project.find("main").expect("main");
+        app.graph_view.select(main);
+        app.save_session(&egui::Context::default());
+        assert!(app.session_dialog.is_none(), "no dialog");
+        let (root, saved) = session::read_file(&file).expect("a session");
+        assert!(same_folder(&root, dir.path()));
+        assert_eq!(saved.symbol.as_deref(), Some("main"));
+        assert!(matches!(&app.status, Status::Info(said) if said.contains("Session saved")));
+    }
+
+    #[test]
+    fn another_projects_session_file_is_never_written() {
+        let dir = tempfile::tempdir().expect("dir");
+        let elsewhere = tempfile::tempdir().expect("dir");
+        let mut app = app_with_project(dir.path());
+        let file = elsewhere.path().join(format!("theirs.{SESSION_EXTENSION}"));
+        app.session_file = Some((elsewhere.path().to_path_buf(), file));
+        assert_eq!(app.session_file_for(dir.path()), None);
     }
 }

@@ -8,8 +8,8 @@ use super::pane_bar::Pane;
 use super::survey_view::SurveyTab;
 use super::{
     SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
-    LAYOUT_SHORTCUT, MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT, OPEN_SHORTCUT,
-    SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
+    JOURNAL_SHORTCUT, LAYOUT_SHORTCUT, MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT,
+    OPEN_SHORTCUT, SAVE_SESSION_SHORTCUT, SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
 };
 
 /// Room around the menu bar's contents. egui's default (8 by 2) crowds it
@@ -84,9 +84,19 @@ impl SrcWranglrApp {
             return Some(Command::OpenSession);
         }
         let can_save_session = self.project.root.is_some() && self.is_project_open;
-        let save_session = egui::Button::new(Command::SaveSession.label());
-        if ui.add_enabled(can_save_session, save_session).clicked() {
+        let save_session = egui::Button::new(Command::SaveSession.label())
+            .shortcut_text(ui.ctx().format_shortcut(&SAVE_SESSION_SHORTCUT));
+        let save = ui
+            .add_enabled(can_save_session, save_session)
+            .on_hover_text(
+                "Into the session file you last opened or saved; asks where the first time",
+            );
+        if save.clicked() {
             return Some(Command::SaveSession);
+        }
+        let save_as = egui::Button::new(Command::SaveSessionAs.label());
+        if ui.add_enabled(can_save_session, save_as).clicked() {
+            return Some(Command::SaveSessionAs);
         }
         let export = egui::Button::new(Command::ExportBundle.label());
         let export = ui.add_enabled(can_save_session, export).on_hover_text(
@@ -180,6 +190,11 @@ impl SrcWranglrApp {
             .shortcut_text(ui.ctx().format_shortcut(&NOTES_PANEL_SHORTCUT));
         if ui.add(panel).clicked() {
             return Some(notes);
+        }
+        let journal = egui::Button::new(Command::Journal.label())
+            .shortcut_text(ui.ctx().format_shortcut(&JOURNAL_SHORTCUT));
+        if ui.add(journal).clicked() {
+            return Some(Command::Journal);
         }
         let todos = Command::TogglePane(Pane::Todos);
         if ui.button(todos.label()).clicked() {

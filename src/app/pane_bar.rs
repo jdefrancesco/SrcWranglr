@@ -64,7 +64,7 @@ impl Pane {
         match self {
             Pane::Symbols => "Symbol List",
             Pane::Source => "Source Pane",
-            Pane::Notes => "Notes & Bookmarks",
+            Pane::Notes => "Notes, Bookmarks & Journal",
             Pane::Findings => "Findings (risky calls)",
             Pane::Strings => "Strings in the Source",
             Pane::History => "Git History (fix commits)",

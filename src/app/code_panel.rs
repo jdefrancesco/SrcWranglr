@@ -87,6 +87,8 @@ pub enum PanelAction {
         line: u32,
         name: String,
     },
+    /// Open the file `name` names, as written in `from`.
+    OpenFile { from: String, name: String },
     /// Look up the man page of the library function `name`, hovered.
     LookUpDocs(String),
     /// Its hide arrow was clicked.
@@ -247,6 +249,9 @@ impl CodePanel {
                 None
             }
             CodeEvent::CrossReferences(target) => Some(PanelAction::CrossReferences(target)),
+            CodeEvent::OpenFile(name) | CodeEvent::Line(_, LineAction::OpenFile(name)) => {
+                Some(PanelAction::OpenFile { from: file, name })
+            }
             CodeEvent::Line(line, LineAction::CrossReferences(name)) => {
                 Some(PanelAction::CrossReferencesNamed { file, line, name })
             }
@@ -266,7 +271,8 @@ impl CodePanel {
                     | LineAction::FindSimilar
                     | LineAction::AddRulePlace
                     | LineAction::UseAsRuleException
-                    | LineAction::CrossReferences(_) => return None,
+                    | LineAction::CrossReferences(_)
+                    | LineAction::OpenFile(_) => return None,
                 })
             }
             CodeEvent::Risk(id) => Some(PanelAction::ShowFinding(id)),

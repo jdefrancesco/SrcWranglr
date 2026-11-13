@@ -135,6 +135,12 @@ fn shown(ui: &mut egui::Ui, readme: &Readme, project_name: &str) {
     }
 }
 
+/// Markdown `blocks` (from `readme::shown_markdown`, so already escaped
+/// and cut to size) laid out in `ui`.
+pub fn markdown(ui: &mut egui::Ui, blocks: &[Block]) {
+    blocks.iter().for_each(|b| block(ui, b));
+}
+
 fn block(ui: &mut egui::Ui, block: &Block) {
     match block {
         Block::Heading { level, runs } => {

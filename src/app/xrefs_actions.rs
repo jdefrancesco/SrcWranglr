@@ -11,6 +11,19 @@ impl SrcWranglrApp {
         self.xrefs_view = Some(XrefsView::open(&self.project.graph, target));
     }
 
+    /// Shows the project file `name` (as written in `from`) names, or says
+    /// it isn't one of the project's.
+    pub(super) fn open_named_file(&mut self, from: &str, name: &str) {
+        match super::includes::resolve(&self.project.graph, from, name) {
+            Some(file) => self.go_to_place(None, &file, 1),
+            None => {
+                self.status = Status::Info(format!(
+                    "{name} isn't one of the project's files (a system or generated header?)."
+                ));
+            }
+        }
+    }
+
     pub(super) fn cross_references_to_selected(&mut self) {
         match self.graph_view.selected() {
             Some(id) => self.show_cross_references(&Referenced::Symbol(id)),
@@ -53,6 +66,30 @@ mod tests {
     use crate::app::SrcWranglrApp;
     use crate::code_view::Referenced;
     use crate::index::graph_of_files;
+
+    #[test]
+    fn an_included_header_is_shown_and_a_system_one_explained() {
+        let ctx = egui::Context::default();
+        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
+        let files = [
+            (
+                "src/main.c",
+                "#include \"util.h\"\nint main(void) { return 0; }\n",
+            ),
+            ("src/util.h", "int util(int x);\n"),
+        ];
+        app.project = Project::new("p", None, graph_of_files(&files));
+        app.open_named_file("src/main.c", "util.h");
+        let shown = app
+            .graph_view
+            .selected()
+            .and_then(|id| app.project.graph.symbols.get(&id));
+        assert_eq!(shown.map(|s| s.file.as_str()), Some("src/util.h"));
+        app.open_named_file("src/main.c", "stdio.h");
+        assert!(
+            matches!(&app.status, crate::app::Status::Info(said) if said.contains("stdio.h isn't"))
+        );
+    }
 
     #[test]
     fn a_name_on_a_line_opens_its_cross_references() {

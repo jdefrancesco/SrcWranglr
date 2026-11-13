@@ -4,6 +4,7 @@
 //! or one line of a file. It has text, possibly empty, and may be starred:
 //! a starred note is a bookmark. Each target has at most one note.
 
+pub mod journal;
 pub mod store;
 pub mod todo;
 pub mod triage;

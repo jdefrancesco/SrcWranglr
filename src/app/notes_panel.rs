@@ -1,9 +1,11 @@
-//! The Notes & Bookmarks panel on the right: every note of the project,
-//! newest first, filterable; click one to go there.
+//! The Notes pane on the right. Its Notes & Bookmarks tab lists every
+//! note of the project, newest first, filterable (click one to go there);
+//! its Journal tab is the project's free-form audit log.
 
 use super::layout::Layout;
 use egui::RichText;
 
+use super::journal_view::{JournalAction, JournalContext, JournalView};
 use super::notebook::Notebook;
 use super::notes_actions::target_label;
 use super::pane_bar::{self, Edge};
@@ -50,13 +52,23 @@ impl NotesFilter {
 pub enum NotesPanelAction {
     GoTo(NoteTarget),
     Edit(NoteTarget),
+    Journal(JournalAction),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum NotesTab {
+    #[default]
+    Notes,
+    Journal,
 }
 
 #[derive(Default)]
 pub struct NotesPanel {
     is_open: bool,
+    tab: NotesTab,
     filter: NotesFilter,
     query: String,
+    journal: JournalView,
 }
 
 impl NotesPanel {
@@ -68,27 +80,68 @@ impl NotesPanel {
         self.is_open = is_open;
     }
 
+    /// Opens the pane on the Journal tab, ready to write in.
+    pub fn open_journal(&mut self) {
+        self.is_open = true;
+        self.tab = NotesTab::Journal;
+        self.journal.focus_draft();
+    }
+
+    pub fn journal_view(&mut self) -> &mut JournalView {
+        &mut self.journal
+    }
+
+    /// Forgets what was being written for the last project.
+    pub fn reset_journal(&mut self) {
+        self.journal = JournalView::default();
+    }
+
     /// Draws the panel (while open, sliding in and out) at the right of
     /// `ui`.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         notebook: &Notebook,
+        journal: &JournalContext,
         layout: Layout,
     ) -> Option<NotesPanelAction> {
         let mut is_open = self.is_open;
         let shown = pane_bar::right_pane(layout.pane_id("notes_panel"), DEFAULT_WIDTH)
-            .show_collapsible(ui, &mut is_open, |ui| self.contents(ui, notebook));
+            .show_collapsible(ui, &mut is_open, |ui| self.contents(ui, notebook, journal));
         // Shut by dragging, or by its hide arrow.
         self.is_open = is_open && self.is_open;
         shown.and_then(|shown| shown.inner)
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, notebook: &Notebook) -> Option<NotesPanelAction> {
-        let title = format!("Notes & Bookmarks ({})", notebook.notes().len());
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        notebook: &Notebook,
+        journal: &JournalContext,
+    ) -> Option<NotesPanelAction> {
+        let title = match self.tab {
+            NotesTab::Notes => format!("Notes & Bookmarks ({})", notebook.notes().len()),
+            NotesTab::Journal => format!("Journal ({})", journal.journal.entries().len()),
+        };
         if pane_bar::heading(ui, title, Edge::Right) {
             self.is_open = false;
         }
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.tab, NotesTab::Notes, "Notes & Bookmarks");
+            ui.selectable_value(&mut self.tab, NotesTab::Journal, "Journal")
+                .on_hover_text("A log of your audit: what you did, theories, what to try next");
+        });
+        ui.separator();
+        match self.tab {
+            NotesTab::Notes => self.notes(ui, notebook),
+            NotesTab::Journal => self
+                .journal
+                .show(ui, journal)
+                .map(NotesPanelAction::Journal),
+        }
+    }
+
+    fn notes(&mut self, ui: &mut egui::Ui, notebook: &Notebook) -> Option<NotesPanelAction> {
         storage_line(ui, notebook);
         ui.horizontal(|ui| {
             for filter in NotesFilter::ALL {

@@ -184,6 +184,12 @@ fn shown_runs(runs: Vec<Run>, budget: &mut usize) -> Vec<Run> {
 /// A link's address is shown cut to this many characters.
 const MAX_LINK_CHARS: usize = 300;
 
+/// `text`, read as Markdown, ready to show: hidden characters marked and
+/// cut to size, as a README is.
+pub fn shown_markdown(text: &str) -> Vec<Block> {
+    ready_to_show(markdown::blocks(text)).0
+}
+
 /// `text` as blocks: Markdown when `is_markdown`, else paragraphs as
 /// written.
 pub fn blocks(text: &str, is_markdown: bool) -> Vec<Block> {

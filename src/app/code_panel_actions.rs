@@ -55,6 +55,7 @@ impl SrcWranglrApp {
             }
             PanelAction::UseAsRuleException { file, line } => self.add_rule_exception(&file, line),
             PanelAction::CrossReferences(target) => self.show_cross_references(&target),
+            PanelAction::OpenFile { from, name } => self.open_named_file(&from, &name),
             PanelAction::CrossReferencesNamed { file, line, name } => {
                 let target =
                     super::xrefs::referenced_by_name(&self.project.graph, &file, line, &name);

@@ -634,3 +634,41 @@ fn pressing_x_over_a_name_asks_for_its_cross_references() {
         Some(PanelAction::CrossReferences(Referenced::Symbol(helper)))
     );
 }
+
+#[test]
+fn pressing_g_over_an_include_asks_to_open_the_file() {
+    let source = "#include \"some_local_header.h\"\nvoid f(void) {\nint x;\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness
+        .get_by_label("#include \"some_local_header.h\"")
+        .hover();
+    harness.run();
+    harness.key_press(egui::Key::G);
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::OpenFile {
+            from: "a.cpp".into(),
+            name: "some_local_header.h".into()
+        })
+    );
+}
+
+#[test]
+fn an_include_lines_menu_offers_to_open_it() {
+    let source = "#include <linux/slab.h>\nvoid f(void) {\nint x;\n}\n";
+    let mut harness = harness_for(source, "f");
+    harness
+        .get_by_label("#include <linux/slab.h>")
+        .click_secondary();
+    harness.run();
+    harness.get_by_label("Open linux/slab.h").click();
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::OpenFile {
+            from: "a.cpp".into(),
+            name: "linux/slab.h".into()
+        })
+    );
+}

@@ -186,7 +186,7 @@ pub fn save(root: &Path, todos: &Todos) -> Result<(), String> {
 
 /// Control characters, and the ones that flip the direction text is shown
 /// in (which can make `evil.c` show as something else).
-fn is_disallowed(c: char) -> bool {
+pub(super) fn is_disallowed(c: char) -> bool {
     c.is_control()
         || matches!(
             c,

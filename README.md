@@ -84,7 +84,8 @@ Install them with `brew install semgrep cppcheck flawfinder`, or `pipx install s
 ### Keep your investigation organized
 
 - **Notes, bookmarks, and TODOs:** attach context to symbols and source lines, and browse TODO-style comments already in the code.
-- **Sessions:** reopen a project where you left off, or save a `.srcwranglr-session` file.
+- **Journal:** keep a dated log of the audit in Markdown (what you did, theories, what to try next), each entry linked back to where you wrote it.
+- **Sessions:** reopen a project where you left off, or save to a `.srcwranglr-session` file with ⌘S.
 - **Audit bundles:** export notes, bookmarks, TODOs, verdicts, and your exploration position to a `.srcwranglr-audit` file. A teammate can preview and merge it into their own checkout.
 - **Strings and documentation:** find string literals and their use sites, read project doc comments and Doxygen documentation, look up library functions in system man pages, or click the project's name to read its README, rendered from Markdown.
 - **Customizable workspace:** arrange panes, choose source themes, symbol-list and top-bar fonts, and configure your editor and tool locations.
@@ -98,6 +99,7 @@ Install them with `brew install semgrep cppcheck flawfinder`, or `pipx install s
 | Open the command palette | ⌘⇧P / Ctrl+Shift+P |
 | Explore a symbol | Click it in the graph, symbol list, or linked source |
 | Cross references to a name | Point at it in the source and press **X** |
+| Open an `#include`d header | Point at it in the source and press **G** |
 | Highlight a name in the file | Click it in the source; **Esc** clears |
 | Return to the previous symbol | **◀ Back** |
 | Trace a value, find similar code, or show docs | Right-click a source line (Shift-click line numbers to pick several) |

@@ -190,6 +190,7 @@ impl SrcWranglrApp {
         self.code_panel.set_trail(Vec::new());
         self.report_findings();
         let name = project.name.clone();
+        let is_same_folder = self.project.root.is_some() && self.project.root == project.root;
         self.project = project;
         self.notebook = Notebook::open(&self.project);
         self.note_editor = None;
@@ -198,6 +199,11 @@ impl SrcWranglrApp {
         self.refresh_verdicts();
         self.report_notes_on_open();
         self.load_todos();
+        self.load_journal();
+        if !is_same_folder {
+            // What was being written was for the other project.
+            self.notes_panel.reset_journal();
+        }
         self.todo_panel.reset();
         self.todo_panel
             .set_source_tags(super::source_tags::source_tags(&self.project.graph));

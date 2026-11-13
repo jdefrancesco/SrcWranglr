@@ -25,6 +25,9 @@ mod history_actions;
 mod history_cves;
 mod history_function;
 mod history_panel;
+pub(crate) mod includes;
+mod journal_actions;
+mod journal_view;
 pub mod launch;
 mod layout;
 mod locations;
@@ -55,6 +58,7 @@ mod session_actions;
 mod settings;
 mod settings_actions;
 mod settings_view;
+mod shortcuts;
 mod similar_actions;
 mod similar_view;
 mod source_tags;
@@ -101,9 +105,8 @@ use findings_panel::FindingsPanel;
 use layout::{Layout, SourcePlacement};
 use note_editor::NoteEditor;
 use notebook::Notebook;
-use notes_panel::{NotesPanel, NotesPanelAction};
+use notes_panel::NotesPanel;
 use palette::{Command, Entry, Palette};
-use pane_bar::Pane;
 use project::Project;
 use survey_view::{SurveyAction, SurveyTab, SurveyView};
 use symbol_list::{SymbolList, SymbolListAction};
@@ -125,6 +128,8 @@ const TRIAGE_SHORTCUT: KeyboardShortcut =
 const LAYOUT_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::L);
 const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+const SAVE_SESSION_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
+const JOURNAL_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::J);
 /// The symbol list's width until you drag it.
 const SYMBOL_LIST_WIDTH: f32 = 260.0;
 /// Entry points listed in the Go menu (all of them are reachable with ⌘E).
@@ -205,11 +210,14 @@ pub struct SrcWranglrApp {
     /// A session file's project and session, restored once that project
     /// is indexed (and dropped if another one opens instead).
     pending_session: Option<(PathBuf, session::Session)>,
-    /// A session file's project and session, waiting for you to agree to
-    /// index a folder you haven't opened before.
-    session_to_confirm: Option<(PathBuf, session::Session)>,
+    /// A session file's project, session and path, waiting for you to
+    /// agree to index a folder you haven't opened before.
+    session_to_confirm: Option<(PathBuf, session::Session, PathBuf)>,
     /// The session file dialog, while it is open.
     session_dialog: Option<session_actions::SessionDialog>,
+    /// The session file last opened or saved, and the project folder it
+    /// is for: Save Session writes there without asking.
+    session_file: Option<(PathBuf, PathBuf)>,
     /// An audit bundle file dialog, while one is open.
     bundle_dialog: Option<bundle_actions::BundleDialog>,
     /// A bundle read, waiting for the user to import it.
@@ -219,6 +227,10 @@ pub struct SrcWranglrApp {
     /// Why the TODO file couldn't be read; the list is read-only then.
     todos_error: Option<String>,
     todo_panel: todo_panel::TodoPanel,
+    /// The open project's journal, and why its file couldn't be read (it
+    /// is read-only then).
+    journal: crate::notes::journal::Journal,
+    journal_error: Option<String>,
     /// The Open Project folder dialog, while it is open.
     open_dialog: Option<dialogs::PendingDialog<PathBuf>>,
     /// Project folders opened before; kept between launches.
@@ -265,11 +277,14 @@ impl SrcWranglrApp {
             pending_session: None,
             session_to_confirm: None,
             session_dialog: None,
+            session_file: None,
             bundle_dialog: None,
             bundle_preview: None,
             todos: Default::default(),
             todos_error: None,
             todo_panel: todo_panel::TodoPanel::default(),
+            journal: Default::default(),
+            journal_error: None,
             tool_jobs: Vec::new(),
             finding_view: None,
             dangerous_editor: None,
@@ -314,52 +329,6 @@ impl SrcWranglrApp {
             None => {}
         }
         app
-    }
-
-    fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
-        // Off macOS, ⌘ is Ctrl, and Ctrl+letter edits text in text fields.
-        let can_use = cfg!(target_os = "macos") || !ctx.egui_wants_keyboard_input();
-        // ⌘⇧E before ⌘E: egui matches ⌘E even with Shift held.
-        let (open, editor, entry, bookmark, note, panel) = ctx.input_mut(|i| {
-            (
-                i.consume_shortcut(&OPEN_SHORTCUT),
-                can_use && i.consume_shortcut(&EDITOR_SHORTCUT),
-                can_use && i.consume_shortcut(&ENTRY_POINT_SHORTCUT),
-                can_use && i.consume_shortcut(&BOOKMARK_SHORTCUT),
-                can_use && i.consume_shortcut(&NOTE_SHORTCUT),
-                can_use && i.consume_shortcut(&NOTES_PANEL_SHORTCUT),
-            )
-        });
-        if can_use && ctx.input_mut(|i| i.consume_shortcut(&FINDINGS_SHORTCUT)) {
-            self.run_command(Command::TogglePane(Pane::Findings), ctx);
-        }
-        if can_use && ctx.input_mut(|i| i.consume_shortcut(&TRIAGE_SHORTCUT)) {
-            self.run_command(Command::Triage(SurveyTab::Overview), ctx);
-        }
-        if can_use && ctx.input_mut(|i| i.consume_shortcut(&LAYOUT_SHORTCUT)) {
-            self.run_command(Command::SwapSourcePane, ctx);
-        }
-        if can_use && ctx.input_mut(|i| i.consume_shortcut(&SETTINGS_SHORTCUT)) {
-            self.open_settings();
-        }
-        if panel {
-            self.run_command(Command::TogglePane(Pane::Notes), ctx);
-        }
-        if bookmark {
-            self.run_command(Command::ToggleBookmark, ctx);
-        }
-        if note {
-            self.run_command(Command::EditNote, ctx);
-        }
-        if open {
-            self.open_project_dialog(ctx);
-        }
-        if editor {
-            self.open_in_editor();
-        }
-        if entry {
-            self.go_to_entry_point();
-        }
     }
 
     /// Opens what the code panel shows in the user's editor.
@@ -513,11 +482,7 @@ impl SrcWranglrApp {
     /// The symbol list, notes, findings, source and graph of the open project.
     fn show_project_panes(&mut self, ui: &mut egui::Ui) {
         self.show_symbol_list(ui);
-        match self.notes_panel.show(ui, &self.notebook, self.layout) {
-            Some(NotesPanelAction::GoTo(target)) => self.go_to_note(&target),
-            Some(NotesPanelAction::Edit(target)) => self.edit_note(target),
-            None => {}
-        }
+        self.show_notes_panel(ui);
         self.show_todo_panel(ui);
         let finding = self
             .findings_panel
@@ -597,7 +562,9 @@ impl SrcWranglrApp {
             Command::RunFlawfinder => self.run_tool(analysis::tools::Tool::Flawfinder, ctx),
             Command::ImportSarif => self.import_sarif_dialog(ctx),
             Command::Settings => self.open_settings(),
-            Command::SaveSession => self.save_session_dialog(ctx),
+            Command::SaveSession => self.save_session(ctx),
+            Command::SaveSessionAs => self.save_session_dialog(ctx),
+            Command::Journal => self.write_in_journal(),
             Command::OpenSession => self.open_session_dialog(ctx),
             Command::ExportBundle => self.export_bundle_dialog(ctx),
             Command::ImportBundle => self.import_bundle_dialog(ctx),

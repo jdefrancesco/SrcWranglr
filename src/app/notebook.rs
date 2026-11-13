@@ -190,7 +190,7 @@ fn anchor_for(project: &Project, target: &NoteTarget) -> Option<String> {
 }
 
 /// Unix seconds now (0 if the clock is before 1970).
-fn now() -> u64 {
+pub(super) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

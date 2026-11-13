@@ -18,6 +18,8 @@ pub(super) struct MenuContext<'a> {
     pub calls: &'a [&'a str],
     /// The names on the line with cross references: its symbols and calls.
     pub names: &'a [&'a str],
+    /// The file the line's `#include` names, if it is one.
+    pub include: Option<&'a str>,
     /// The variable picked as the source of a trace to a sink, if any.
     pub trace_source: Option<&'a str>,
     /// The lines picked (first, last), when this is one of several.
@@ -36,6 +38,14 @@ pub(super) fn line_menu(response: &Response, menu: &MenuContext) -> Option<LineA
         if ui.button("Copy Line").clicked() {
             ui.ctx().copy_text(shown.to_string());
             ui.close();
+        }
+        if let Some(file) = menu.include {
+            let open = ui
+                .button(format!("Open {}", visible(file)))
+                .on_hover_text("Show the file this line includes (G over it does the same)");
+            if open.clicked() {
+                action = Some(LineAction::OpenFile(file.to_string()));
+            }
         }
         ui.separator();
         let note = if has_note {

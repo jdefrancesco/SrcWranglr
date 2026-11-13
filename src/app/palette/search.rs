@@ -40,7 +40,10 @@ pub enum Command {
     ImportSarif,
     Settings,
     SaveSession,
+    SaveSessionAs,
     OpenSession,
+    /// Opens the Journal tab of the Notes pane, ready to write in.
+    Journal,
     ExportBundle,
     ImportBundle,
     /// Opens the project's README in a window.
@@ -58,7 +61,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 46] = [
+    pub const ALL: [Command; 48] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -69,6 +72,7 @@ impl Command {
         Command::ToggleBookmark,
         Command::EditNote,
         Command::TogglePane(Pane::Notes),
+        Command::Journal,
         Command::TogglePane(Pane::Findings),
         Command::TogglePane(Pane::Strings),
         Command::TogglePane(Pane::History),
@@ -82,6 +86,7 @@ impl Command {
         Command::ImportSarif,
         Command::Settings,
         Command::SaveSession,
+        Command::SaveSessionAs,
         Command::OpenSession,
         Command::ExportBundle,
         Command::ImportBundle,
@@ -128,8 +133,10 @@ impl Command {
             Command::RunFlawfinder => "Run flawfinder",
             Command::ImportSarif => "Import SARIF Results (CodeQL, …)…",
             Command::Settings => "Settings…",
-            Command::SaveSession => "Save Session As…",
+            Command::SaveSession => "Save Session",
+            Command::SaveSessionAs => "Save Session As…",
             Command::OpenSession => "Open Session…",
+            Command::Journal => "Write in the Journal",
             Command::ExportBundle => "Export Audit Bundle…",
             Command::ImportBundle => "Import Audit Bundle…",
             Command::ShowReadme => "Show Project README",
