@@ -16,6 +16,8 @@ use crate::model::CodeGraph;
 use crate::notes::triage::TriageStatus;
 use crate::style::{severity_text_color, INPUT_COLOR};
 
+/// A tool's name longer than this (an imported report's) is cut short.
+const MAX_TOOL_CHARS: usize = 24;
 const DEFAULT_WIDTH: f32 = 340.0;
 
 #[derive(Default)]
@@ -196,6 +198,8 @@ fn finding_row(
             .color(severity_text_color(finding.severity, ui.visuals()))
             .monospace();
         ui.label(severity);
+        ui.label(tool_tag(&finding.tool))
+            .on_hover_text(format!("Found by {}", visible(&finding.tool)));
         // Rules, tools and paths may come from an imported report.
         let text = visible(&format!(
             "{}  {}:{}  {}",
@@ -226,6 +230,22 @@ fn symbol_name<'g>(finding: &Finding, graph: &'g CodeGraph) -> &'g str {
         .symbol
         .and_then(|id| graph.symbols.get(&id))
         .map_or("", |s| s.qualified_name.as_str())
+}
+
+/// The tool that found a finding, as a small tag: SrcWranglr, semgrep,
+/// cppcheck, flawfinder, git history, or an imported report's tool (cut
+/// short, hidden characters marked).
+fn tool_tag(tool: &str) -> RichText {
+    let mut chars = tool.chars();
+    let short: String = chars.by_ref().take(MAX_TOOL_CHARS).collect();
+    let name = match chars.next() {
+        Some(_) => format!("{short}…"),
+        None => short,
+    };
+    RichText::new(visible(&name).into_owned())
+        .small()
+        .monospace()
+        .weak()
 }
 
 /// What "reachable" can and can't promise.
@@ -300,6 +320,45 @@ mod tests {
             query: query.into(),
             ..Filter::default()
         }
+    }
+
+    #[test]
+    fn each_finding_says_which_tool_found_it() {
+        use egui_kittest::kittest::Queryable;
+
+        let graph = crate::index::graph_of_files(&[("x.c", "void run(char *c) { system(c); }\n")]);
+        let from = |tool: &str, rule: &str| Finding {
+            tool: tool.into(),
+            rule: rule.into(),
+            severity: Severity::Medium,
+            message: String::new(),
+            fix: None,
+            cwe: None,
+            file: "x.c".into(),
+            line: 1,
+            columns: None,
+            symbol: None,
+        };
+        let hostile = format!("CodeQL\u{202E}{}", "x".repeat(100));
+        let findings = Findings::for_graph(&graph, &Default::default())
+            .with_tool_results("semgrep", vec![from("semgrep", "my-rule")])
+            .with_tool_results(&hostile, vec![from(&hostile, "cpp/overflow")]);
+        let reach = Reach::of(&graph);
+        let harness = crate::app::fonts::test_harness().build_ui(|ui| {
+            let mut panel = FindingsPanel {
+                is_open: true,
+                filter: Filter::default(),
+            };
+            panel.show(ui, &findings, &graph, &reach, Layout::default(), None);
+        });
+        assert!(harness.query_by_label("semgrep").is_some());
+        assert!(
+            harness.query_by_label("SrcWranglr").is_some(),
+            "the built-in checks"
+        );
+        // An imported report's tool name: shortened, hidden characters marked.
+        let shown = harness.get_by_label_contains("CodeQL‹U+202E›");
+        assert!(format!("{shown:?}").contains('…'));
     }
 
     #[test]

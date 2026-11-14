@@ -79,7 +79,7 @@ A first look at an unfamiliar codebase. Click the project's name in the menu bar
 
 ## Findings
 
-**Analyze → Findings** (⌘⇧R / Ctrl+Shift+R) lists risky calls, most severe first. The calls are judged by their arguments, so a constant-size `memcpy` isn't flagged but `sprintf` with a non-literal format is. The list also includes results from semgrep, cppcheck and flawfinder (**Analyze → Run …**), and the functions on your dangerous-functions list. Filter by severity or text, and record a verdict on each one.
+**Analyze → Findings** (⌘⇧R / Ctrl+Shift+R) lists risky calls, most severe first. The calls are judged by their arguments, so a constant-size `memcpy` isn't flagged but `sprintf` with a non-literal format is. The list also includes results from semgrep, cppcheck and flawfinder (**Analyze → Run …**), and the functions on your dangerous-functions list. Filter by severity or text, and record a verdict on each one. Each row names the tool that found it, after its severity: `SrcWranglr` (the built-in checks), `semgrep`, `cppcheck`, `flawfinder`, `git history`, `source comments`, or an imported report's tool (`CodeQL`).
 
 The built-in list covers about 300 functions, each with a severity, a CWE, why it's risky and what to use instead:
 
