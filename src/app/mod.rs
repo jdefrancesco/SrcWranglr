@@ -22,6 +22,7 @@ pub(crate) mod fonts;
 mod harness_view;
 mod history;
 mod history_actions;
+mod history_changes;
 mod history_cves;
 mod history_function;
 mod history_panel;
@@ -43,6 +44,7 @@ mod opening;
 mod palette;
 mod pane_bar;
 mod project;
+mod range;
 mod readme;
 mod readme_view;
 mod rule_actions;
@@ -491,6 +493,7 @@ impl SrcWranglrApp {
                 &self.project.graph,
                 &self.reach,
                 self.layout,
+                self.history_panel.range(),
             )
             .map(|f| (f.symbol, f.file.clone(), f.line));
         if let Some((symbol, file, line)) = finding {

@@ -23,6 +23,7 @@ impl SrcWranglrApp {
 
     /// Once the history is read, marks what fix commits last changed.
     pub(super) fn poll_history(&mut self) {
+        self.history_panel.poll_changes(&self.project.graph);
         let Some(view) = self.history_panel.poll(&self.project.graph) else {
             return;
         };
@@ -46,9 +47,13 @@ impl SrcWranglrApp {
 
     pub(super) fn show_history_panel(&mut self, ui: &mut egui::Ui) {
         let selected = self.graph_view.selected();
-        let picked = self
-            .history_panel
-            .show(ui, &self.project.graph, self.layout, selected);
+        let picked = self.history_panel.show(
+            ui,
+            &self.project.graph,
+            self.layout,
+            selected,
+            self.findings.all(),
+        );
         match picked {
             Some(HistoryPanelAction::GoTo { symbol, file, line }) => {
                 self.go_to_place(symbol, &file, line);

@@ -20,6 +20,7 @@ impl SrcWranglrApp {
                 SourcePlacement::Below => Edge::Bottom,
             };
             self.code_panel.is_drafting_rule = self.is_drafting_rule();
+            self.code_panel.range = self.history_panel.shared_range();
             let action = self.code_panel.show(
                 ui,
                 &self.project.graph,

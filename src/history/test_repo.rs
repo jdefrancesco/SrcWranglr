@@ -62,3 +62,40 @@ pub fn sample() -> Option<tempfile::TempDir> {
     commit(dir.path(), &[("b.c", "int z;\nint y;\n")], "fix typo", 4);
     Some(dir)
 }
+
+const B: &str = "int b(void) {\n  int x = 1;\n  int y = 2;\n  return x + y;\n}\n";
+
+/// A repository tagged `v1` (and `v1a`, annotated; branch `old`) at its
+/// first commit, then: a.c changed, b.c moved to d.c and changed, c.h
+/// deleted, e.c added, a line of f.c removed. `None` without git.
+pub fn ranged() -> Option<tempfile::TempDir> {
+    let dir = tempfile::tempdir().expect("dir");
+    let root = dir.path();
+    if !git(root, &["init", "-q"], 0) {
+        return None;
+    }
+    let a = "int a(void) {\n  return 1;\n}\n";
+    let f = "one\ntwo\nthree\n";
+    commit(
+        root,
+        &[("a.c", a), ("b.c", B), ("c.h", "int c;\n"), ("f.c", f)],
+        "Initial",
+        1,
+    );
+    assert!(git(root, &["tag", "v1"], 1));
+    assert!(git(root, &["tag", "-a", "v1a", "-m", "release"], 1));
+    assert!(git(root, &["branch", "old"], 1));
+    commit(
+        root,
+        &[("a.c", "int a(void) {\n  int z = 2;\n  return z;\n}\n")],
+        "Change a",
+        2,
+    );
+    assert!(git(root, &["mv", "b.c", "d.c"], 3));
+    commit(root, &[("d.c", &B.replace("y = 2", "y = 3"))], "Move b", 3);
+    assert!(git(root, &["rm", "-q", "c.h"], 4));
+    assert!(git(root, &["commit", "-q", "-m", "Drop c"], 4));
+    commit(root, &[("e.c", "int e;\nint f;\n")], "Add e", 5);
+    commit(root, &[("f.c", "one\nthree\n")], "Shrink f", 6);
+    Some(dir)
+}

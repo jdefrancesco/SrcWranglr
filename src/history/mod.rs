@@ -10,6 +10,7 @@
 //! for anything that runs a program), and only committed objects are read:
 //! no working tree filters or diff drivers. Every walk has a limit.
 
+pub mod changes;
 pub mod cves;
 mod file;
 pub mod findings;

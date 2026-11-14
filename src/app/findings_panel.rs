@@ -9,6 +9,7 @@ use egui::RichText;
 use super::findings::Findings;
 use super::layout::Layout;
 use super::pane_bar::{self, Edge};
+use super::range::RangeView;
 use crate::analysis::reach::{describe, Reach};
 use crate::analysis::{Finding, Severity};
 use crate::model::CodeGraph;
@@ -36,6 +37,9 @@ pub struct Filter {
     pub only_reachable: bool,
     /// Leave out the lines fix commits last changed (git history marks).
     pub hide_history: bool,
+    /// Only findings in code the compared range changed (while one is
+    /// compared).
+    pub only_changed: bool,
 }
 
 impl FindingsPanel {
@@ -56,11 +60,12 @@ impl FindingsPanel {
         graph: &CodeGraph,
         reach: &Reach,
         layout: Layout,
+        range: Option<&RangeView>,
     ) -> Option<&'f Finding> {
         let mut is_open = self.is_open;
         let shown = pane_bar::right_pane(layout.pane_id("findings_panel"), DEFAULT_WIDTH)
             .show_collapsible(ui, &mut is_open, |ui| {
-                self.contents(ui, findings, graph, reach)
+                self.contents(ui, findings, graph, reach, range)
             });
         // Shut by dragging, or by its hide arrow.
         self.is_open = is_open && self.is_open;
@@ -73,6 +78,7 @@ impl FindingsPanel {
         findings: &'f Findings,
         graph: &CodeGraph,
         reach: &Reach,
+        range: Option<&RangeView>,
     ) -> Option<&'f Finding> {
         let title = format!("Findings ({})", findings.all().len());
         if pane_bar::heading(ui, title, Edge::Right) {
@@ -118,8 +124,30 @@ impl FindingsPanel {
             .on_hover_text("Marks from the git history: code a fix commit last changed");
             filter.hide_history = !is_shown;
         }
+        if let Some(range) = range {
+            let changed = findings
+                .all()
+                .iter()
+                .filter(|f| range.is_changed_code(&f.file, f.line))
+                .count();
+            ui.checkbox(
+                &mut filter.only_changed,
+                format!(
+                    "Only changed code since {} ({changed})",
+                    visible(&range.changes.base)
+                ),
+            )
+            .on_hover_text(
+                "Findings on lines the compared range changed, or in functions it changed \
+                 (History → Changes)",
+            );
+        }
         ui.separator();
         let rows = listed(findings, filter, graph, reach);
+        let rows = match filter.only_changed {
+            true => in_changed_code(rows, range),
+            false => rows,
+        };
         if rows.is_empty() {
             ui.weak(if findings.all().is_empty() {
                 "No risky calls found."
@@ -206,6 +234,19 @@ const REACH_HINT: &str = "Findings in functions that a call path leads to from c
     followed: calls through function pointers and callbacks aren't, so a finding left out \
     isn't proven unreachable.";
 
+/// Of `rows`, those in code `range` changed: all of them without a range.
+pub fn in_changed_code<'f>(
+    rows: Vec<(usize, &'f Finding)>,
+    range: Option<&RangeView>,
+) -> Vec<(usize, &'f Finding)> {
+    let Some(range) = range else {
+        return rows;
+    };
+    rows.into_iter()
+        .filter(|(_, f)| range.is_changed_code(&f.file, f.line))
+        .collect()
+}
+
 /// The findings `filter` lets through, in severity order.
 pub fn listed<'f>(
     findings: &'f Findings,
@@ -276,12 +317,46 @@ mod tests {
                 is_open: true,
                 filter: Filter::default(),
             };
-            panel.show(ui, &findings, &graph, &reach, Layout::default());
+            panel.show(ui, &findings, &graph, &reach, Layout::default(), None);
         });
         assert_eq!(harness.query_all_by_label("input").count(), 1);
         assert!(harness
             .query_by_label("Only what input can reach (1)")
             .is_some());
+    }
+
+    #[test]
+    fn a_compared_range_can_narrow_the_list_to_changed_code() {
+        use crate::history::changes::{ChangedFile, Changes, Hunk};
+        let source = "void copy(char *d, const char *s) { strcpy(d, s); }\n\
+                      void run(char *c) {\n  system(c);\n}\n";
+        let graph = crate::index::graph_of_files(&[("x.c", source)]);
+        let findings = Findings::for_graph(&graph, &Default::default());
+        let reach = Reach::of(&graph);
+        // run()'s opening line changed; its system() call didn't.
+        let changes = Changes {
+            base: "v1".into(),
+            files: vec![ChangedFile {
+                file: "x.c".into(),
+                renamed_from: None,
+                is_new: false,
+                hunks: vec![Hunk {
+                    first_line: 2,
+                    line_count: 1,
+                    removed: 1,
+                }],
+                added: 1,
+                removed: 1,
+            }],
+            ..Changes::default()
+        };
+        let range = RangeView::new(changes, &graph);
+        let all = listed(&findings, &Filter::default(), &graph, &reach);
+        assert_eq!(
+            rules(&in_changed_code(all.clone(), Some(&range))),
+            ["system"]
+        );
+        assert_eq!(rules(&in_changed_code(all, None)), ["strcpy", "system"]);
     }
 
     #[test]
@@ -449,6 +524,7 @@ mod tests {
                     &state.graph,
                     &Reach::default(),
                     Layout::default(),
+                    None,
                 );
                 if let Some(f) = picked {
                     state.picked = Some((f.rule.clone(), f.line));

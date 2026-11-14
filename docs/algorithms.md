@@ -27,7 +27,7 @@ The audited project is treated as hostile throughout: every walk has a limit, fi
 | Behavior tags | call classification, BFS a few calls deep | `src/analysis/behavior.rs` |
 | Rules from code | metavariable abstraction; anti-unification with LCS statement alignment | `src/analysis/similar/` |
 | Wrappers of risky calls | parameter pass-through matching | `src/analysis/wrappers.rs` |
-| Git history | keyword classification, commit walk by time, parallel blame in a sandbox process | `src/history/` |
+| Git history | keyword classification, commit walk by time, parallel blame in a sandbox process; commit-range diffs | `src/history/` |
 | SARIF import | path containment, UTF-16 column conversion | `src/analysis/sarif.rs` |
 | Binary survey | magic-byte sniffing, ELF/PE/Mach-O header and symbol checks | `src/app/survey*`, `goblin` |
 
@@ -319,6 +319,12 @@ Every value taken from the code is written into the rule's YAML double-quoted wi
 - **Blame:** the files fix commits touched most are traced first (up to 2,000), each with gitoxide's blame. A file that differs from the commit is left out, since its lines can't be matched. Only lines owned by fix commits are kept. Files are blamed by a pool of up to 6 threads sharing a work counter. When the walk was cut short, blame stops at its oldest commit.
 - **Isolation:** the repository is the audited project's, and gitoxide can't be interrupted. So the reading runs in a **separate process** (SrcWranglr itself with `--history-worker`), talking JSON over stdin and stdout, in its own process group, killed at a deadline (90 s + 30 s grace) or when you open another project. The repository is opened with no system or user config and its own config untrusted, and a `.git` with symlinked, oversized or borrowed parts is refused. The app re-bounds the answer it gets back.
 - **CVEs:** ids in fix commits' messages, validated as `CVE-YYYY-NNNN` (4 to 7 digits), grouped with a hash map in the order first seen. The NVD link is rebuilt from the validated id.
+- **Commit ranges** (`changes.rs`, the worker's `changes` and `refs` modes):
+  1. The base is resolved by hand: a reference lookup (partial names allowed: `v6.6`, `main`), else a hex id or unique prefix through the object database's prefix index, then peeled to a commit. Nothing of `rev-parse`'s syntax is evaluated.
+  2. The range's commits: a walk from the checkout with the base hidden, newest first, counted up to 200,000 and the newest 1,000 listed. A second walk the other way, up to 10,000, counts the base's own commits, so a base newer than the checkout is noticed.
+  3. A tree-to-tree diff from the base to the checkout, with rename tracking, so a moved file is compared with its old self (gitoxide looks for renames among up to 1,000 files; past that, a moved file shows as new). For each of the project's files that changed (up to 20,000), the checked-out blob must match the file on disk (else it is left out), and the two blobs (each at most 2 MB, not binary) get a histogram line diff with git's slider heuristics. Each hunk keeps the new lines' place in the checkout's numbering and how many lines it replaced; a pure removal keeps the line now after it.
+  4. In the app, the answer is bounded again (lists, texts) and every hunk is kept inside its file's lines; changed lines become sorted, merged runs searched by bisection, since Findings asks about every finding each frame. A function changed if a run overlaps its lines, or lines were removed inside it (just above its first line is the gap before it). A finding is in changed code if its line changed or its function did. A short id that is also a reference's name is refused as ambiguous, and a full id is taken as an id, so a tag named like a commit can't stand in for it.
+  Measured: miniupnp, 50 commits and 25 files, 15 ms; unleashed-firmware, 419 files, 200 ms.
 
 ## 12. SARIF import
 

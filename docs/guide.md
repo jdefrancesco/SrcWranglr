@@ -295,6 +295,12 @@ When a project that is a git checkout opens, SrcWranglr reads its history in the
 - **History** in the menu bar (or **Analyze → Git History (fix commits)**) lists the fix commits, newest first, with how many of today's lines each still owns. Filter by text, show only security fixes, or include commits whose lines are all gone. Pick one to list its lines; click one to show it in the source.
 - Its **Selected function** tab answers who last changed each line of the function you're looking at: every commit, not only fixes, newest first, with fixes picked out. Each file's history is read on demand.
 - Its **CVEs** tab lists each CVE id the fix commits' messages name (`CVE-2024-1234`), with those commits and the files each changed. Click a commit to see it, and the lines it last changed, in Fix commits; click a file to open it. **NVD ↗** opens the CVE's page on nvd.nist.gov in your browser; nothing is looked up otherwise. Fixes are often committed before their CVE is assigned (the Linux kernel's mostly are), so many fixes name none: look for security words in Fix commits too.
+- Its **Changes** tab audits what changed since a base you pick: type a tag, branch or commit id (or pick one of the tags, newest first, and branches), then **Compare**. The newer end is always the checked-out commit, so to audit `v6.6..v6.7`, check out `v6.7` and compare with `v6.6`.
+  - It lists the commits in the range, the files changed (with lines added and removed, moved and new files), and the **changed functions**: those with new or changed lines, most findings first. Click one to show it.
+  - The source marks the range: a blue bar at the gutter's right edge on each new or changed line, and a red tick where lines were removed just above (or, at the end of a file, below). Hover to see since when.
+  - Findings gets **Only changed code since …**: findings on changed lines or in changed functions.
+  - A file you changed since the commit is left out, as in blame. If the base turns out to be newer than the checkout (it has commits the checkout lacks, and the checkout none of its own), the tab says the changes run backwards. **Clear** stops marking the range.
+  - It is read like the rest of the history, in the worker process with gitoxide. The base is resolved by hand (a reference, else a commit id or a unique prefix of one), not with `git rev-parse`'s full syntax, some of which searches every commit. Files are compared with a histogram line diff, and moved files against their old selves (among up to 1,000 renamed files; past that, a moved file shows as new). Up to 20,000 changed files are compared; files over 2 MB, and binary ones, are skipped.
 - Only the checked-out commit's history counts. A file you changed since then isn't traced, since its lines can't be matched to commits; the pane says which.
 - Up to 20,000 commits are read, 2,000 fix commits kept and 2,000 files traced, within 90 seconds. On curl's 40,000-commit history that takes about a minute in the background; zlib's takes a tenth of a second.
 
@@ -423,6 +429,7 @@ srcwranglr --version
 | Save or reopen where you were | **⌘S / Ctrl+S** (**File → Save Session**), **File → Save Session As… / Open Session…** (reopening a project restores it too) |
 | Keep a journal of the audit | **⌘J / Ctrl+J**, or **Go → Write in the Journal**; **⌘Enter / Ctrl+Enter** adds the entry |
 | TODO list | **TODO** in the menu bar, or **Go → TODO List**; right-click a line, then **Add TODO Here…** |
+| Audit what changed since a tag, branch or commit | **History** in the menu bar, then **Changes**: pick a base and **Compare**; changed lines are marked in the source, and Findings can show only changed code |
 | Strings in the source, and where each is used | **Strings** in the menu bar, or **Analyze → Strings in the Source** |
 | Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Where It Comes From** |
 | Trace where a value goes | Right-click a line, then **Trace Where It Goes**; click a step to mark its path in the source |

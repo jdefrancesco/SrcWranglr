@@ -66,7 +66,9 @@ fn harness_with(history: Option<History>) -> Harness<'static, State> {
         .with_size(egui::vec2(900.0, 700.0))
         .build_ui_state(
             |ui, state: &mut State| {
-                let shown = state.panel.show(ui, &state.graph, Layout::default(), None);
+                let shown = state
+                    .panel
+                    .show(ui, &state.graph, Layout::default(), None, &[]);
                 if let Some(action) = shown {
                     state.action = Some(action);
                 }
@@ -153,7 +155,9 @@ fn the_selected_function_tab_lists_who_last_changed_its_lines() {
         .with_size(egui::vec2(900.0, 700.0))
         .build_ui_state(
             move |ui, state: &mut State| {
-                let shown = state.panel.show(ui, &state.graph, Layout::default(), parse);
+                let shown = state
+                    .panel
+                    .show(ui, &state.graph, Layout::default(), parse, &[]);
                 if let Some(action) = shown {
                     state.action = Some(action);
                 }
@@ -236,4 +240,14 @@ fn without_cves_the_tab_says_why_there_may_be_none() {
     harness.get_by_label("CVEs").click();
     harness.run();
     harness.get_by_label_contains("No CVE ids in the messages of the 40 commits read.");
+}
+
+#[test]
+fn the_changes_tab_compares_the_checkout_with_a_base() {
+    let mut harness = harness_with(Some(sample()));
+    harness.get_by_label("Changes").click();
+    harness.run();
+    // No checkout to compare in this test.
+    harness.get_by_label_contains("no git history to compare");
+    assert!(harness.state().panel.range().is_none());
 }

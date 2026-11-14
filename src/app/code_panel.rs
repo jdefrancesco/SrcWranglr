@@ -9,6 +9,7 @@ use super::findings::Findings;
 use super::locations::LocationCursor;
 use super::notebook::Notebook;
 use super::pane_bar::{self, Edge};
+use super::range::RangeView;
 use super::session::TraceSource;
 use crate::code_view::scheme::{Scheme, SourceColors};
 use crate::code_view::{
@@ -134,6 +135,9 @@ pub struct CodePanel {
     picked_lines: Option<(String, u32, u32)>,
     /// Whether a rule is being drafted, so lines' menus can add to it.
     pub is_drafting_rule: bool,
+    /// The commit range compared in the History pane, whose changed lines
+    /// the gutter marks.
+    pub range: Option<std::sync::Arc<RangeView>>,
     /// The word clicked last, highlighted wherever it is (Esc clears it).
     highlighted_word: Option<String>,
 }
@@ -379,11 +383,16 @@ impl CodePanel {
                 selected_lines: None,
                 highlighted_word: None,
                 is_drafting_rule: false,
+                changes: None,
                 colors: SourceColors::default(),
             },
             None => focus_for(symbol, location, self.should_scroll, &line_marks, &risks),
         };
         let focus = Focus {
+            changes: self
+                .range
+                .as_deref()
+                .and_then(|range| range.file_changes(file)),
             colors: self.scheme.colors(),
             trail: &trail,
             trace_source: self.trace_source.as_deref(),
@@ -599,7 +608,7 @@ fn line_marks_for<'a>(
             let mark = LineMark {
                 is_starred: mark.is_starred,
                 note,
-                warning: None,
+                ..LineMark::default()
             };
             (line, mark)
         })
@@ -676,6 +685,7 @@ fn focus_for<'a>(
             selected_lines: None,
             highlighted_word: None,
             is_drafting_rule: false,
+            changes: None,
             colors: SourceColors::default(),
         },
         None => Focus {
@@ -692,6 +702,7 @@ fn focus_for<'a>(
             selected_lines: None,
             highlighted_word: None,
             is_drafting_rule: false,
+            changes: None,
             colors: SourceColors::default(),
         },
     }

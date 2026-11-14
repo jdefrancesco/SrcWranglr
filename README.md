@@ -61,6 +61,7 @@ The **Trail** view keeps the selected symbol in the center, its callers on the l
 | Choose fuzz targets | Rank candidates using input reach-ability, risky calls, complexity, and signatures. Draft editable harnesses for `libFuzzer` and for AFL++'s persistent mode, with `TODO`s where manual work is needed, a dictionary of the constants the code compares, and a Makefile that builds them from the files the function needs. |
 | Survey a project | Inspect languages, build metadata, function complexity, IPC and capabilities, and ELF/PE/Mach-O binaries with hardening information. |
 | Review past fixes | Find commits whose messages suggest bug or security fixes, inspect the lines they still own in the current checkout, and list the CVEs they name, with links to NVD. |
+| Audit a commit range | Compare the checkout with a tag, branch or commit: list the changed functions (most findings first), files and commits, mark changed lines in the source, and narrow Findings to the changed code. |
 
 Input reach-ability helps prioritize findings. Value traces follow assignments, calls, returns, copies, out-parameters, and struct fields where supported. Both use syntax and heuristics; review the source to establish what a path means.
 

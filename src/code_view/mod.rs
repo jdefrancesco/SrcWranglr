@@ -5,6 +5,7 @@
 //! Syntax colouring uses a small hand-written tokenizer (`tokenize`);
 //! symbol-aware decoration comes from the index's occurrences.
 
+pub mod changes;
 mod line_menu;
 pub mod scheme;
 mod segments;
@@ -13,6 +14,7 @@ mod variables;
 
 use crate::analysis::includes::{file_name_at, included};
 use crate::app::visible::{visible, visible_lines};
+pub use changes::{FileChanges, LineChange, Removal};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +46,12 @@ const MARKER_RADIUS: f32 = 3.5;
 const MARKER_INSET: f32 = 9.0;
 /// Width of the bar at the gutter's left edge marking a warning.
 const WARNING_BAR_WIDTH: f32 = 3.0;
+/// The bar at the gutter's right edge marking a changed line.
+const CHANGE_BAR_WIDTH: f32 = 3.0;
+/// The tick at a line's top edge marking lines removed just before it.
+const REMOVAL_TICK_HEIGHT: f32 = 2.0;
+const CHANGED_COLOR: Color32 = Color32::from_rgb(0x4F, 0xA3, 0xE0);
+const REMOVED_COLOR: Color32 = Color32::from_rgb(0xE0, 0x6C, 0x6C);
 /// Longer lines (minified/generated code) are clipped for display; shaping a
 /// multi-megabyte line every frame would freeze the UI.
 const MAX_DISPLAY_CHARS: usize = 2_000;
@@ -69,6 +77,8 @@ pub struct Focus<'a> {
     pub should_scroll: bool,
     /// Lines of `file` with a note or bookmark.
     pub line_marks: &'a BTreeMap<u32, LineMark<'a>>,
+    /// What the commit range compared in the History pane changed here.
+    pub changes: Option<FileChanges<'a>>,
     /// Risky snippets (findings) of `file`, by line.
     pub risks: &'a BTreeMap<u32, Vec<RiskSpan<'a>>>,
     /// Where the steps of the trace path shown are in `file`.
@@ -107,6 +117,8 @@ pub struct LineMark<'a> {
     pub is_starred: bool,
     pub note: &'a str,
     pub warning: Option<LineWarning<'a>>,
+    /// What a compared commit range did to it.
+    pub change: Option<LineChange<'a>>,
 }
 
 /// A finding on a line: `title: text`, drawn as a bar in `color`.
@@ -319,7 +331,8 @@ impl Rows<'_> {
                 ui.painter()
                     .rect_filled(row, 0.0, self.focus.colors.active_line);
             }
-            let mark = self.focus.line_marks.get(&line_no);
+            let change = self.focus.changes.and_then(|c| c.at(line_no));
+            let mark = with_change(self.focus.line_marks.get(&line_no).copied(), change);
             let gutter = ui.add_sized(
                 [GUTTER_WIDTH, self.row_height],
                 egui::Label::new(
@@ -329,7 +342,7 @@ impl Rows<'_> {
                 )
                 .sense(Sense::click()),
             );
-            let gutter = match mark {
+            let gutter = match &mark {
                 Some(mark) => paint_marker(ui, gutter, mark),
                 None => gutter,
             };
@@ -354,7 +367,7 @@ impl Rows<'_> {
                 .filter(|(first, last)| is_picked && first != last);
             let menu = MenuContext {
                 shown: &shown,
-                mark,
+                mark: mark.as_ref(),
                 calls: &calls,
                 names: &names,
                 include,
@@ -659,6 +672,9 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
             visible_lines(warning.text)
         ));
     }
+    if let Some(change) = mark.change {
+        explanations.push(paint_change(ui, gutter.rect, change));
+    }
     if mark.is_starred || !mark.note.is_empty() {
         let color = if mark.is_starred {
             BOOKMARK_COLOR
@@ -675,6 +691,53 @@ fn paint_marker(ui: &egui::Ui, gutter: Response, mark: &LineMark) -> Response {
         });
     }
     gutter.on_hover_text(explanations.join("\n\n"))
+}
+
+/// Draws a compared range's mark at the gutter's right edge: a bar on a
+/// changed line, a tick above where lines were removed. What it means.
+fn paint_change(ui: &egui::Ui, gutter: egui::Rect, change: LineChange) -> String {
+    match change {
+        LineChange::Changed { base } => {
+            let bar = egui::Rect::from_min_size(
+                egui::pos2(gutter.right() - CHANGE_BAR_WIDTH, gutter.top()),
+                egui::vec2(CHANGE_BAR_WIDTH, gutter.height()),
+            );
+            ui.painter().rect_filled(bar, 0.0, CHANGED_COLOR);
+            format!("Changed since {}", visible(base))
+        }
+        LineChange::RemovedBefore { count, base } | LineChange::RemovedAfter { count, base } => {
+            let is_after = matches!(change, LineChange::RemovedAfter { .. });
+            let top = match is_after {
+                true => gutter.bottom() - REMOVAL_TICK_HEIGHT,
+                false => gutter.top(),
+            };
+            let tick = egui::Rect::from_min_size(
+                egui::pos2(gutter.right() - 3.0 * CHANGE_BAR_WIDTH, top),
+                egui::vec2(3.0 * CHANGE_BAR_WIDTH, REMOVAL_TICK_HEIGHT),
+            );
+            ui.painter().rect_filled(tick, 0.0, REMOVED_COLOR);
+            let lines = match count {
+                1 => "1 line".to_string(),
+                n => format!("{n} lines"),
+            };
+            let place = if is_after { "below" } else { "above" };
+            format!("{lines} removed just {place} since {}", visible(base))
+        }
+    }
+}
+
+/// `mark` with the compared range's `change` to its line, if any.
+fn with_change<'a>(
+    mark: Option<LineMark<'a>>,
+    change: Option<LineChange<'a>>,
+) -> Option<LineMark<'a>> {
+    match change {
+        None => mark,
+        Some(change) => Some(LineMark {
+            change: Some(change),
+            ..mark.unwrap_or_default()
+        }),
+    }
 }
 
 /// Whether G was just pressed (and not for typing), taken.

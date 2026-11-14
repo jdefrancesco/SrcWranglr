@@ -8,12 +8,14 @@ use egui::{FontId, RichText};
 use std::path::PathBuf;
 
 use super::history::{HistoryJob, HistoryView};
+use super::history_changes::ChangesTab;
 use super::history_cves::{cve_list, CveAction};
 use super::history_function::FunctionHistory;
 use super::layout::Layout;
 use super::pane_bar::{self, Edge};
+use super::range::RangeView;
 use super::visible::{self, visible};
-use crate::analysis::Severity;
+use crate::analysis::{Finding, Severity};
 use crate::history::{date, History, Limits, Strength};
 use crate::model::{CodeGraph, SymbolId};
 use crate::style::severity_text_color;
@@ -46,6 +48,8 @@ enum HistoryTab {
     Function,
     /// The CVEs named in the fix commits.
     Cves,
+    /// What changed since a base you pick.
+    Changes,
 }
 
 /// Where reading the history is.
@@ -70,6 +74,7 @@ pub struct HistoryPanel {
     root: Option<PathBuf>,
     state: HistoryState,
     function: FunctionHistory,
+    changes: ChangesTab,
     query: String,
     is_security_only: bool,
     is_owning_only: bool,
@@ -88,6 +93,7 @@ impl Default for HistoryPanel {
             root: None,
             state: HistoryState::default(),
             function: FunctionHistory::default(),
+            changes: ChangesTab::default(),
             query: String::new(),
             is_security_only: false,
             is_owning_only: true,
@@ -107,6 +113,21 @@ impl HistoryPanel {
         self.is_open = is_open;
     }
 
+    /// The commit range compared in the Changes tab, if any.
+    pub fn range(&self) -> Option<&RangeView> {
+        self.changes.range()
+    }
+
+    /// Takes in a finished comparison, whichever tab is shown.
+    pub fn poll_changes(&mut self, graph: &CodeGraph) {
+        self.changes.poll_jobs(graph);
+    }
+
+    /// The compared range, to share with the source view.
+    pub fn shared_range(&self) -> Option<std::sync::Arc<RangeView>> {
+        self.changes.shared_range()
+    }
+
     /// Starts showing what `job` reads of the checkout at `root`,
     /// forgetting the last project's.
     pub fn start(&mut self, job: HistoryJob, root: PathBuf) {
@@ -122,6 +143,7 @@ impl HistoryPanel {
         self.state = state;
         self.root = root;
         self.function.clear();
+        self.changes.clear();
         self.rows_for = None;
         self.selected = None;
     }
@@ -145,18 +167,20 @@ impl HistoryPanel {
 
     /// Draws the pane (while open, sliding in and out) at the right of
     /// `ui`.
-    /// `selected` is the symbol selected in the graph.
+    /// `selected` is the symbol selected in the graph; `findings`, the
+    /// project's, counted in the functions a compared range changed.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         graph: &CodeGraph,
         layout: Layout,
         selected: Option<SymbolId>,
+        findings: &[Finding],
     ) -> Option<HistoryPanelAction> {
         let mut is_open = self.is_open;
         let shown = pane_bar::right_pane(layout.pane_id("history_panel"), DEFAULT_WIDTH)
             .show_collapsible(ui, &mut is_open, |ui| {
-                self.contents(ui, graph, layout, selected)
+                self.contents(ui, graph, layout, selected, findings)
             });
         // Shut by dragging, or by its hide arrow.
         self.is_open = is_open && self.is_open;
@@ -169,6 +193,7 @@ impl HistoryPanel {
         graph: &CodeGraph,
         layout: Layout,
         selected: Option<SymbolId>,
+        findings: &[Finding],
     ) -> Option<HistoryPanelAction> {
         let title = match &self.state {
             HistoryState::Read(view) => {
@@ -184,11 +209,16 @@ impl HistoryPanel {
             ui.selectable_value(&mut self.tab, HistoryTab::FixCommits, "Fix commits");
             ui.selectable_value(&mut self.tab, HistoryTab::Function, "Selected function");
             ui.selectable_value(&mut self.tab, HistoryTab::Cves, "CVEs");
+            ui.selectable_value(&mut self.tab, HistoryTab::Changes, "Changes")
+                .on_hover_text("What changed since a tag, branch or commit you pick");
         });
         if self.tab == HistoryTab::Function {
             return self
                 .function
                 .show(ui, graph, self.root.as_deref(), selected);
+        }
+        if self.tab == HistoryTab::Changes {
+            return self.changes.show(ui, graph, self.root.as_deref(), findings);
         }
         let view = match &self.state {
             HistoryState::Unavailable(why) | HistoryState::Failed(why) => {
