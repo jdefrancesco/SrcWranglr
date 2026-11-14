@@ -154,6 +154,9 @@ impl SrcWranglrApp {
         if ui.button("Search Notes…").clicked() {
             self.palette.open_with(palette::NOTE_PREFIX.to_string());
         }
+        if ui.button("Search Library Calls…").clicked() {
+            self.palette.open_with(palette::LIBRARY_PREFIX.to_string());
+        }
         ui.separator();
         let entry = egui::Button::new(Command::GoToEntryPoint.label())
             .shortcut_text(ui.ctx().format_shortcut(&ENTRY_POINT_SHORTCUT));

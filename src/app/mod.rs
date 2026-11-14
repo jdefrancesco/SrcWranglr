@@ -470,6 +470,7 @@ impl eframe::App for SrcWranglrApp {
             Some(Entry::Symbol(id)) => self.graph_view.select(id),
             Some(Entry::Command(command)) => self.run_command(command, &ctx),
             Some(Entry::Note(index)) => self.go_to_note_at(index),
+            Some(Entry::LibraryFunction(index)) => self.cross_references_to_library_function(index),
             None => {}
         }
         if picked.is_some() {

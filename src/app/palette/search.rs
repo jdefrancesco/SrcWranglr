@@ -1,6 +1,8 @@
 //! What the quick-open palette lists for a query: symbols by fuzzy match on
-//! their qualified name, app commands when the query starts with `>`, or
-//! notes and bookmarks when it starts with `#`.
+//! their qualified name, app commands when the query starts with `>`, notes
+//! and bookmarks when it starts with `#`, or the library functions the
+//! project calls when it starts with `!`. Library functions aren't symbols,
+//! so a plain query lists one only when it names it exactly.
 
 use std::cmp::Reverse;
 
@@ -15,6 +17,8 @@ use crate::model::SymbolId;
 pub const COMMAND_PREFIX: char = '>';
 /// Typing this first switches the palette to notes and bookmarks.
 pub const NOTE_PREFIX: char = '#';
+/// Typing this first switches the palette to library functions called.
+pub const LIBRARY_PREFIX: char = '!';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -159,14 +163,25 @@ pub enum Entry {
     Command(Command),
     /// A note, by its index in the notes passed to `search`.
     Note(usize),
+    /// A library function the project calls, by its index in the project's
+    /// list.
+    LibraryFunction(usize),
 }
 
-/// Up to `limit` entries for `query`, best first. `symbols` are
-/// `(id, qualified name)` and `notes` `(index, label)`, in display order,
-/// used as-is for an empty query and as the tie-breaker otherwise.
-pub fn search<S: AsRef<str>, N: AsRef<str>>(
-    symbols: &[(SymbolId, S)],
-    notes: &[(usize, N)],
+/// What the palette searches besides commands, each in display order: as
+/// listed for an empty query, and the tie-breaker otherwise.
+pub struct Candidates<'a, S> {
+    /// `(id, qualified name)`.
+    pub symbols: &'a [(SymbolId, S)],
+    /// `(index, label)` of notes and bookmarks.
+    pub notes: &'a [(usize, S)],
+    /// `(index, name)` of the library functions the project calls.
+    pub library: &'a [(usize, S)],
+}
+
+/// Up to `limit` entries for `query`, best first.
+pub fn search<S: AsRef<str>>(
+    candidates: &Candidates<'_, S>,
     query: &str,
     limit: usize,
 ) -> Vec<Entry> {
@@ -175,12 +190,35 @@ pub fn search<S: AsRef<str>, N: AsRef<str>>(
         return search_commands(command_query, limit);
     }
     if let Some(note_query) = query.strip_prefix(NOTE_PREFIX) {
-        return ranked(notes, note_query, limit)
+        return ranked(candidates.notes, note_query, limit)
             .into_iter()
             .map(Entry::Note)
             .collect();
     }
-    search_symbols(symbols, query, limit)
+    if let Some(library_query) = query.strip_prefix(LIBRARY_PREFIX) {
+        return ranked(candidates.library, library_query, limit)
+            .into_iter()
+            .map(Entry::LibraryFunction)
+            .collect();
+    }
+    let named: Vec<Entry> = named_exactly(candidates.library, query)
+        .map(Entry::LibraryFunction)
+        .take(limit)
+        .collect();
+    let symbols = search_symbols(candidates.symbols, query, limit - named.len());
+    named.into_iter().chain(symbols).collect()
+}
+
+/// The keys of `items` whose text is `query`, ignoring case.
+fn named_exactly<'a, K: Copy, S: AsRef<str>>(
+    items: &'a [(K, S)],
+    query: &'a str,
+) -> impl Iterator<Item = K> + 'a {
+    let query = query.trim();
+    items
+        .iter()
+        .filter(move |(_, text)| !query.is_empty() && text.as_ref().eq_ignore_ascii_case(query))
+        .map(|(key, _)| *key)
 }
 
 fn search_commands(query: &str, limit: usize) -> Vec<Entry> {
@@ -265,8 +303,19 @@ mod tests {
         (4, "main"),
     ];
 
+    /// Library functions the project calls, most called first.
+    const LIBRARY: &[(usize, &str)] = &[(0, "memcpy"), (1, "system"), (2, "systemd_notify")];
+
+    fn candidates(notes: &'static [(usize, &'static str)]) -> Candidates<'static, &'static str> {
+        Candidates {
+            symbols: SYMBOLS,
+            notes,
+            library: LIBRARY,
+        }
+    }
+
     fn symbols(query: &str) -> Vec<SymbolId> {
-        search(SYMBOLS, NO_NOTES, query, 10)
+        search(&candidates(NO_NOTES), query, 10)
             .into_iter()
             .map(|e| match e {
                 Entry::Symbol(id) => id,
@@ -290,7 +339,7 @@ mod tests {
     #[test]
     fn empty_query_lists_symbols_in_order_up_to_the_limit() {
         let first_three: Vec<Entry> = [0, 1, 2].map(Entry::Symbol).into();
-        assert_eq!(search(SYMBOLS, NO_NOTES, "  ", 3), first_three);
+        assert_eq!(search(&candidates(NO_NOTES), "  ", 3), first_three);
     }
 
     #[test]
@@ -301,20 +350,22 @@ mod tests {
     #[test]
     fn prefix_switches_to_commands() {
         assert_eq!(
-            search(SYMBOLS, NO_NOTES, ">hier", 10).first(),
+            search(&candidates(NO_NOTES), ">hier", 10).first(),
             Some(&Entry::Command(Command::CallHierarchy))
         );
         assert_eq!(
-            search(SYMBOLS, NO_NOTES, ">", 100).len(),
+            search(&candidates(NO_NOTES), ">", 100).len(),
             Command::ALL.len()
         );
-        assert!(search(SYMBOLS, NO_NOTES, " >quit", 10).contains(&Entry::Command(Command::Quit)));
+        assert!(
+            search(&candidates(NO_NOTES), " >quit", 10).contains(&Entry::Command(Command::Quit))
+        );
     }
 
     #[test]
     fn about_is_a_command() {
         assert_eq!(
-            search(SYMBOLS, NO_NOTES, ">about", 10).first(),
+            search(&candidates(NO_NOTES), ">about", 10).first(),
             Some(&Entry::Command(Command::About))
         );
         assert_eq!(Command::About.label(), "About SrcWranglr");
@@ -322,19 +373,51 @@ mod tests {
 
     #[test]
     fn hash_prefix_searches_notes() {
-        assert_eq!(search(SYMBOLS, NOTES, "#unchecked", 10), [Entry::Note(1)]);
         assert_eq!(
-            search(SYMBOLS, NOTES, "#", 10),
+            search(&candidates(NOTES), "#unchecked", 10),
+            [Entry::Note(1)]
+        );
+        assert_eq!(
+            search(&candidates(NOTES), "#", 10),
             [Entry::Note(0), Entry::Note(1)]
         );
-        assert!(search(SYMBOLS, NO_NOTES, "# write", 10).is_empty());
+        assert!(search(&candidates(NO_NOTES), "# write", 10).is_empty());
         // Without the prefix, notes aren't searched.
-        assert!(!search(SYMBOLS, NOTES, "unchecked", 10).contains(&Entry::Note(1)));
+        assert!(!search(&candidates(NOTES), "unchecked", 10).contains(&Entry::Note(1)));
+    }
+
+    #[test]
+    fn bang_prefix_searches_library_functions() {
+        assert_eq!(
+            search(&candidates(NO_NOTES), "!system", 10),
+            [Entry::LibraryFunction(1), Entry::LibraryFunction(2)]
+        );
+        // Alone, it lists them in the project's order: most called first.
+        let all: Vec<Entry> = [0, 1, 2].map(Entry::LibraryFunction).into();
+        assert_eq!(search(&candidates(NO_NOTES), " !", 10), all);
+        assert!(search(&candidates(NO_NOTES), "!write", 10).is_empty());
+    }
+
+    #[test]
+    fn a_plain_query_naming_a_library_function_lists_it_first() {
+        let found = search(&candidates(NO_NOTES), "memcpy", 10);
+        assert_eq!(found, [Entry::LibraryFunction(0)]);
+        let found = search(&candidates(NO_NOTES), " System ", 10);
+        assert_eq!(found.first(), Some(&Entry::LibraryFunction(1)));
+        // Only an exact name: part of one is left to the `!` search.
+        assert!(search(&candidates(NO_NOTES), "memc", 10).is_empty());
+        assert_eq!(
+            search(&candidates(NO_NOTES), "write", 10).first(),
+            Some(&Entry::Symbol(2))
+        );
     }
 
     #[test]
     fn limit_caps_results_keeping_the_best() {
-        assert_eq!(search(SYMBOLS, NO_NOTES, "l", 2).len(), 2);
-        assert_eq!(search(SYMBOLS, NO_NOTES, "write", 1), [Entry::Symbol(2)]);
+        assert_eq!(search(&candidates(NO_NOTES), "l", 2).len(), 2);
+        assert_eq!(
+            search(&candidates(NO_NOTES), "write", 1),
+            [Entry::Symbol(2)]
+        );
     }
 }

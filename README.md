@@ -98,6 +98,7 @@ Install them with `brew install semgrep cppcheck flawfinder`, or `pipx install s
 | Open a project | ⌘O / Ctrl+O |
 | Find a symbol | ⌘P / Ctrl+P |
 | Open the command palette | ⌘⇧P / Ctrl+Shift+P |
+| Find calls to a library function | ⌘P / Ctrl+P, then `!system` |
 | Explore a symbol | Click it in the graph, symbol list, or linked source |
 | Cross references to a name | Point at it in the source and press **X** |
 | Open an `#include`d header | Point at it in the source and press **G** |

@@ -1,12 +1,22 @@
 //! The currently loaded project: its graph plus indexes computed once per
-//! load (symbols in name order, how many symbols use each one).
+//! load (symbols in name order, how many symbols use each one, the library
+//! functions it calls).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::analysis::risky::bare_library_name;
 use crate::demo::demo_codebase;
 use crate::model::{CodeGraph, EdgeKind, Symbol, SymbolId};
+
+/// A library function the project calls: one it doesn't define.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryFunction {
+    /// Bare, as cross references know it: `memcpy` for `std::memcpy`.
+    pub name: String,
+    pub calls: usize,
+}
 
 pub struct Project {
     pub name: String,
@@ -22,6 +32,10 @@ pub struct Project {
     usage: HashMap<SymbolId, usize>,
     /// Symbols by qualified name (overloads and repeated names share one).
     by_qualified_name: HashMap<String, Vec<SymbolId>>,
+    /// Most called first.
+    library_functions: Vec<LibraryFunction>,
+    /// `(index in library_functions, name)`, for quick-open search.
+    library_names: Vec<(usize, String)>,
 }
 
 impl Project {
@@ -46,6 +60,12 @@ impl Project {
                     map
                 },
             );
+        let library_functions = library_functions(&graph);
+        let library_names = library_functions
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i, f.name.clone()))
+            .collect();
         Self {
             name: name.into(),
             root,
@@ -54,6 +74,8 @@ impl Project {
             search_names,
             usage,
             by_qualified_name,
+            library_functions,
+            library_names,
         }
     }
 
@@ -81,6 +103,16 @@ impl Project {
         &self.search_names
     }
 
+    /// The library functions the project calls, most called first.
+    pub fn library_functions(&self) -> &[LibraryFunction] {
+        &self.library_functions
+    }
+
+    /// `(index in library_functions, name)`, most called first.
+    pub fn library_candidates(&self) -> &[(usize, String)] {
+        &self.library_names
+    }
+
     /// Every symbol, in qualified-name order.
     pub fn symbols_by_name(&self) -> impl Iterator<Item = &Symbol> {
         self.sorted_ids
@@ -100,6 +132,27 @@ impl Project {
     pub fn usage(&self, id: SymbolId) -> usize {
         self.usage.get(&id).copied().unwrap_or(0)
     }
+}
+
+/// Calls to functions the project doesn't define, counted by bare name
+/// (a namespace's other than `std` has none), most called first, then by
+/// name.
+fn library_functions(graph: &CodeGraph) -> Vec<LibraryFunction> {
+    let mut calls: HashMap<&str, usize> = HashMap::new();
+    for call in graph.external_calls.values().flatten() {
+        if let Some(name) = bare_library_name(&call.name) {
+            *calls.entry(name).or_default() += 1;
+        }
+    }
+    let mut functions: Vec<LibraryFunction> = calls
+        .into_iter()
+        .map(|(name, calls)| LibraryFunction {
+            name: name.to_string(),
+            calls,
+        })
+        .collect();
+    functions.sort_by(|a, b| b.calls.cmp(&a.calls).then_with(|| a.name.cmp(&b.name)));
+    functions
 }
 
 fn usage_counts(graph: &CodeGraph) -> HashMap<SymbolId, usize> {
@@ -157,9 +210,38 @@ mod tests {
     }
 
     #[test]
+    fn library_functions_are_counted_by_bare_name_most_called_first() {
+        let graph = crate::index::graph_of_files(&[
+            (
+                "x.c",
+                "void f(char *d, char *s) { system(d); memcpy(d, s, 1); system(s); }\n",
+            ),
+            (
+                "y.cc",
+                "void g(char *d) { std::memcpy(d, d, 1); ::abort(); boost::thing(d); f(d, d); }\n",
+            ),
+        ]);
+        let project = Project::new("t", None, graph);
+        let found: Vec<(&str, usize)> = project
+            .library_functions()
+            .iter()
+            .map(|f| (f.name.as_str(), f.calls))
+            .collect();
+        // Not boost::thing (no bare name), not f (the project's own).
+        assert_eq!(found, [("memcpy", 2), ("system", 2), ("abort", 1)]);
+        let names: Vec<(usize, &str)> = project
+            .library_candidates()
+            .iter()
+            .map(|(i, name)| (*i, name.as_str()))
+            .collect();
+        assert_eq!(names, [(0, "memcpy"), (1, "system"), (2, "abort")]);
+    }
+
+    #[test]
     fn empty_project_has_no_symbols() {
         let project = Project::empty();
         assert_eq!(project.symbols_by_name().count(), 0);
+        assert!(project.library_functions().is_empty());
         assert!(project.root.is_none());
     }
 }

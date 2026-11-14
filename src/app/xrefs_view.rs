@@ -53,6 +53,12 @@ pub struct XrefsView {
 const MAX_SNIPPET_CHARS: usize = 200;
 
 impl XrefsView {
+    /// What the references are to: `helper`, `memcpy()`.
+    #[cfg(test)]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn open(graph: &CodeGraph, target: &Referenced) -> Self {
         let (found, is_cut_short) = xrefs(graph, target);
         let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();

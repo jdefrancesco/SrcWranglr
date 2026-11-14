@@ -24,6 +24,22 @@ impl SrcWranglrApp {
         }
     }
 
+    /// The cross references to the library function at `index` in the
+    /// project's list, as picked in the palette.
+    pub(super) fn cross_references_to_library_function(&mut self, index: usize) {
+        match self.project.library_functions().get(index) {
+            Some(function) => {
+                let target = Referenced::Library(function.name.clone());
+                self.show_cross_references(&target);
+            }
+            None => {
+                self.status = Status::Info(
+                    "That library function is no longer called in the project.".into(),
+                );
+            }
+        }
+    }
+
     pub(super) fn cross_references_to_selected(&mut self) {
         match self.graph_view.selected() {
             Some(id) => self.show_cross_references(&Referenced::Symbol(id)),
@@ -89,6 +105,23 @@ mod tests {
         assert!(
             matches!(&app.status, crate::app::Status::Info(said) if said.contains("stdio.h isn't"))
         );
+    }
+
+    #[test]
+    fn a_library_function_picked_in_the_palette_opens_its_cross_references() {
+        let ctx = egui::Context::default();
+        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
+        let source = "void a(char *d) { system(d); memcpy(d, d, 4); system(d); }\n";
+        app.project = Project::new("p", None, graph_of_files(&[("x.c", source)]));
+        app.cross_references_to_library_function(0);
+        assert_eq!(
+            app.xrefs_view.as_ref().map(|view| view.name()),
+            Some("system()")
+        );
+        app.xrefs_view = None;
+        app.cross_references_to_library_function(9);
+        assert!(app.xrefs_view.is_none());
+        assert!(matches!(app.status, crate::app::Status::Info(_)));
     }
 
     #[test]

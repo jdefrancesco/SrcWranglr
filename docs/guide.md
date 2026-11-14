@@ -340,6 +340,8 @@ The repository is the audited project's, so it is never read by running `git`: a
 
 - **⌘P / Ctrl+P:** jump to any symbol by fuzzy name (`dbimplwr` finds `DBImpl::Write`).
 - **⌘⇧P / Ctrl+Shift+P**, or type `>`: run a command (open, re-index, switch views, back, fit…).
+- **Type `#`** (or **Go → Search Notes…**): search your notes and bookmarks.
+- **Type `!`** (or **Go → Search Library Calls…**): search the library functions the project calls, such as `!system` or `!memcpy`. Each row says how many calls there are, and `!` on its own lists them all, most called first. Enter opens the cross references window with every call. A library function isn't one of the project's symbols, so without the `!` the palette lists one only when you type its whole name (`system`).
 
 ## Source and navigation
 
@@ -408,6 +410,7 @@ srcwranglr --version
 |---|---|
 | Jump to a symbol | **⌘P / Ctrl+P**, type part of its name, Enter |
 | Run a command | **⌘⇧P / Ctrl+Shift+P** (or type `>` in the palette) |
+| Find every call to a library function (`system`, `memcpy`) | **⌘P / Ctrl+P**, type `!system`, Enter; or **Go → Search Library Calls…** |
 | Switch graph view | **Trail** / **Call hierarchy** in the graph toolbar |
 | Explore a symbol | Click it in the graph, the symbol list, or the source |
 | Highlight a name everywhere in the file | Click it in the source (any name: a variable, a call); **Esc** or a click on space clears it |

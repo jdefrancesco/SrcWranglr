@@ -1,15 +1,17 @@
 //! Quick-open palette: ⌘P / Ctrl+P jumps to any symbol by fuzzy name,
-//! ⌘⇧P / Ctrl+Shift+P (or typing `>`) runs an app command.
+//! ⌘⇧P / Ctrl+Shift+P (or typing `>`) runs an app command, `#` searches
+//! notes and `!` the library functions the project calls.
 //! ↑/↓ move, Enter picks, Esc or clicking outside closes.
 
 mod search;
 
 use egui::{Align2, Id, Key, KeyboardShortcut, Modifiers, RichText};
 
-use super::project::Project;
-use search::search;
+use super::project::{LibraryFunction, Project};
+use super::visible::visible;
+use search::{search, Candidates};
 pub use search::{Command, Entry};
-pub use search::{COMMAND_PREFIX, NOTE_PREFIX};
+pub use search::{COMMAND_PREFIX, LIBRARY_PREFIX, NOTE_PREFIX};
 
 pub const OPEN_SYMBOL_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND, Key::P);
@@ -126,7 +128,7 @@ impl Palette {
     ) -> Option<Entry> {
         ui.set_width(WIDTH);
         let edit = egui::TextEdit::singleline(&mut self.query)
-            .hint_text("Go to symbol…   (> commands, # notes)")
+            .hint_text("Go to symbol…   (> commands, # notes, ! library calls)")
             .desired_width(f32::INFINITY);
         ui.add(edit).request_focus();
         self.refresh(project, notes);
@@ -166,8 +168,12 @@ impl Palette {
         if self.results_for.as_deref() == Some(self.query.as_str()) {
             return;
         }
-        let symbols = project.search_candidates();
-        self.results = search(symbols, notes, &self.query, MAX_RESULTS);
+        let candidates = Candidates {
+            symbols: project.search_candidates(),
+            notes,
+            library: project.library_candidates(),
+        };
+        self.results = search(&candidates, &self.query, MAX_RESULTS);
         self.results_for = Some(self.query.clone());
         self.highlighted = 0;
     }
@@ -190,12 +196,26 @@ fn row_text(entry: Entry, project: &Project, notes: &[(usize, String)]) -> RichT
             .monospace(),
             None => RichText::new("(missing symbol)"),
         },
+        Entry::LibraryFunction(index) => match project.library_functions().get(index) {
+            Some(function) => RichText::new(library_row(function)).monospace(),
+            None => RichText::new("(missing function)"),
+        },
     }
+}
+
+/// `system()    library · 2 calls`.
+fn library_row(function: &LibraryFunction) -> String {
+    let plural = if function.calls == 1 { "" } else { "s" };
+    format!(
+        "{}()    library · {} call{plural}",
+        visible(&function.name),
+        function.calls
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
     use egui_kittest::Harness;
 
     use super::*;
@@ -207,11 +227,15 @@ mod tests {
     }
 
     fn harness(query: &str) -> Harness<'static, State> {
+        harness_for(Project::demo().expect("demo"), query)
+    }
+
+    fn harness_for(project: Project, query: &str) -> Harness<'static, State> {
         let mut palette = Palette::default();
         palette.open_with(query.to_string());
         let state = State {
             palette,
-            project: Project::demo().expect("demo"),
+            project,
             picked: None,
         };
         let mut harness = Harness::new_ui_state(
@@ -279,6 +303,25 @@ mod tests {
         harness.key_press_modifiers(symbol_shortcut.modifiers, symbol_shortcut.logical_key);
         harness.run();
         assert!(!harness.state().palette.is_open);
+    }
+
+    #[test]
+    fn bang_lists_the_library_functions_called_with_how_often() {
+        let source = "void f(char *s) { system(s); memcpy(s, s, 1); system(s); }\n";
+        let graph = crate::index::graph_of_files(&[("x.c", source)]);
+        let mut harness = harness_for(Project::new("p", None, graph), "!sys");
+        harness.get_by_label("system()    library · 2 calls");
+        harness.key_press(Key::Enter);
+        harness.run();
+        assert_eq!(harness.state().picked, Some(Entry::LibraryFunction(0)));
+    }
+
+    #[test]
+    fn the_hint_names_every_prefix() {
+        let harness = harness("");
+        let input = harness.get_by_role(egui::Role::TextInput).accesskit_node();
+        let hint = input.placeholder().unwrap_or_default();
+        assert!(hint.contains("! library calls"), "{hint}");
     }
 
     #[test]
