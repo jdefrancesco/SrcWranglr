@@ -10,6 +10,7 @@ use super::{
     SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
     JOURNAL_SHORTCUT, LAYOUT_SHORTCUT, MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT,
     OPEN_SHORTCUT, SAVE_SESSION_SHORTCUT, SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
+    REINDEX_SHORTCUT,
 };
 
 /// Room around the menu bar's contents. egui's default (8 by 2) crowds it
@@ -115,7 +116,8 @@ impl SrcWranglrApp {
         ui.separator();
         let can_reindex = self.project.root.is_some() && self.job.is_none();
         if ui
-            .add_enabled(can_reindex, egui::Button::new("Re-index"))
+            .add_enabled(can_reindex, egui::Button::new("Re-index")
+            .shortcut_text(ui.ctx().format_shortcut(&REINDEX_SHORTCUT)))
             .clicked()
         {
             return Some(Command::Reindex);
