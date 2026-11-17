@@ -139,6 +139,8 @@ pub enum SymbolListAction {
     ShowDocs(SymbolId),
     /// List the functions most like it (its right-click menu).
     FindLike(SymbolId),
+    /// Show the function's pointer lifetimes (its right-click menu).
+    Lifetimes(SymbolId),
     /// Its hide arrow was clicked.
     Hide,
 }
@@ -192,6 +194,7 @@ impl SymbolList {
         let mut clicked = None;
         let mut docs = None;
         let mut like = None;
+        let mut lifetimes = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_rows(ui, row_height, self.rows.len(), |ui, range| {
@@ -220,11 +223,18 @@ impl SymbolList {
                             like = Some(*id);
                             ui.close();
                         }
+                        if matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method)
+                            && ui.button("Pointer Lifetimes").clicked()
+                        {
+                            lifetimes = Some(*id);
+                            ui.close();
+                        }
                     });
                 }
             });
         docs.map(SymbolListAction::ShowDocs)
             .or(like.map(SymbolListAction::FindLike))
+            .or(lifetimes.map(SymbolListAction::Lifetimes))
             .or(clicked.map(SymbolListAction::Select))
     }
 

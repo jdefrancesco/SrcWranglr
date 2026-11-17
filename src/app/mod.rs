@@ -38,6 +38,7 @@ mod journal_actions;
 mod journal_view;
 pub mod launch;
 mod layout;
+mod lifetimes_view;
 mod locations;
 mod markdown;
 mod matching;
@@ -112,6 +113,7 @@ use finding_view::FindingView;
 use findings::Findings;
 use findings_panel::FindingsPanel;
 use layout::{Layout, SourcePlacement};
+use lifetimes_view::LifetimesView;
 use note_editor::NoteEditor;
 use notebook::Notebook;
 use notes_panel::NotesPanel;
@@ -171,6 +173,7 @@ pub struct SrcWranglrApp {
     tool_jobs: Vec<ToolJob>,
     /// The finding being explained, if its view is open.
     finding_view: Option<FindingView>,
+    lifetimes_view: Option<LifetimesView>,
     /// Your verdicts on findings.
     triage: crate::notes::triage::Triage,
     /// Why the verdicts file couldn't be read; verdicts are read-only then.
@@ -312,6 +315,7 @@ impl SrcWranglrApp {
             journal_error: None,
             tool_jobs: Vec::new(),
             finding_view: None,
+            lifetimes_view: None,
             dangerous_editor: None,
             survey_view: SurveyView::default(),
             harness_view: None,
@@ -438,6 +442,7 @@ impl eframe::App for SrcWranglrApp {
         // Global shortcuts pause while the palette or a dialog is open.
         let is_dialog_open = self.note_editor.is_some()
             || self.finding_view.is_some()
+            || self.lifetimes_view.is_some()
             || self.dangerous_editor.is_some()
             || self.settings_view.is_some()
             || self.session_to_confirm.is_some()
@@ -465,6 +470,7 @@ impl eframe::App for SrcWranglrApp {
         self.show_warnings_window(&ctx);
         self.show_note_editor(&ctx);
         self.show_finding_view(&ctx);
+        self.show_lifetimes_view(&ctx);
         self.show_dangerous_editor(&ctx);
         self.show_settings_view(&ctx);
         about::show(&ctx, &mut self.is_about_open);
@@ -709,7 +715,35 @@ impl SrcWranglrApp {
             Some(SymbolListAction::Select(id)) => self.graph_view.select(id),
             Some(SymbolListAction::ShowDocs(id)) => self.show_symbol_docs(id),
             Some(SymbolListAction::FindLike(id)) => self.find_code_like(id, ui.ctx()),
+            Some(SymbolListAction::Lifetimes(id)) => self.show_lifetimes_for(id),
             Some(SymbolListAction::Hide) | None => {}
+        }
+    }
+
+    /// Opens the pointer-lifetime matrix for the function `id`.
+    fn show_lifetimes_for(&mut self, id: crate::model::SymbolId) {
+        let graph = &self.project.graph;
+        let Some(func) = graph.functions.iter().find(|f| f.symbol == id) else {
+            self.status = Status::Info("That isn't a function defined in this project.".into());
+            return;
+        };
+        let name = graph
+            .symbols
+            .get(&id)
+            .map_or_else(String::new, |s| s.qualified_name.clone());
+        match analysis::memory::lifetimes(graph, &func.file, func.line) {
+            Some(lifetimes) => self.lifetimes_view = Some(LifetimesView::new(name, lifetimes)),
+            None => self.status = Status::Info(format!("{name} frees no pointers.")),
+        }
+    }
+
+    fn show_lifetimes_view(&mut self, ctx: &egui::Context) {
+        if self
+            .lifetimes_view
+            .as_mut()
+            .is_some_and(|view| !view.show(ctx))
+        {
+            self.lifetimes_view = None;
         }
     }
 

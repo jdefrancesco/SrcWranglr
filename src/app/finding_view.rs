@@ -5,27 +5,13 @@ use egui::{Id, RichText};
 
 use super::findings::verdict_label;
 use super::visible::{visible, visible_lines};
-use crate::analysis::memory::{Lifetimes, PointKind};
+use crate::analysis::memory::Lifetimes;
 use crate::analysis::{risky, silenced, Finding};
 use crate::model::SymbolId;
 use crate::notes::triage::TriageStatus;
 use crate::style::{severity_text_color, INPUT_COLOR};
 
 const WIDTH: f32 = 460.0;
-/// A freed pointer, in the lifetime row.
-const FREED_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x9A, 0x4C);
-/// A use-after-free or double-free, in the lifetime row.
-const VIOLATION_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x6C, 0x6C);
-
-/// The label and color for one point in a pointer's lifetime.
-fn lifetime_chip(kind: PointKind) -> (&'static str, egui::Color32) {
-    match kind {
-        PointKind::Freed => ("freed", FREED_COLOR),
-        PointKind::FreedAgain => ("freed again", VIOLATION_COLOR),
-        PointKind::Used => ("used", VIOLATION_COLOR),
-        PointKind::Reassigned => ("reassigned", egui::Color32::GRAY),
-    }
-}
 
 /// What the user asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,26 +93,7 @@ impl FindingView {
         };
         ui.add_space(4.0);
         ui.strong("Pointer lifetimes");
-        ui.weak(format!(
-            "in lines {}-{}",
-            lifetimes.first_line, lifetimes.last_line
-        ));
-        for row in &lifetimes.rows {
-            ui.horizontal_wrapped(|ui| {
-                ui.monospace(RichText::new(format!("{}:", visible(&row.variable))).strong());
-                for (index, point) in row.points.iter().enumerate() {
-                    if index > 0 {
-                        ui.weak("->");
-                    }
-                    let (label, color) = lifetime_chip(point.kind);
-                    ui.label(
-                        RichText::new(format!("{label} L{}", point.line))
-                            .monospace()
-                            .color(color),
-                    );
-                }
-            });
-        }
+        super::lifetimes_view::lifetime_rows(ui, lifetimes);
     }
 
     fn contents(&mut self, ui: &mut egui::Ui) -> Option<FindingViewAction> {
