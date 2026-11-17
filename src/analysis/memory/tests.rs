@@ -175,3 +175,68 @@ fn lifetimes_lists_each_pointers_free_and_use() {
         [PointKind::Freed]
     );
 }
+
+#[test]
+fn a_free_in_a_returning_branch_is_not_flagged_as_a_later_use() {
+    // The classic cleanup pattern: the free path returns, so the later use
+    // runs only when the free did not happen.
+    let found = rules(
+        "char *f(int err, char *p) {\n\
+         \x20   if (err) { free(p); return 0; }\n\
+         \x20   *p = 1;\n\
+         \x20   return p;\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_for_loop_initializer_reassignment_clears_the_freed_pointer() {
+    let found = rules(
+        "void f(char *p, char *list) {\n\
+         \x20   free(p);\n\
+         \x20   for (p = list; p; p = list) { *p = 0; }\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_trailing_comment_after_return_still_terminates_the_branch() {
+    let found = rules(
+        "void f(int err, char *p) {\n\
+         \x20   if (err) { free(p); return; /* done */ }\n\
+         \x20   free(p);\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_returning_branch_inside_a_switch_case_is_handled() {
+    let found = rules(
+        "void f(int k, char *p) {\n\
+         \x20   switch (k) {\n\
+         \x20   case 1:\n\
+         \x20       if (!p) { free(p); return; }\n\
+         \x20       *p = 0;\n\
+         \x20       break;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_function_that_did_not_parse_cleanly_is_skipped() {
+    // An incomplete expression leaves the body with a parse error; emit
+    // nothing rather than flatten the control flow into false positives.
+    let found = rules(
+        "void f(char *p) {\n\
+         \x20   free(p);\n\
+         \x20   *p = ;\n\
+         \x20   return;\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}

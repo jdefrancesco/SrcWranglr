@@ -160,7 +160,12 @@ fn walk_functions(file: &str, source: &str, root: Node, out: &mut Vec<Event>) {
     while let Some(node) = stack.pop() {
         if node.kind() == "function_definition" {
             if let Some(body) = node.child_by_field_name("body") {
-                walk_stmt(file, source, body, &mut State::new(), out);
+                // A body with a parse error (macros, `#ifdef` mid-statement)
+                // has unreliable control flow, which turns `free; return` plus
+                // a later use into false positives. Skip it rather than guess.
+                if !body.has_error() {
+                    walk_stmt(file, source, body, &mut State::new(), out);
+                }
             }
             continue;
         }
@@ -200,11 +205,22 @@ fn walk_stmt(file: &str, source: &str, node: Node, state: &mut State, out: &mut 
             walk_loop(file, source, node, state, out);
         }
         "switch_statement" => walk_switch(file, source, node, state, out),
+        // A `case`/`default` or goto label holds statements; walk them so the
+        // control flow inside (e.g. a returning `if`) is tracked, not flattened.
+        "case_statement" | "labeled_statement" => {
+            for child in named_children(node) {
+                walk_stmt(file, source, child, state, out);
+            }
+        }
         _ => visit_expr(file, source, node, state, out),
     }
 }
 
-/// Both arms of an `if`, merged conservatively after the join.
+/// Both arms of an `if`, merged after the join. A branch whose control
+/// doesn't fall through (it `return`s, `goto`s, `break`s or `continue`s)
+/// never reaches the code after the `if`, so its state is excluded from the
+/// merge — this is what keeps `if (err) { free(p); return; } use(p);` from
+/// being flagged, the most common cleanup pattern.
 fn walk_if(file: &str, source: &str, node: Node, state: &mut State, out: &mut Vec<Event>) {
     if let Some(cond) = node.child_by_field_name("condition") {
         visit_expr(file, source, cond, state, out);
@@ -213,27 +229,72 @@ fn walk_if(file: &str, source: &str, node: Node, state: &mut State, out: &mut Ve
     if let Some(cons) = node.child_by_field_name("consequence") {
         let mut branch = state.clone();
         walk_stmt(file, source, cons, &mut branch, out);
-        arms.push(branch);
+        if !terminates(cons) {
+            arms.push(branch);
+        }
     }
     match node.child_by_field_name("alternative") {
         Some(alt) => {
+            // tree-sitter-c wraps the else body in an `else_clause`.
+            let body = if alt.kind() == "else_clause" {
+                alt.named_child(0).unwrap_or(alt)
+            } else {
+                alt
+            };
             let mut branch = state.clone();
-            walk_stmt(file, source, alt, &mut branch, out);
-            arms.push(branch);
+            walk_stmt(file, source, body, &mut branch, out);
+            if !terminates(body) {
+                arms.push(branch);
+            }
         }
+        // No else: the other path falls through with the entry state.
         None => arms.push(state.clone()),
     }
-    *state = merge_states(&arms);
+    if !arms.is_empty() {
+        *state = merge_states(&arms);
+    }
 }
 
-/// A loop body may or may not run, so a free inside it is only "maybe".
+/// Whether control cannot fall out the bottom of `node` — it ends in a
+/// `return`/`goto`/`break`/`continue`, or is an if/else whose arms both do.
+fn terminates(node: Node) -> bool {
+    match node.kind() {
+        "return_statement" | "goto_statement" | "break_statement" | "continue_statement" => true,
+        // The last *statement*, skipping a trailing comment (`return; /* ok */`).
+        "compound_statement" => named_children(node)
+            .iter()
+            .rev()
+            .find(|child| child.kind() != "comment")
+            .copied()
+            .is_some_and(terminates),
+        "else_clause" => node.named_child(0).is_some_and(terminates),
+        "if_statement" => matches!(
+            (
+                node.child_by_field_name("consequence"),
+                node.child_by_field_name("alternative"),
+            ),
+            (Some(cons), Some(alt)) if terminates(cons) && terminates(alt)
+        ),
+        _ => false,
+    }
+}
+
+/// A loop body may or may not run, so a free inside it is only "maybe". A
+/// `for`'s initializer runs once before the loop (often reassigning the
+/// pointer, e.g. `for (tmp = list; …)`); its update runs after the body.
 fn walk_loop(file: &str, source: &str, node: Node, state: &mut State, out: &mut Vec<Event>) {
+    if let Some(init) = node.child_by_field_name("initializer") {
+        visit_expr(file, source, init, state, out);
+    }
     if let Some(cond) = node.child_by_field_name("condition") {
         visit_expr(file, source, cond, state, out);
     }
     if let Some(body) = node.child_by_field_name("body") {
         let mut ran = state.clone();
         walk_stmt(file, source, body, &mut ran, out);
+        if let Some(update) = node.child_by_field_name("update") {
+            visit_expr(file, source, update, &mut ran, out);
+        }
         *state = merge_states(&[state.clone(), ran]);
     }
 }
