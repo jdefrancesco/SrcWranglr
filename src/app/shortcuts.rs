@@ -7,6 +7,7 @@ use super::{
     SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
     JOURNAL_SHORTCUT, LAYOUT_SHORTCUT, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT, OPEN_SHORTCUT,
     SAVE_SESSION_SHORTCUT, SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
+    REINDEX_SHORTCUT,
 };
 
 impl SrcWranglrApp {
@@ -41,6 +42,9 @@ impl SrcWranglrApp {
         }
         if can_use && ctx.input_mut(|i| i.consume_shortcut(&SETTINGS_SHORTCUT)) {
             self.open_settings();
+        }
+        if can_use && ctx.input_mut(|i| i.consume_shortcut(&REINDEX_SHORTCUT)) {
+            self.run_command(Command::Reindex, ctx);
         }
         if panel {
             self.run_command(Command::TogglePane(Pane::Notes), ctx);
