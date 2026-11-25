@@ -55,16 +55,18 @@ impl Tool {
         }
     }
 
-    /// The program and arguments that run this tool on `root`; semgrep
-    /// with each of `semgrep_rules` (files or folders of rules). Nothing
-    /// is fetched online.
-    pub fn command(self, root: &Path, semgrep_rules: &[String]) -> (String, Vec<String>) {
-        let root = root.to_string_lossy().into_owned();
+    /// The program and arguments that run this tool on `target` (a folder or
+    /// file to scan); semgrep with each of `semgrep_rules` (files or folders
+    /// of rules). `target` may be the whole project root or a subfolder of
+    /// it. Nothing is fetched online.
+    pub fn command(self, target: &Path, semgrep_rules: &[String]) -> (String, Vec<String>) {
+        let target = target.to_string_lossy().into_owned();
         let args = match self {
+            // No --quiet: its progress and scan messages go to stderr, which
+            // the run streams as a live progress detail (stdout stays JSON).
             Tool::Semgrep => [
                 "scan".into(),
                 "--json".into(),
-                "--quiet".into(),
                 "--metrics=off".into(),
                 "--disable-version-check".into(),
                 // Scan everything: tests, ignored and large files included
@@ -81,7 +83,7 @@ impl Tool {
                     .iter()
                     .flat_map(|rules| ["--config".to_string(), rules.clone()]),
             )
-            .chain([root])
+            .chain([target])
             .collect(),
             // Without --inline-suppr: the code may silence findings with
             // `// cppcheck-suppress`.
@@ -89,7 +91,7 @@ impl Tool {
                 "--enable=warning,portability".into(),
                 "--quiet".into(),
                 format!("--template={CPPCHECK_TEMPLATE}"),
-                root,
+                target,
             ],
             // Symlinks aren't followed (flawfinder's default); dot folders
             // are scanned, since untrusted code may hide in any of them; and
@@ -100,7 +102,7 @@ impl Tool {
                 "--columns".into(),
                 "--followdotdir".into(),
                 "--neverignore".into(),
-                root,
+                target,
             ],
         };
         (self.name().into(), args)

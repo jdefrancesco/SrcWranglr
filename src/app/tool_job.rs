@@ -5,10 +5,12 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use super::dangerous_lists::semgrep_rules_dir;
 use crate::analysis::tools::{prepare_semgrep_rules, Tool};
@@ -18,10 +20,26 @@ use crate::programs::SearchPath;
 
 /// How much of a failed tool's error output to show.
 const MAX_ERROR_CHARS: usize = 300;
+/// How much of a tool's latest progress line to show in the status bar.
+const MAX_DETAIL_CHARS: usize = 90;
+/// How long a single progress segment may grow before it is cut, so a tool
+/// that never emits a newline can't grow the buffer without bound. Findings
+/// (cppcheck's come on stderr) sit on their own lines, well under this.
+const MAX_SEGMENT_BYTES: usize = 64 * 1024;
+
+/// The latest progress line a running tool has printed, shared with the UI.
+type Detail = Arc<Mutex<Option<String>>>;
 
 pub struct ToolJob {
     tool: Tool,
+    /// The subfolder being scanned (relative to the project), or `None` for
+    /// the whole project — shown in the running status line.
+    scope: Option<String>,
+    /// When the run began, for the elapsed time shown while it works.
+    started: Instant,
     results: Receiver<Result<Vec<Finding>, String>>,
+    /// The latest progress line from the tool's stderr (best effort).
+    detail: Detail,
     /// The empty folder a check ran in, removed once it is done.
     empty: Option<PathBuf>,
 }
@@ -71,11 +89,16 @@ pub enum SemgrepRules {
 static CHECK_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl ToolJob {
-    /// Runs `tool` on `root`; semgrep with your rules (and `project_rules`,
-    /// a folder of the project's own, when given).
+    /// Runs `tool` on `target` (the whole project `root`, or a subfolder of
+    /// it); semgrep with your rules (and `project_rules`, a folder of the
+    /// project's own, when given). `scope` names the subfolder for the status
+    /// line, or is `None` for the whole project. Findings stay relative to
+    /// `root` either way.
     pub fn spawn(
         tool: Tool,
         root: PathBuf,
+        target: PathBuf,
+        scope: Option<String>,
         search: SearchPath,
         project_rules: Option<PathBuf>,
         ctx: egui::Context,
@@ -83,7 +106,7 @@ impl ToolJob {
         let rules = SemgrepRules::Yours {
             project: project_rules,
         };
-        Self::start(tool, root, search, rules, ctx)
+        Self::start(tool, root, target, scope, search, rules, ctx)
     }
 
     /// Runs semgrep on `root` with only the rule in `rule_file`, which is
@@ -94,9 +117,12 @@ impl ToolJob {
         search: SearchPath,
         ctx: egui::Context,
     ) -> Self {
+        let target = root.clone();
         Self::start(
             Tool::Semgrep,
             root,
+            target,
+            None,
             search,
             SemgrepRules::Only(rule_file),
             ctx,
@@ -116,7 +142,16 @@ impl ToolJob {
             format!("Could not make a folder to check the rule in: {e}")
         })?;
         let rules = SemgrepRules::Only(rule_file);
-        let mut job = Self::start(Tool::Semgrep, empty.clone(), search, rules, ctx);
+        let target = empty.clone();
+        let mut job = Self::start(
+            Tool::Semgrep,
+            empty.clone(),
+            target,
+            None,
+            search,
+            rules,
+            ctx,
+        );
         job.empty = Some(empty);
         Ok(job)
     }
@@ -124,18 +159,22 @@ impl ToolJob {
     fn start(
         tool: Tool,
         root: PathBuf,
+        target: PathBuf,
+        scope: Option<String>,
         search: SearchPath,
         rules: SemgrepRules,
         ctx: egui::Context,
     ) -> Self {
         let (tx, results) = channel();
+        let detail: Detail = Arc::new(Mutex::new(None));
+        let worker_detail = Arc::clone(&detail);
         std::thread::spawn(move || {
             let yours = || prepare_semgrep_rules(semgrep_rules_dir().as_deref());
             let result = rules_for(tool, &rules, yours).and_then(|rules| {
-                let (program, args) = tool.command(&root, &rules);
+                let (program, args) = tool.command(&target, &rules);
                 let found = locate(tool, &program, &search)?;
                 let parse = |out: &str, err: &str| tool.parse(out, err, &root);
-                run(&found, &args, &search.joined(), parse)
+                run(&found, &args, &search.joined(), &worker_detail, parse)
             });
             if let SemgrepRules::Only(file) = &rules {
                 // Ours to remove; one left behind is only a stray draft.
@@ -147,13 +186,35 @@ impl ToolJob {
         });
         Self {
             tool,
+            scope,
+            started: Instant::now(),
             results,
+            detail,
             empty: None,
         }
     }
 
     pub fn tool(&self) -> Tool {
         self.tool
+    }
+
+    /// The latest progress line the tool has printed, if any.
+    pub fn detail(&self) -> Option<String> {
+        self.detail.lock().ok().and_then(|d| d.clone())
+    }
+
+    /// A one-line summary for the status bar while the tool runs: where it is
+    /// scanning, how long it has taken, and its latest progress line.
+    pub fn status_line(&self, project_name: &str) -> String {
+        let where_ = self.scope.as_deref().unwrap_or(project_name);
+        let elapsed = format_elapsed(self.started.elapsed());
+        match self.detail() {
+            Some(detail) => {
+                let detail: String = detail.chars().take(MAX_DETAIL_CHARS).collect();
+                format!("{} on {where_} — {elapsed} · {detail}", self.tool.name())
+            }
+            None => format!("{} on {where_} — {elapsed}", self.tool.name()),
+        }
     }
 
     /// The findings (or why there are none) once the tool is done.
@@ -165,6 +226,16 @@ impl ToolJob {
                 Some(Err(format!("{} stopped unexpectedly", self.tool.name())))
             }
         }
+    }
+}
+
+/// `45s`, or `3m 12s` once past a minute.
+fn format_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs >= 60 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
     }
 }
 
@@ -198,34 +269,102 @@ fn locate(tool: Tool, program: &str, search: &SearchPath) -> Result<PathBuf, Str
     })
 }
 
-/// Runs `program` with `path_var` as its `PATH` and parses its output; an
-/// unparseable report from a failing run is explained with the start of
-/// its error output.
+/// Runs `program` with `path_var` as its `PATH`, streaming its stderr to
+/// `detail` as a live progress line while reading all of stdout; then parses
+/// the output. An unparseable report from a failing run is explained with the
+/// start of its error output.
 fn run(
     program: &Path,
     args: &[String],
     path_var: &OsStr,
+    detail: &Detail,
     parse: impl Fn(&str, &str) -> Result<Vec<Finding>, String>,
 ) -> Result<Vec<Finding>, String> {
     let shown = program.display();
-    let output = Command::new(program)
+    let mut child = Command::new(program)
         .args(args)
         .env("PATH", path_var)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| match e.kind() {
             ErrorKind::NotFound => format!("{shown} is not installed (or not on PATH)"),
             _ => format!("Could not run {shown}: {e}"),
         })?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut out_pipe = child.stdout.take().expect("stdout was piped");
+    let err_pipe = child.stderr.take().expect("stderr was piped");
+
+    // Drain stdout on its own thread — findings come from here (semgrep,
+    // flawfinder), and reading both pipes at once avoids a full-pipe deadlock.
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let stderr = stream_stderr(err_pipe, detail);
+
+    let stdout_bytes = stdout_reader.join().unwrap_or_default();
+    let status = child
+        .wait()
+        .map_err(|e| format!("Could not run {shown}: {e}"))?;
+    // The run is over; stop showing a stale progress line.
+    if let Ok(mut d) = detail.lock() {
+        *d = None;
+    }
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
     parse(&stdout, &stderr).map_err(|error| {
-        let detail: String = stderr.trim().chars().take(MAX_ERROR_CHARS).collect();
-        match output.status.success() {
+        let head: String = stderr.trim().chars().take(MAX_ERROR_CHARS).collect();
+        match status.success() {
             true => error,
-            false => format!("{shown} failed ({}): {detail}", output.status),
+            false => format!("{shown} failed ({status}): {head}"),
         }
     })
+}
+
+/// Reads `pipe` to the end, splitting on CR and LF so a progress bar that
+/// redraws in place with `\r` still updates `detail` with its latest line.
+/// Returns all the lines it collected (full, since cppcheck reports its
+/// findings on stderr), newline-joined.
+fn stream_stderr(mut pipe: impl Read, detail: &Detail) -> String {
+    let mut text = String::new();
+    let mut segment: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                for &byte in &chunk[..n] {
+                    if byte == b'\r' || byte == b'\n' {
+                        record_segment(&mut segment, &mut text, detail);
+                    } else if segment.len() < MAX_SEGMENT_BYTES {
+                        segment.push(byte);
+                    }
+                }
+            }
+        }
+    }
+    record_segment(&mut segment, &mut text, detail);
+    text
+}
+
+/// Keeps a finished stderr line: appends it to `text` and makes it the current
+/// progress `detail`. Blank lines are dropped.
+fn record_segment(segment: &mut Vec<u8>, text: &mut String, detail: &Detail) {
+    if segment.is_empty() {
+        return;
+    }
+    let line = String::from_utf8_lossy(segment).trim().to_string();
+    segment.clear();
+    if line.is_empty() {
+        return;
+    }
+    text.push_str(&line);
+    text.push('\n');
+    if let Ok(mut d) = detail.lock() {
+        *d = Some(line);
+    }
 }
 
 /// `findings` with each one's enclosing function (the last one declared
@@ -287,8 +426,15 @@ mod tests {
     fn a_failing_run_explains_itself_with_its_error_output() {
         let args = ["-c".to_string(), "echo boom >&2; exit 3".to_string()];
         let parse = |_: &str, _: &str| Err("bad report".into());
-        let error =
-            run(Path::new("/bin/sh"), &args, OsStr::new("/usr/bin"), parse).expect_err("fails");
+        let detail: Detail = Arc::new(Mutex::new(None));
+        let error = run(
+            Path::new("/bin/sh"),
+            &args,
+            OsStr::new("/usr/bin"),
+            &detail,
+            parse,
+        )
+        .expect_err("fails");
         assert!(error.contains("boom") && error.contains('3'), "{error}");
     }
 
@@ -297,10 +443,12 @@ mod tests {
     fn the_program_runs_with_the_search_as_its_path() {
         let args = ["-c".to_string(), "echo \"$PATH\" >&2; exit 1".to_string()];
         let parse = |_: &str, _: &str| Err("no report".into());
+        let detail: Detail = Arc::new(Mutex::new(None));
         let error = run(
             Path::new("/bin/sh"),
             &args,
             OsStr::new("/my/tools:/usr/bin"),
+            &detail,
             parse,
         )
         .expect_err("fails");
@@ -323,7 +471,8 @@ mod tests {
         let (_, args) = Tool::Flawfinder.command(project.path(), &[]);
         let root = project.path();
         let parse = |out: &str, err: &str| Tool::Flawfinder.parse(out, err, root);
-        let findings = run(&program, &args, &search.joined(), parse).expect("ran");
+        let detail: Detail = Arc::new(Mutex::new(None));
+        let findings = run(&program, &args, &search.joined(), &detail, parse).expect("ran");
         let strcpy = findings
             .iter()
             .find(|f| f.rule == "strcpy")
@@ -397,11 +546,21 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_reads_as_seconds_then_minutes() {
+        assert_eq!(format_elapsed(Duration::from_secs(45)), "45s");
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m 00s");
+        assert_eq!(format_elapsed(Duration::from_secs(192)), "3m 12s");
+    }
+
+    #[test]
     fn job_reports_a_missing_tool_through_poll() {
         // `poll` before the thread finishes is `None`; eventually it's done.
+        let root = PathBuf::from("/nonexistent-srcwranglr-root");
         let job = ToolJob::spawn(
             Tool::Cppcheck,
-            PathBuf::from("/nonexistent-srcwranglr-root"),
+            root.clone(),
+            root,
+            None,
             SearchPath::new(&[], None, None),
             None,
             egui::Context::default(),

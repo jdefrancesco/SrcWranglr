@@ -9,9 +9,9 @@ use super::survey_view::SurveyTab;
 use super::{
     SrcWranglrApp, BOOKMARK_SHORTCUT, EDITOR_SHORTCUT, ENTRY_POINT_SHORTCUT, FINDINGS_SHORTCUT,
     JOURNAL_SHORTCUT, LAYOUT_SHORTCUT, MAX_ENTRY_MENU_ITEMS, NOTES_PANEL_SHORTCUT, NOTE_SHORTCUT,
-    OPEN_SHORTCUT, SAVE_SESSION_SHORTCUT, SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
-    REINDEX_SHORTCUT,
+    OPEN_SHORTCUT, REINDEX_SHORTCUT, SAVE_SESSION_SHORTCUT, SETTINGS_SHORTCUT, TRIAGE_SHORTCUT,
 };
+use crate::analysis::tools::Tool;
 
 /// Room around the menu bar's contents. egui's default (8 by 2) crowds it
 /// against the window's edges.
@@ -116,8 +116,11 @@ impl SrcWranglrApp {
         ui.separator();
         let can_reindex = self.project.root.is_some() && self.job.is_none();
         if ui
-            .add_enabled(can_reindex, egui::Button::new("Re-index")
-            .shortcut_text(ui.ctx().format_shortcut(&REINDEX_SHORTCUT)))
+            .add_enabled(
+                can_reindex,
+                egui::Button::new("Re-index")
+                    .shortcut_text(ui.ctx().format_shortcut(&REINDEX_SHORTCUT)),
+            )
             .clicked()
         {
             return Some(Command::Reindex);
@@ -255,7 +258,7 @@ impl SrcWranglrApp {
             }
         }
         ui.separator();
-        [
+        let picked = [
             Command::MarkDangerous,
             Command::TrustProject,
             Command::RunSemgrep,
@@ -265,7 +268,18 @@ impl SrcWranglrApp {
             Command::ImportSarif,
         ]
         .into_iter()
-        .find(|command| ui.button(command.label()).clicked())
+        .find(|command| ui.button(command.label()).clicked());
+        // Scope a run to one subfolder — handy on huge trees (the kernel).
+        let on_folder = ui
+            .menu_button("Run on a Folder…", |ui| {
+                [Tool::Semgrep, Tool::Cppcheck, Tool::Flawfinder]
+                    .into_iter()
+                    .find(|tool| ui.button(tool.name()).clicked())
+                    .map(Command::RunOnFolder)
+            })
+            .inner
+            .flatten();
+        picked.or(on_folder)
     }
 
     /// Lists the best entry points; clicking one selects it.

@@ -171,6 +171,8 @@ pub struct SrcWranglrApp {
     findings_panel: FindingsPanel,
     /// External analyzers still running.
     tool_jobs: Vec<ToolJob>,
+    /// A folder being chosen for a scoped tool run (semgrep on one subtree).
+    tool_folder: Option<findings_actions::ToolFolderPick>,
     /// The finding being explained, if its view is open.
     finding_view: Option<FindingView>,
     lifetimes_view: Option<LifetimesView>,
@@ -314,6 +316,7 @@ impl SrcWranglrApp {
             journal: Default::default(),
             journal_error: None,
             tool_jobs: Vec::new(),
+            tool_folder: None,
             finding_view: None,
             lifetimes_view: None,
             dangerous_editor: None,
@@ -434,6 +437,7 @@ impl eframe::App for SrcWranglrApp {
         self.poll_sarif_import(&ctx);
         self.poll_job(&ctx);
         self.poll_tool_jobs();
+        self.poll_tool_folder(&ctx);
         self.poll_history();
         self.poll_docs(&ctx);
         self.poll_agent(&ctx);
@@ -595,6 +599,7 @@ impl SrcWranglrApp {
             Command::TogglePane(pane) => self.toggle_pane(pane),
             Command::MarkDangerous => self.mark_selected_dangerous(),
             Command::TrustProject => self.trust_project_files(),
+            Command::RunOnFolder(tool) => self.run_tool_on_folder(tool, ctx),
             Command::RunSemgrep => self.run_tool(analysis::tools::Tool::Semgrep, ctx),
             Command::SemgrepRules => self.open_rules_view(),
             Command::RunCppcheck => self.run_tool(analysis::tools::Tool::Cppcheck, ctx),
@@ -674,7 +679,7 @@ impl SrcWranglrApp {
                 None => {
                     if let Some(job) = self.tool_jobs.first() {
                         ui.spinner();
-                        ui.label(format!("{} running", job.tool().name()));
+                        ui.label(visible::visible(&job.status_line(&self.project.name)));
                         ui.separator();
                     }
                     match &self.status {

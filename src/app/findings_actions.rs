@@ -1,8 +1,11 @@
 //! What the app does with findings: explaining one, running external
 //! analyzers in the background, and folding their results in.
 
+use std::path::PathBuf;
+
 use super::dangerous_editor::{DangerousEditor, DangerousEditorOutcome};
 use super::dangerous_lists::{DangerousLists, ListScope};
+use super::dialogs::{self, DialogState, PendingDialog};
 use super::finding_view::{FindingView, FindingViewAction};
 use super::rule_files;
 use super::tool_job::{self, ToolJob};
@@ -10,6 +13,13 @@ use super::trust;
 use super::{SrcWranglrApp, Status};
 use crate::analysis;
 use crate::analysis::reach::describe;
+use crate::analysis::tools::Tool;
+
+/// A subfolder being picked for a scoped tool run.
+pub(super) struct ToolFolderPick {
+    tool: Tool,
+    dialog: PendingDialog<PathBuf>,
+}
 
 impl SrcWranglrApp {
     /// Opens the editor for `name`'s dangerous-list entry.
@@ -204,10 +214,22 @@ impl SrcWranglrApp {
     }
 
     /// Starts `tool` on the project in the background.
-    pub(super) fn run_tool(&mut self, tool: analysis::tools::Tool, ctx: &egui::Context) {
+    pub(super) fn run_tool(&mut self, tool: Tool, ctx: &egui::Context) {
         let Some(root) = self.project.root.clone() else {
             self.status = Status::Info(format!(
                 "Open a project (⌘O) to run {} on it; the demo isn't on disk.",
+                tool.name()
+            ));
+            return;
+        };
+        self.start_tool(tool, root.clone(), root, None, ctx);
+    }
+
+    /// Asks for a subfolder, then runs `tool` on just that folder.
+    pub(super) fn run_tool_on_folder(&mut self, tool: Tool, ctx: &egui::Context) {
+        let Some(root) = self.project.root.clone() else {
+            self.status = Status::Info(format!(
+                "Open a project (⌘O) to run {} on a folder of it.",
                 tool.name()
             ));
             return;
@@ -216,10 +238,70 @@ impl SrcWranglrApp {
             self.status = Status::Info(format!("{} is already running.", tool.name()));
             return;
         }
+        let start = root;
+        let picked = dialogs::spawn(ctx, move || {
+            rfd::FileDialog::new()
+                .set_title("Run on which folder")
+                .set_directory(&start)
+                .pick_folder()
+        });
+        match picked {
+            Ok(dialog) => self.tool_folder = Some(ToolFolderPick { tool, dialog }),
+            Err(error) => self.status = Status::Error(error),
+        }
+    }
+
+    /// Picks up the folder for a scoped run once the dialog answers.
+    pub(super) fn poll_tool_folder(&mut self, ctx: &egui::Context) {
+        let Some(pick) = self.tool_folder.as_ref() else {
+            return;
+        };
+        let tool = pick.tool;
+        let state = pick.dialog.poll();
+        if state == DialogState::Open {
+            return;
+        }
+        self.tool_folder = None;
+        match state {
+            DialogState::Picked(folder) => self.run_tool_on(tool, folder, ctx),
+            DialogState::Failed(error) => self.status = Status::Error(error),
+            DialogState::Open | DialogState::Cancelled => {}
+        }
+    }
+
+    /// Runs `tool` on `folder` (inside the project); findings stay relative to
+    /// the project root so they line up with the index and source view.
+    fn run_tool_on(&mut self, tool: Tool, folder: PathBuf, ctx: &egui::Context) {
+        let Some(root) = self.project.root.clone() else {
+            return;
+        };
+        let scope = folder
+            .strip_prefix(&root)
+            .ok()
+            .map(|rel| rel.to_string_lossy().into_owned())
+            .filter(|rel| !rel.is_empty())
+            .or_else(|| folder.file_name().map(|n| n.to_string_lossy().into_owned()));
+        self.start_tool(tool, root, folder, scope, ctx);
+    }
+
+    /// Spawns `tool` on `target` (relativised to `root`); `scope` names the
+    /// subfolder for the status line, or `None` for the whole project.
+    fn start_tool(
+        &mut self,
+        tool: Tool,
+        root: PathBuf,
+        target: PathBuf,
+        scope: Option<String>,
+        ctx: &egui::Context,
+    ) {
+        if self.tool_jobs.iter().any(|job| job.tool() == tool) {
+            self.status = Status::Info(format!("{} is already running.", tool.name()));
+            return;
+        }
+        let where_ = scope.as_deref().unwrap_or(self.project.name.as_str());
         self.status = Status::Info(format!(
-            "Running {} on {}… results go to Findings.",
-            tool.name(),
-            self.project.name
+            "Running {} on {where_}… results go to Findings.",
+            tool.name()
         ));
         let search = self.settings.search_path();
         // The project's own rules only once you trust its files, asked
@@ -230,6 +312,8 @@ impl SrcWranglrApp {
         self.tool_jobs.push(ToolJob::spawn(
             tool,
             root,
+            target,
+            scope,
             search,
             project_rules,
             ctx.clone(),

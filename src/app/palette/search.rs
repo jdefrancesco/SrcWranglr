@@ -9,6 +9,7 @@ use std::cmp::Reverse;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher};
 
+use crate::analysis::tools::Tool;
 use crate::app::pane_bar::Pane;
 use crate::app::survey_view::SurveyTab;
 use crate::model::SymbolId;
@@ -41,6 +42,8 @@ pub enum Command {
     SemgrepRules,
     RunCppcheck,
     RunFlawfinder,
+    /// Run an external analyzer on a chosen subfolder instead of the whole tree.
+    RunOnFolder(Tool),
     ImportSarif,
     Settings,
     SaveSession,
@@ -65,7 +68,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 49] = [
+    pub const ALL: [Command; 52] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -87,6 +90,9 @@ impl Command {
         Command::SemgrepRules,
         Command::RunCppcheck,
         Command::RunFlawfinder,
+        Command::RunOnFolder(Tool::Semgrep),
+        Command::RunOnFolder(Tool::Cppcheck),
+        Command::RunOnFolder(Tool::Flawfinder),
         Command::ImportSarif,
         Command::Settings,
         Command::SaveSession,
@@ -136,6 +142,9 @@ impl Command {
             Command::SemgrepRules => "Semgrep Rules…",
             Command::RunCppcheck => "Run cppcheck",
             Command::RunFlawfinder => "Run flawfinder",
+            Command::RunOnFolder(Tool::Semgrep) => "Run semgrep on a folder…",
+            Command::RunOnFolder(Tool::Cppcheck) => "Run cppcheck on a folder…",
+            Command::RunOnFolder(Tool::Flawfinder) => "Run flawfinder on a folder…",
             Command::ImportSarif => "Import SARIF Results (CodeQL, …)…",
             Command::Settings => "Settings…",
             Command::SaveSession => "Save Session",
