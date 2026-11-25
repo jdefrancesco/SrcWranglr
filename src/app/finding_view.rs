@@ -25,6 +25,8 @@ pub enum FindingViewAction {
     Triage(Option<TriageStatus>, String),
     /// Trace where the call's arguments come from.
     Trace,
+    /// Jump to a line of the enclosing function (a clicked lifetime point).
+    GoToLine(u32),
 }
 
 pub struct FindingView {
@@ -87,13 +89,11 @@ impl FindingView {
     /// The pointer-lifetime rows — the invariant matrix that led to a
     /// use-after-free or double-free: each freed pointer and what became of
     /// it, line by line.
-    fn lifetimes_section(&self, ui: &mut egui::Ui) {
-        let Some(lifetimes) = &self.lifetimes else {
-            return;
-        };
+    fn lifetimes_section(&self, ui: &mut egui::Ui) -> Option<FindingViewAction> {
+        let lifetimes = self.lifetimes.as_ref()?;
         ui.add_space(4.0);
         ui.strong("Pointer lifetimes");
-        super::lifetimes_view::lifetime_rows(ui, lifetimes);
+        super::lifetimes_view::lifetime_rows(ui, lifetimes).map(FindingViewAction::GoToLine)
     }
 
     fn contents(&mut self, ui: &mut egui::Ui) -> Option<FindingViewAction> {
@@ -135,14 +135,14 @@ impl FindingView {
             ui.strong("How to fix");
             ui.label(visible_lines(fix));
         }
-        self.lifetimes_section(ui);
+        let went = self.lifetimes_section(ui);
         ui.add_space(4.0);
         ui.weak(format!("Found by {}", visible(&f.tool)));
         ui.separator();
         let triaged = self.triage_section(ui);
         ui.separator();
         let picked = ui.horizontal(|ui| self.buttons(ui)).inner;
-        triaged.or(picked)
+        went.or(triaged).or(picked)
     }
 
     /// Your verdict on it, with a note.

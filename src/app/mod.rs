@@ -113,7 +113,7 @@ use finding_view::FindingView;
 use findings::Findings;
 use findings_panel::FindingsPanel;
 use layout::{Layout, SourcePlacement};
-use lifetimes_view::LifetimesView;
+use lifetimes_view::{LifetimesOutcome, LifetimesView};
 use note_editor::NoteEditor;
 use notebook::Notebook;
 use notes_panel::NotesPanel;
@@ -727,23 +727,31 @@ impl SrcWranglrApp {
             self.status = Status::Info("That isn't a function defined in this project.".into());
             return;
         };
+        let file = func.file.clone();
+        let line = func.line;
         let name = graph
             .symbols
             .get(&id)
             .map_or_else(String::new, |s| s.qualified_name.clone());
-        match analysis::memory::lifetimes(graph, &func.file, func.line) {
-            Some(lifetimes) => self.lifetimes_view = Some(LifetimesView::new(name, lifetimes)),
+        match analysis::memory::lifetimes(graph, &file, line) {
+            Some(lifetimes) => {
+                self.lifetimes_view = Some(LifetimesView::new(name, id, file, lifetimes));
+            }
             None => self.status = Status::Info(format!("{name} frees no pointers.")),
         }
     }
 
     fn show_lifetimes_view(&mut self, ctx: &egui::Context) {
-        if self
-            .lifetimes_view
-            .as_mut()
-            .is_some_and(|view| !view.show(ctx))
-        {
-            self.lifetimes_view = None;
+        let outcome = match self.lifetimes_view.as_mut() {
+            Some(view) => view.show(ctx),
+            None => return,
+        };
+        match outcome {
+            LifetimesOutcome::Open => {}
+            LifetimesOutcome::Closed => self.lifetimes_view = None,
+            LifetimesOutcome::Reveal { symbol, file, line } => {
+                self.go_to_place(Some(symbol), &file, line);
+            }
         }
     }
 

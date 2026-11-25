@@ -194,6 +194,12 @@ impl SrcWranglrApp {
                     self.open_in_editor();
                 }
             }
+            FindingViewAction::GoToLine(line) => {
+                if let Some(f) = view.as_ref().map(FindingView::finding) {
+                    let (symbol, file) = (f.symbol, f.file.clone());
+                    self.go_to_place(symbol, &file, line);
+                }
+            }
         }
     }
 
