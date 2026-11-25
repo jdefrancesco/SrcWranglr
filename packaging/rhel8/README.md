@@ -9,11 +9,14 @@ target needs no development packages.
 
 ## Build
 
-On any machine with Docker (native x86_64 Linux is fastest; Apple Silicon works
-under emulation):
+On any machine with **Podman** (the RHEL/Fedora default) or Docker — the script
+auto-detects, or set `CONTAINER_ENGINE=podman|docker`. On a native x86_64 Linux
+host (where `--platform=linux/amd64` needs no emulation) this is fast; on an
+arm64 host (e.g. Apple Silicon) it runs under emulation.
 
 ```bash
 ./packaging/rhel8/build.sh
+# or: CONTAINER_ENGINE=podman ./packaging/rhel8/build.sh
 ```
 
 Artifacts land in `dist/rhel8/`:
