@@ -25,6 +25,29 @@ Artifacts land in `dist/rhel8/`:
 The binary is stripped and its glibc floor is 2.28, so it runs on RHEL8 and any
 newer glibc.
 
+## Without Docker (native build)
+
+The RHEL8 **target** never needs Docker — it only runs the finished binary.
+Docker is just one way to produce a glibc-2.28 binary. If you have no Docker,
+build natively on any RHEL8 / Rocky 8 host (the target itself, or a connected
+RHEL8 build box):
+
+```bash
+./packaging/rhel8/build-native.sh
+```
+
+The script's header lists the one-time `dnf` + `rustup` prerequisites. If that
+build host is itself offline, vendor the crates on a connected machine first:
+
+```bash
+cargo vendor vendor/                 # on a connected machine, in the repo
+# commit/copy vendor/ + .cargo/config.toml across, then build with --offline
+```
+
+(A third option, from a non-Linux machine, is cross-compiling with
+`cargo-zigbuild --target x86_64-unknown-linux-gnu.2.28` — no Docker, but a
+blind build you must verify on the target.)
+
 ## Install on the air-gapped box
 
 Copy the tarball across, then either run `make install-linux` from an extracted
