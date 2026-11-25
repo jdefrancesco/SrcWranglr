@@ -8,7 +8,7 @@ Written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](htt
 
 ![SrcWranglr showing interactive code graphs, linked source, findings, project triage, and fuzz targets](docs/screenshots/slideshow.webp)
 
-[Quick start](#quick-start) · [Features](#features) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) · [Algorithms](docs/algorithms.md) · [AI policy](#ai-policy)
+[Quick start](#quick-start) · [Features](#features) · [Proven in the field](#proven-in-the-field) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) · [Algorithms](docs/algorithms.md) · [AI policy](#ai-policy)
 
 
 ## About
@@ -16,6 +16,13 @@ Written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](htt
 I built **SrcWranglr** to help me understand C/C++ codebases while learning Rust. The core analysis code was written by hand; AI tools have assisted with GUI work, tests, and documentation.
 
 Before the Rust re-write, the project used the working name *slurcetrail* and was written in Python for a prototype, then C, then I got side tracked by other things.
+
+## Proven in the field
+
+SrcWranglr has already helped find real, exploitable memory-safety bugs in well-known open-source C/C++ projects, including:
+
+- **[MiniUPnPd](https://github.com/miniupnp/miniupnp)** — 10 vulnerabilities, including a pre-authentication remote code execution.
+- **[UnrealIRCd](https://github.com/unrealircd/unrealircd)** — 2 vulnerabilities, including remote code execution under certain circumstances.
 
 ## Quick start
 
@@ -203,12 +210,14 @@ Planned additions include:
 This project was ported from software I had been working on years ago. I decided to perform a rewrite in Rust for learning if I am capable of writing real tools in Rust. Oh, also because "Rustaceans" are relentless zealots who pushed it so hard that
 knowing it has become a requirement for a lot of system development. The cult of Rust can give it a rest now though that us unlikely to happen heheh...
 
-The majority of the code is **manually written** with the exception of: 
+When this project began, the majority of the code was **manually written**, with AI assisting mainly:
 
 1. The GUI. Writing UIs isn't something I find thrilling.
 2. Documentation found in the repository.
 3. The `Makefile` and various helper scripts.
 4. Yak-shaving tasks that consume too much time for a one man army.
+
+As the tool has grown, that balance has shifted. At this point the majority of the code may no longer be hand-written. The core analysis engine still reflects hand-crafted design decisions, but AI now does much of the actual authoring.
 
 That being said, blind usage of LLMs aren't acceptable. AI has become very useful but I am a strong believer that humans
 need to be driving and crafting a deep understanding of their code. Prototyping, helping debug difficult problems, and security review are
