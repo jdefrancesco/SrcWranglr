@@ -18,6 +18,8 @@ const SEVERITIES: [(Option<Severity>, &str); 4] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DangerousEditorOutcome {
     Save(DangerousFunction, ListScope),
+    /// Unmark: remove this function's entry from the list(s) that have one.
+    Remove(String),
     Cancel,
 }
 
@@ -30,6 +32,11 @@ pub struct DangerousEditor {
     can_use_project: bool,
     /// Kept from the existing entry (the editor doesn't show it).
     cwe: Option<u32>,
+    /// The name as opened, so Remove unmarks that entry even if the name
+    /// field was edited.
+    original: String,
+    /// Whether this function is already on a list (so it can be removed).
+    listed: bool,
     error: Option<String>,
 }
 
@@ -49,6 +56,8 @@ impl DangerousEditor {
             },
             can_use_project,
             cwe: existing.and_then(|e| e.cwe),
+            original: name.to_string(),
+            listed: existing.is_some(),
             error: None,
         }
     }
@@ -121,6 +130,14 @@ impl DangerousEditor {
         let save = ui.add_enabled(entry.is_some(), egui::Button::new("Save"));
         if save.clicked() {
             return entry.map(|e| DangerousEditorOutcome::Save(e, self.scope));
+        }
+        if self.listed {
+            let remove = ui
+                .button("Remove from List")
+                .on_hover_text("Unmark this function: delete its entry from your list(s)");
+            if remove.clicked() {
+                return Some(DangerousEditorOutcome::Remove(self.original.clone()));
+            }
         }
         ui.button("Cancel")
             .clicked()
@@ -198,6 +215,30 @@ mod tests {
         assert_eq!(entry.reason, "trusts the length field");
         assert_eq!(entry.severity, Some(Severity::High));
         assert_eq!(*scope, ListScope::Project);
+    }
+
+    #[test]
+    fn a_listed_entry_can_be_removed_and_a_new_one_cannot() {
+        // A brand-new mark (nothing existing) offers no Remove.
+        let fresh = harness(DangerousEditor::new("net::parse", None, true));
+        assert!(fresh.query_by_label("Remove from List").is_none());
+
+        // An entry already on a list can be removed, by its original name.
+        let existing = DangerousFunction {
+            name: "memcpy".into(),
+            severity: Some(Severity::Low),
+            reason: "check sizes".into(),
+            fix: None,
+            cwe: None,
+            is_advisory: false,
+        };
+        let mut harness = harness(DangerousEditor::new("memcpy", Some(&existing), false));
+        harness.get_by_label("Remove from List").click();
+        harness.run();
+        assert_eq!(
+            harness.state().outcome,
+            Some(DangerousEditorOutcome::Remove("memcpy".into()))
+        );
     }
 
     #[test]

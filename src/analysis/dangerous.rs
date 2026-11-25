@@ -159,6 +159,36 @@ pub fn with_entry(text: &str, entry: &DangerousFunction) -> Result<String, Strin
     Ok(format!("{before}\n\n{appended}"))
 }
 
+/// `text` with every `[[function]]` entry named `name` removed, keeping the
+/// rest of the file as written. Returns `None` when no entry matched (so the
+/// caller can skip a needless write).
+pub fn without_entry(text: &str, name: &str) -> Result<Option<String>, String> {
+    let mut doc: DocumentMut = text.parse().map_err(|e| format!("not valid TOML: {e}"))?;
+    let Some(item) = doc.get_mut(TABLE) else {
+        return Ok(None);
+    };
+    let tables = item
+        .as_array_of_tables_mut()
+        .ok_or("`function` must be a list of [[function]] entries")?;
+    let matching: Vec<usize> = tables
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.get("name").and_then(Item::as_str) == Some(name))
+        .map(|(i, _)| i)
+        .collect();
+    if matching.is_empty() {
+        return Ok(None);
+    }
+    // Remove from the back so earlier indices stay valid.
+    for &index in matching.iter().rev() {
+        tables.remove(index);
+    }
+    if tables.is_empty() {
+        doc.remove(TABLE);
+    }
+    Ok(Some(doc.to_string()))
+}
+
 fn fill(table: &mut Table, entry: &DangerousFunction) {
     table["name"] = value(entry.name.as_str());
     table["severity"] = value(entry.severity.map_or("off", Severity::label));
@@ -334,5 +364,29 @@ reason = "Reviewed: all sizes are constants"
                 .map(|e| e.severity),
             Some(None)
         );
+    }
+
+    #[test]
+    fn removing_an_entry_drops_it_and_keeps_the_rest() {
+        let updated = without_entry(LIST, "xfree")
+            .expect("valid")
+            .expect("something removed");
+        let list = DangerousList::parse(&updated).expect("parse");
+        assert!(list.lookup("xfree").is_none());
+        assert!(list.lookup("net::parse_packet").is_some());
+        assert!(list.lookup("memcpy").is_some());
+    }
+
+    #[test]
+    fn removing_an_absent_name_changes_nothing() {
+        assert_eq!(without_entry(LIST, "not_listed"), Ok(None));
+    }
+
+    #[test]
+    fn removing_the_last_entry_leaves_a_parseable_empty_list() {
+        let one = "[[function]]\nname = \"only\"\nseverity = \"high\"\nreason = \"x\"\n";
+        let updated = without_entry(one, "only").expect("valid").expect("removed");
+        let list = DangerousList::parse(&updated).expect("parse");
+        assert!(list.is_empty());
     }
 }

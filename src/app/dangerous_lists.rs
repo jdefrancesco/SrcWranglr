@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::analysis::dangerous::{with_entry, DangerousFunction, DangerousList};
+use crate::analysis::dangerous::{with_entry, without_entry, DangerousFunction, DangerousList};
 use crate::notes::store::NOTES_DIR;
 use crate::safe_fs::{read_regular_file, write_atomically};
 
@@ -143,6 +143,59 @@ impl DangerousLists {
             self.is_project_trusted,
         );
         Ok(written)
+    }
+
+    /// Removes every entry for `name` from the global and project lists that
+    /// have one, keeping the rest of each file, and reloads. Returns the files
+    /// changed — empty if `name` was in neither.
+    pub fn remove(&mut self, name: &str) -> Result<Vec<PathBuf>, String> {
+        let mut changed = Vec::new();
+        for scope in [ListScope::Global, ListScope::Project] {
+            if let Some(path) = self.remove_from(name, scope)? {
+                changed.push(path);
+            }
+        }
+        if !changed.is_empty() {
+            *self = Self::load_from(
+                self.global_path.clone(),
+                self.project_dir.clone(),
+                self.is_project_trusted,
+            );
+        }
+        Ok(changed)
+    }
+
+    /// Removes `name` from one scope's file. `Ok(None)` when that scope has no
+    /// file or no such entry; the file is written only when it changes.
+    fn remove_from(&self, name: &str, scope: ListScope) -> Result<Option<PathBuf>, String> {
+        let path = match scope {
+            ListScope::Global => self.global_path.clone(),
+            ListScope::Project => self.project_dir.as_ref().map(|dir| dir.join(LIST_FILE)),
+        };
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let failed = |e: String| format!("Could not update {}: {e}", path.display());
+        let current = match scope {
+            ListScope::Global => read_followed(&path),
+            ListScope::Project => read_regular_file(&path, MAX_LIST_BYTES),
+        }
+        .map_err(|e| failed(e.to_string()))?;
+        let Some(text) = current else {
+            return Ok(None);
+        };
+        let Some(updated) = without_entry(&text, name).map_err(failed)? else {
+            return Ok(None);
+        };
+        match scope {
+            ListScope::Global => write_user_file(&path, &updated),
+            ListScope::Project => {
+                let dir = self.project_dir.as_deref().unwrap_or(Path::new("."));
+                write_atomically(dir, LIST_FILE, &updated).map(|()| path.clone())
+            }
+        }
+        .map_err(|e| failed(e.to_string()))
+        .map(Some)
     }
 }
 

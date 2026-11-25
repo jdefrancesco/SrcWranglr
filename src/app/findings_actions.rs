@@ -38,9 +38,16 @@ impl SrcWranglrApp {
         let Some(outcome) = self.dangerous_editor.as_mut().and_then(|e| e.show(ctx)) else {
             return;
         };
-        let DangerousEditorOutcome::Save(entry, scope) = outcome else {
-            self.dangerous_editor = None;
-            return;
+        let (entry, scope) = match outcome {
+            DangerousEditorOutcome::Save(entry, scope) => (entry, scope),
+            DangerousEditorOutcome::Remove(name) => {
+                self.unmark_dangerous(&name);
+                return;
+            }
+            DangerousEditorOutcome::Cancel => {
+                self.dangerous_editor = None;
+                return;
+            }
         };
         match self.dangerous.add(&entry, scope) {
             Ok(path) => {
@@ -68,6 +75,36 @@ impl SrcWranglrApp {
                         path.display()
                     )
                 });
+            }
+            Err(error) => {
+                if let Some(editor) = self.dangerous_editor.as_mut() {
+                    editor.show_error(error);
+                }
+            }
+        }
+    }
+
+    /// Unmarks `name`: removes its entry from the list(s), then re-flags.
+    fn unmark_dangerous(&mut self, name: &str) {
+        match self.dangerous.remove(name) {
+            Ok(changed) if changed.is_empty() => {
+                self.dangerous_editor = None;
+                self.status = Status::Info(format!("{name} wasn't in your lists."));
+            }
+            Ok(changed) => {
+                self.dangerous_editor = None;
+                self.findings = self
+                    .findings
+                    .with_own_results(&self.project.graph, self.dangerous.merged());
+                self.refresh_verdicts();
+                let files = changed
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.status = Status::Info(format!(
+                    "Unmarked {name} (removed from {files}); findings updated."
+                ));
             }
             Err(error) => {
                 if let Some(editor) = self.dangerous_editor.as_mut() {
