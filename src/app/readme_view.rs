@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use egui::text::LayoutJob;
-use egui::{Color32, FontId, RichText, Stroke, TextFormat};
+use egui::{Color32, FontId, Stroke, TextFormat};
 
 use super::background::BackgroundJob;
 use super::fonts;
@@ -180,7 +180,7 @@ fn block(ui: &mut egui::Ui, block: &Block) {
                 .corner_radius(CODE_ROUNDING)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new(code).monospace());
+                    ui.label(code_job(ui, code));
                 });
         }
         Block::Rule => {
@@ -221,6 +221,24 @@ fn table(ui: &mut egui::Ui, rows: &[Vec<Vec<Run>>]) {
     ui.add_space(PARAGRAPH_SPACE);
 }
 
+/// A fenced code block as a monospace label that wraps a long line (rather
+/// than overflowing, which would widen a content-sized pane) — mirroring the
+/// `break_anywhere` wrapping the inline/paragraph text uses.
+fn code_job(ui: &egui::Ui, code: &str) -> LayoutJob {
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let mut job = LayoutJob::single_section(
+        code.to_owned(),
+        TextFormat {
+            font_id: mono,
+            color: ui.visuals().text_color(),
+            ..TextFormat::default()
+        },
+    );
+    job.wrap.max_width = ui.available_width();
+    job.wrap.break_anywhere = true;
+    job
+}
+
 /// `runs` as one wrapped label, at `size` (a heading's) or the body's.
 /// Links' addresses show on hover; they aren't opened.
 fn text(ui: &mut egui::Ui, runs: &[Run], size: Option<f32>) -> egui::Response {
@@ -229,6 +247,12 @@ fn text(ui: &mut egui::Ui, runs: &[Run], size: Option<f32>) -> egui::Response {
     let visuals = ui.visuals().clone();
     let mut job = LayoutJob::default();
     job.wrap.max_width = ui.available_width();
+    // Break even an unbreakable token (a long path or crash-id such as
+    // `.aavr/crashes/{crash-4b8b8c1e*,sdp2-*}`) so it wraps to the width
+    // instead of overflowing. In a content-sized pane (the Notes/Journal
+    // pane) an over-wide line would otherwise widen the pane to fit it,
+    // ballooning it across the window — the Journal "snapping around".
+    job.wrap.break_anywhere = true;
     for run in runs {
         let style = run.style;
         let size = size.unwrap_or(body.size);
@@ -334,6 +358,38 @@ mod tests {
         harness.get_by_label("two");
         harness.get_by_label("2");
         harness.get_by_label_contains("· README.md");
+    }
+
+    #[test]
+    fn a_long_unbreakable_token_wraps_instead_of_overflowing() {
+        // A path/crash-id with no break points must wrap to the width, not
+        // overflow it — otherwise it widens the content-sized Notes/Journal
+        // pane and the list "snaps around". Covers inline code and a fenced
+        // code block.
+        use crate::app::readme::shown_markdown;
+
+        struct T {
+            blocks: Vec<Block>,
+            used: f32,
+        }
+        let long = "a".repeat(400);
+        let md = format!("`{long}`\n\n```\n{long}\n```\n");
+        let mut harness = crate::app::fonts::test_harness()
+            .with_size(egui::vec2(360.0, 500.0))
+            .build_ui_state(
+                |ui, t: &mut T| {
+                    ui.set_max_width(260.0);
+                    markdown(ui, &t.blocks);
+                    t.used = ui.min_rect().width();
+                },
+                T {
+                    blocks: shown_markdown(&md),
+                    used: 0.0,
+                },
+            );
+        harness.run();
+        let used = harness.state().used;
+        assert!(used <= 275.0, "content overflowed the 260px width: {used}");
     }
 
     #[test]
