@@ -1,14 +1,14 @@
 # SrcWranglr
 
-**Explore C/C++ codebases through interactive graphs, linked source, and code auditing tools.**
+**A self-contained AI-assisted vulnerability-research workbench for C/C++: explore the code, find and confirm memory-safety bugs, and drive them toward an exploit — in one app.**
 
-SrcWranglr is a free, MIT-licensed desktop application for getting oriented in unfamiliar C and C++ projects. Open a folder, pick a symbol, and follow its callers, dependencies, and uses alongside the source. Keep notes as you investigate, trace values across functions, and identify code worth reviewing or fuzzing.
+SrcWranglr is a free, MIT-licensed desktop application for vulnerability research in C and C++ projects. Open a folder, pick a symbol, and follow its callers, dependencies, and uses alongside the source. Keep notes as you investigate, trace values across functions, and identify code worth reviewing or fuzzing — then confirm a bug and build toward a proof-of-concept without leaving the app.
 
 Written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](https://tree-sitter.github.io/). Inspired by [Sourcetrail](https://github.com/CoatiSoftware/Sourcetrail), with an independent implementation that shares no code with it.
 
 ![SrcWranglr showing interactive code graphs, linked source, findings, project triage, and fuzz targets](docs/screenshots/slideshow.webp)
 
-[Quick start](#quick-start) · [Features](#features) · [Proven in the field](#proven-in-the-field) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) · [Algorithms](docs/algorithms.md) · [AI policy](#ai-policy)
+[Quick start](#quick-start) · [An AAVR harness](#a-self-contained-aavr-harness) · [Features](#features) · [Proven in the field](#proven-in-the-field) · [Features planned](#features-planned) · [Limitations](#limitations) · [User guide](docs/guide.md) · [Algorithms](docs/algorithms.md) · [AI policy](#ai-policy)
 
 
 ## About
@@ -16,6 +16,17 @@ Written in Rust with [egui](https://github.com/emilk/egui) and [tree-sitter](htt
 I built **SrcWranglr** to help me understand C/C++ codebases while learning Rust. The core analysis code was written by hand; AI tools have assisted with GUI work, tests, and documentation.
 
 Before the Rust re-write, the project used the working name *slurcetrail* and was written in Python for a prototype, then C, then I got side tracked by other things.
+
+## A self-contained AAVR harness
+
+SrcWranglr is built to run the whole **AI-Assisted Vulnerability Research (AAVR)** loop in one application — find a candidate, confirm it, and drive it toward a working proof-of-concept — rather than stitching together a pile of separate tools:
+
+- **Find.** Interactive graphs and cross references to get oriented, argument-aware checks of about 300 risky functions, a pointer-lifetime engine for use-after-free and double-free, optional `Semgrep`/`cppcheck`/`flawfinder` and imported CodeQL/SARIF, git-history fix leads, and a prompt-injection tripwire.
+- **Confirm.** A step-through **emulator** that runs a function over concrete inputs and flags a write past its buffer (CWE-787); an on-demand **agent review** of a function's memory operations; value traces that show whether input can reach a sink; and fuzz-target ranking by reach-ability and risk.
+- **Exploit.** Generate editable **libFuzzer** and **AFL++** harnesses with a dictionary of the constants the code compares and a Makefile, then — with the built-in **AAVR agent** — build and run them under sanitizers, reproduce the crash, and work toward a proof-of-concept, each command gated by your approval.
+- **Record & hand off.** Notes, bookmarks, a journal, finding verdicts, a shareable audit bundle, a Markdown report, and a diagnostics log — so a whole engagement lives in one place.
+
+Everything runs locally. External analyzers and MCP clients are optional add-ons, not requirements: the graph, the built-in analysis, the emulator, the harness generation, and the agent (with your own model and key) all work on their own.
 
 ## Proven in the field
 
@@ -90,7 +101,9 @@ The audited code can't silence these tools: SrcWranglr ignores its `// nosemgrep
 
 Install them with `brew install semgrep cppcheck flawfinder`, or `pipx install semgrep flawfinder` and your system's `cppcheck` package.
 
-### Work with an AI agent
+### Drive it with an AAVR agent
+
+The agent is the engine of the harness: it runs the find → confirm → exploit loop over SrcWranglr's own tools, inside the app or from an external client.
 
 - **MCP server:** opencode, Claude Code and other MCP clients ask SrcWranglr for symbols, call graphs, cross references, findings and strings instead of grepping and reading whole files (`srcwranglr --mcp`). With the app open, the agent shares its index, and the **Agent** pane shows each call as it comes; notes the agent adds appear in Notes.
 - **AAVR assessments:** start a run of AAVR vulnerability-research skills in opencode from the Agent pane, and follow it there: phases, candidates, attack surfaces, fuzz targets and crashes, each a click from its code. The agent gets tools for each phase: input paths, value traces, fuzz-target ranking, harness drafts with Makefiles, semgrep rule drafts, journal entries and SARIF import. The run's confirmed candidates also appear in the Findings window, tagged `AAVR agent` so you can tell them from the scanners'. The skills ship in [`aavr-opencode-skills/`](aavr-opencode-skills/) — install them into opencode with `./install.sh` there (`--skills-only` to skip the slash commands), then run `/aavr`.
