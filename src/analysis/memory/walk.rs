@@ -212,6 +212,17 @@ fn walk_stmt(file: &str, source: &str, node: Node, state: &mut State, out: &mut 
                 walk_stmt(file, source, child, state, out);
             }
         }
+        // A preprocessor conditional compiles only one arm, so treat it like
+        // an `if`/`else`. `#elif` is itself a conditional (condition +
+        // alternative); `#else` just holds statements.
+        "preproc_ifdef" | "preproc_if" | "preproc_elif" => {
+            walk_preproc(file, source, node, state, out);
+        }
+        "preproc_else" => {
+            for stmt in preproc_body(node) {
+                walk_stmt(file, source, stmt, state, out);
+            }
+        }
         _ => visit_expr(file, source, node, state, out),
     }
 }
@@ -255,6 +266,55 @@ fn walk_if(file: &str, source: &str, node: Node, state: &mut State, out: &mut Ve
     }
 }
 
+/// A `#ifdef` / `#ifndef` / `#if` conditional (and its `#elif` chain). Only
+/// one arm is compiled, so walk it like an `if`/`else`: each arm from the
+/// entry state, an arm that can't fall through excluded from the merge, and no
+/// `#else` leaving a fall-through path with the entry state. Without this the
+/// guarded statements fell through to `visit_expr`, which flattens their
+/// control flow — turning two frees on mutually exclusive paths (e.g. the
+/// `#ifdef _WIN32` arm of a `realpath` shim) into a false double-free.
+fn walk_preproc(file: &str, source: &str, node: Node, state: &mut State, out: &mut Vec<Event>) {
+    let mut arms = Vec::new();
+    let body = preproc_body(node);
+    let mut branch = state.clone();
+    for stmt in &body {
+        walk_stmt(file, source, *stmt, &mut branch, out);
+    }
+    if !body.last().copied().is_some_and(terminates) {
+        arms.push(branch);
+    }
+    match node.child_by_field_name("alternative") {
+        Some(alt) => {
+            let mut branch = state.clone();
+            walk_stmt(file, source, alt, &mut branch, out);
+            if !terminates(alt) {
+                arms.push(branch);
+            }
+        }
+        // No `#else`: the other configuration compiles none of this, so that
+        // path falls through with the entry state.
+        None => arms.push(state.clone()),
+    }
+    if !arms.is_empty() {
+        *state = merge_states(&arms);
+    }
+}
+
+/// The guarded statements of a preproc conditional — its named children minus
+/// the directive's macro `name`/`condition` and its `#else`/`#elif`
+/// `alternative`.
+fn preproc_body(node: Node) -> Vec<Node> {
+    let name = node.child_by_field_name("name");
+    let condition = node.child_by_field_name("condition");
+    let alternative = node.child_by_field_name("alternative");
+    named_children(node)
+        .into_iter()
+        .filter(|child| {
+            Some(*child) != name && Some(*child) != condition && Some(*child) != alternative
+        })
+        .collect()
+}
+
 /// Whether control cannot fall out the bottom of `node` — it ends in a
 /// `return`/`goto`/`break`/`continue`, or is an if/else whose arms both do.
 fn terminates(node: Node) -> bool {
@@ -275,6 +335,21 @@ fn terminates(node: Node) -> bool {
             ),
             (Some(cons), Some(alt)) if terminates(cons) && terminates(alt)
         ),
+        // A `#else` arm ends where its last statement does.
+        "preproc_else" => preproc_body(node)
+            .iter()
+            .rev()
+            .find(|child| child.kind() != "comment")
+            .copied()
+            .is_some_and(terminates),
+        // A preproc conditional terminates only if its guarded arm and its
+        // `#else`/`#elif` alternative both do (no fall-through configuration).
+        "preproc_ifdef" | "preproc_if" | "preproc_elif" => {
+            preproc_body(node).last().copied().is_some_and(terminates)
+                && node
+                    .child_by_field_name("alternative")
+                    .is_some_and(terminates)
+        }
         _ => false,
     }
 }

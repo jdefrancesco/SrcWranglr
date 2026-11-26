@@ -228,6 +228,63 @@ fn a_returning_branch_inside_a_switch_case_is_handled() {
 }
 
 #[test]
+fn two_frees_on_exclusive_paths_in_an_ifdef_arm_are_not_a_double_free() {
+    // The miniupnp `realpath` shape: inside `#ifdef _WIN32`, one free sits on
+    // a path that returns, the other after it. No path frees twice, and the
+    // preprocessor arm must not flatten that control flow.
+    let found = rules(
+        "char *realpath(const char *relpath, char *resolved_path) {\n\
+         #ifdef _WIN32\n\
+         \x20   wchar_t *wfullpath = _wfullpath(0, relpath, 0);\n\
+         \x20   if (wfullpath != 0) {\n\
+         \x20       int len = conv(wfullpath);\n\
+         \x20       if (len != 0) {\n\
+         \x20           free(wfullpath);\n\
+         \x20           return resolved_path;\n\
+         \x20       }\n\
+         \x20   }\n\
+         \x20   free(wfullpath);\n\
+         #else\n\
+         \x20   (void)resolved_path;\n\
+         #endif\n\
+         \x20   return 0;\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_real_double_free_inside_an_ifdef_arm_is_still_flagged() {
+    // Control flow inside the arm is honored, not ignored: two straight-line
+    // frees of the same pointer are still a double-free.
+    let found = rules(
+        "void f(char *p) {\n\
+         #ifdef X\n\
+         \x20   free(p);\n\
+         \x20   free(p);\n\
+         #endif\n\
+         }\n",
+    );
+    assert_eq!(found, [("double-free".to_string(), 4)]);
+}
+
+#[test]
+fn frees_in_opposite_ifdef_arms_are_not_a_double_free() {
+    // Only one arm is compiled, so a free in the `#ifdef` arm and a free in
+    // the `#else` arm never both run.
+    let found = rules(
+        "void f(char *p) {\n\
+         #ifdef X\n\
+         \x20   free(p);\n\
+         #else\n\
+         \x20   free(p);\n\
+         #endif\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
 fn a_function_that_did_not_parse_cleanly_is_skipped() {
     // An incomplete expression leaves the body with a parse error; emit
     // nothing rather than flatten the control flow into false positives.
