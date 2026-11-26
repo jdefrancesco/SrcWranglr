@@ -85,6 +85,7 @@ mod symbol_list;
 mod theme;
 mod todo_actions;
 mod todo_panel;
+mod tool_install;
 mod tool_job;
 mod trace_actions;
 mod trace_panel;
@@ -225,6 +226,8 @@ pub struct SrcWranglrApp {
     settings: settings::Settings,
     /// The Settings window, while it is open.
     settings_view: Option<settings_view::SettingsView>,
+    /// A background analyzer install, while one runs.
+    install_job: Option<tool_install::InstallJob>,
     /// Whether Help > About is showing.
     is_about_open: bool,
     /// Where you were in each project opened.
@@ -304,6 +307,7 @@ impl SrcWranglrApp {
             matching_panel: matching_panel::MatchingPanel::default(),
             settings: settings::Settings::default(),
             settings_view: None,
+            install_job: None,
             is_about_open: false,
             sessions: session::Sessions::load(storage),
             pending_session: None,
@@ -445,6 +449,7 @@ impl eframe::App for SrcWranglrApp {
         self.poll_job(&ctx);
         self.poll_tool_jobs();
         self.poll_tool_folder(&ctx);
+        self.poll_install();
         self.poll_history();
         self.poll_docs(&ctx);
         self.poll_agent(&ctx);

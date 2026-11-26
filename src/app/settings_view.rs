@@ -44,6 +44,8 @@ const FONT_SAMPLE: &str = "★ png_read_chunk  [function]   Parser::next_token  
 pub enum SettingsAction {
     /// Use and save these now; the window stays open.
     Apply(Settings),
+    /// Install this missing analyzer (its Install button was clicked).
+    Install(Tool),
     /// The window was closed: the settings as left (to save if they
     /// changed), or why they can't be saved.
     Close(Result<Settings, String>),
@@ -82,6 +84,11 @@ pub struct SettingsView {
     folder_dialog: Option<PendingDialog<PathBuf>>,
     /// Where each tool was found, for the folders as last typed.
     found: Option<Found>,
+    /// A tool whose Install button was clicked this frame, for `show` to
+    /// return.
+    install_requested: Option<Tool>,
+    /// A tool being installed now (set by the app), so its row shows progress.
+    installing: Option<Tool>,
 }
 
 /// Where the tools and the editor's program were found, for `key` (the
@@ -91,6 +98,7 @@ struct Found {
     key: String,
     tools: Vec<Option<PathBuf>>,
     editor: Option<(String, Option<PathBuf>)>,
+    managers: super::tool_install::Managers,
 }
 
 impl SettingsView {
@@ -124,12 +132,24 @@ impl SettingsView {
             is_typing: false,
             folder_dialog: None,
             found: None,
+            install_requested: None,
+            installing: None,
         }
     }
 
     /// Shows why the last change couldn't be saved.
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
+    }
+
+    /// Marks the tool being installed now, so its row shows progress.
+    pub fn set_installing(&mut self, tool: Option<Tool>) {
+        self.installing = tool;
+    }
+
+    /// Re-detects the tools next frame (after an install finishes).
+    pub fn refresh_tools(&mut self) {
+        self.found = None;
     }
 
     /// The settings as edited, if they are valid.
@@ -209,6 +229,9 @@ impl SettingsView {
         });
         let should_close = response.should_close();
         let (change, is_done) = response.inner;
+        if let Some(tool) = self.install_requested.take() {
+            return Some(SettingsAction::Install(tool));
+        }
         if is_done || should_close {
             return Some(SettingsAction::Close(self.draft()));
         }
@@ -271,7 +294,14 @@ impl SettingsView {
             }
             ui.weak("Then PATH, then Homebrew's, ~/.local/bin and the other usual places.");
         });
-        let Found { tools, editor, .. } = self.found_tools();
+        let Found {
+            tools,
+            editor,
+            managers,
+            ..
+        } = self.found_tools();
+        let installing = self.installing;
+        let mut requested = None;
         egui::Grid::new("settings_tools")
             .num_columns(2)
             .striped(true)
@@ -279,11 +309,17 @@ impl SettingsView {
                 for (tool, found) in TOOLS.iter().zip(tools) {
                     ui.label(tool.name());
                     match found {
-                        Some(path) => ui.monospace(path.display().to_string()),
-                        None => ui.label(
-                            RichText::new(format!("not found: {}", tool.install_hint()))
-                                .color(ERROR_COLOR),
-                        ),
+                        Some(path) => {
+                            ui.monospace(path.display().to_string());
+                        }
+                        None if installing == Some(*tool) => {
+                            ui.add(egui::Spinner::new());
+                        }
+                        None => {
+                            if let Some(tool) = missing_tool_row(ui, *tool, &managers) {
+                                requested = Some(tool);
+                            }
+                        }
                     };
                     ui.end_row();
                 }
@@ -296,9 +332,52 @@ impl SettingsView {
                     ui.end_row();
                 }
             });
+        if requested.is_some() {
+            self.install_requested = requested;
+        }
         is_typing
     }
+}
 
+/// A not-found tool's row: an **Install** button when SrcWranglr can run a
+/// no-sudo package manager, else the command to run with a **Copy** button.
+/// Returns the tool when its Install button is clicked.
+fn missing_tool_row(
+    ui: &mut egui::Ui,
+    tool: Tool,
+    managers: &super::tool_install::Managers,
+) -> Option<Tool> {
+    use super::tool_install::{plan, InstallPlan};
+    let mut requested = None;
+    ui.horizontal(|ui| match plan(tool, managers) {
+        InstallPlan::Run { program, .. } => {
+            ui.label(RichText::new("not found").color(ERROR_COLOR));
+            if ui
+                .button("Install")
+                .on_hover_text(format!(
+                    "Runs `{program} install {}` in the background",
+                    tool.name()
+                ))
+                .clicked()
+            {
+                requested = Some(tool);
+            }
+        }
+        InstallPlan::Manual(command) => {
+            ui.label(RichText::new(format!("not found: {command}")).color(ERROR_COLOR));
+            if ui
+                .button("Copy")
+                .on_hover_text("Copy the install command")
+                .clicked()
+            {
+                ui.ctx().copy_text(command);
+            }
+        }
+    });
+    requested
+}
+
+impl SettingsView {
     /// Where each tool (and the editor's program) is, for the folders as
     /// typed; looked up again only when they change.
     fn found_tools(&mut self) -> Found {
@@ -330,6 +409,7 @@ impl SettingsView {
                 let path = search.find(&p);
                 (p, path)
             }),
+            managers: super::tool_install::Managers::found(&search),
         };
         self.found = Some(found.clone());
         found
@@ -520,6 +600,48 @@ mod tests {
             harness.get_by_label(tool);
         }
         harness.get_by_label("Open in Editor uses:");
+    }
+
+    #[test]
+    fn a_missing_tool_offers_install_when_a_manager_is_present() {
+        struct S {
+            requested: Option<Tool>,
+        }
+        let managers = crate::app::tool_install::Managers {
+            brew: true,
+            pipx: false,
+            pip: None,
+        };
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
+            move |ui, s: &mut S| {
+                if let Some(tool) = missing_tool_row(ui, Tool::Semgrep, &managers) {
+                    s.requested = Some(tool);
+                }
+            },
+            S { requested: None },
+        );
+        harness.run();
+        harness.get_by_label("Install").click();
+        harness.run();
+        assert_eq!(harness.state().requested, Some(Tool::Semgrep));
+    }
+
+    #[test]
+    fn a_missing_tool_without_a_manager_shows_copy_not_install() {
+        let managers = crate::app::tool_install::Managers {
+            brew: false,
+            pipx: false,
+            pip: None,
+        };
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
+            move |ui, _s: &mut ()| {
+                missing_tool_row(ui, Tool::Cppcheck, &managers);
+            },
+            (),
+        );
+        harness.run();
+        assert!(harness.query_by_label("Install").is_none());
+        assert!(harness.query_by_label("Copy").is_some());
     }
 
     #[test]

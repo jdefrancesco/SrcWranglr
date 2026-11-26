@@ -3,7 +3,9 @@
 
 use super::settings::{settings_path, Settings};
 use super::settings_view::{SettingsAction, SettingsView};
+use super::tool_install::{self, InstallJob, InstallPlan, Managers};
 use super::{SrcWranglrApp, Status};
+use crate::analysis::tools::Tool;
 
 impl SrcWranglrApp {
     /// Reads your settings; a bad file is reported and the defaults used.
@@ -34,11 +36,86 @@ impl SrcWranglrApp {
                     }
                 }
             }
+            SettingsAction::Install(tool) => self.install_tool(tool, ctx),
             SettingsAction::Close(left) => {
                 self.settings_view = None;
                 self.close_settings(left);
             }
         }
+    }
+
+    /// Starts installing a missing analyzer in the background, if one isn't
+    /// already running and SrcWranglr can run a package manager for it.
+    fn install_tool(&mut self, tool: Tool, ctx: &egui::Context) {
+        if self.install_job.is_some() {
+            self.status = Status::Info("An install is already running.".into());
+            return;
+        }
+        let search = self.settings.search_path();
+        match tool_install::plan(tool, &Managers::found(&search)) {
+            plan @ InstallPlan::Run { .. } => {
+                let job = InstallJob::spawn(tool, plan, &search, ctx);
+                self.status = Status::Info(job.status_line());
+                if let Some(view) = self.settings_view.as_mut() {
+                    view.set_installing(Some(tool));
+                }
+                self.install_job = Some(job);
+            }
+            InstallPlan::Manual(command) => {
+                self.status =
+                    Status::Info(format!("Run this to install {}: {command}", tool.name()));
+            }
+        }
+    }
+
+    /// On opening a project, if analyzers are missing, adds a non-blocking
+    /// note to the status bar pointing at Settings, where they can be
+    /// installed. Never installs on its own.
+    pub(super) fn offer_tool_install_on_open(&mut self) {
+        let search = self.settings.search_path();
+        let missing: Vec<&str> = [Tool::Semgrep, Tool::Cppcheck, Tool::Flawfinder]
+            .into_iter()
+            .filter(|t| search.find(t.name()).is_none())
+            .map(|t| t.name())
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let note = format!(
+            " {} not found — ⌘, / Ctrl+, to install.",
+            missing.join(", ")
+        );
+        if let Status::Info(message) = &mut self.status {
+            message.push_str(&note);
+        } else {
+            self.status = Status::Info(note.trim_start().to_string());
+        }
+    }
+
+    /// Advances a running install: keeps its progress in the status bar, and
+    /// on finish reports the result and re-checks the tools.
+    pub(super) fn poll_install(&mut self) {
+        let Some(job) = self.install_job.as_ref() else {
+            return;
+        };
+        let tool = job.tool();
+        let Some(result) = job.poll() else {
+            self.status = Status::Info(job.status_line());
+            return;
+        };
+        self.install_job = None;
+        if let Some(view) = self.settings_view.as_mut() {
+            view.set_installing(None);
+            view.refresh_tools();
+        }
+        self.status = match result {
+            Ok(()) => Status::Info(format!("{} installed.", tool.name())),
+            Err(error) => Status::Error(format!(
+                "Couldn't install {}: {}",
+                tool.name(),
+                error.lines().next().unwrap_or(&error)
+            )),
+        };
     }
 
     /// Saves what the Settings window was closed with, if it wasn't yet

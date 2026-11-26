@@ -113,6 +113,7 @@ impl SrcWranglrApp {
         self.recent = self.recent.with_opened(&root);
         let project = Project::new(name, Some(root), outcome.graph);
         self.switch_to(project, triage, outcome.warnings, ctx);
+        self.offer_tool_install_on_open();
     }
 
     /// Opens the built-in demo (stopping any indexing under way).
