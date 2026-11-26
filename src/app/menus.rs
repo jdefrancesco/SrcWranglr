@@ -113,6 +113,13 @@ impl SrcWranglrApp {
         if import.clicked() {
             return Some(Command::ImportBundle);
         }
+        let report = egui::Button::new(Command::GenerateReport.label());
+        let report = ui.add_enabled(can_save_session, report).on_hover_text(
+            "A Markdown report to read: verdicts, notes, bookmarks, TODOs and the journal",
+        );
+        if report.clicked() {
+            return Some(Command::GenerateReport);
+        }
         ui.separator();
         let can_reindex = self.project.root.is_some() && self.job.is_none();
         if ui
@@ -339,7 +346,14 @@ fn triage_menu(ui: &mut egui::Ui) -> Option<Command> {
 }
 
 fn help_menu(ui: &mut egui::Ui) -> Option<Command> {
-    ui.button(Command::About.label())
+    let log = ui
+        .button(Command::ShowLog.label())
+        .on_hover_text("SrcWranglr's own diagnostics: panics, background-job failures and errors")
         .clicked()
-        .then_some(Command::About)
+        .then_some(Command::ShowLog);
+    let about = ui
+        .button(Command::About.label())
+        .clicked()
+        .then_some(Command::About);
+    log.or(about)
 }

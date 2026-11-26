@@ -53,8 +53,12 @@ pub enum Command {
     Journal,
     ExportBundle,
     ImportBundle,
+    /// Writes a human-readable Markdown audit report.
+    GenerateReport,
     /// Opens the project's README in a window.
     ShowReadme,
+    /// Opens the Log window (SrcWranglr's own diagnostics).
+    ShowLog,
     About,
     Back,
     Fit,
@@ -68,7 +72,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 52] = [
+    pub const ALL: [Command; 54] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -100,7 +104,9 @@ impl Command {
         Command::OpenSession,
         Command::ExportBundle,
         Command::ImportBundle,
+        Command::GenerateReport,
         Command::ShowReadme,
+        Command::ShowLog,
         Command::TogglePane(Pane::Todos),
         Command::TogglePane(Pane::Trace),
         Command::TogglePane(Pane::Agent),
@@ -153,7 +159,9 @@ impl Command {
             Command::Journal => "Write in the Journal",
             Command::ExportBundle => "Export Audit Bundle…",
             Command::ImportBundle => "Import Audit Bundle…",
+            Command::GenerateReport => "Generate Report…",
             Command::ShowReadme => "Show Project README",
+            Command::ShowLog => "Show Log (Diagnostics)",
             Command::About => "About SrcWranglr",
             Command::Back => "Go Back",
             Command::Fit => "Fit Graph to Window",

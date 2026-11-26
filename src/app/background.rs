@@ -26,6 +26,9 @@ impl<T: Send + 'static> BackgroundJob<T> {
         std::thread::spawn(move || {
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| work(&stop)))
                 .unwrap_or_else(|_| {
+                    // The panic hook already logged the panic and backtrace;
+                    // note which job it was.
+                    super::diag::record(super::diag::Level::Error, format!("{what} panicked"));
                     Err(format!(
                         "{what} failed unexpectedly; the rest of the app is fine."
                     ))

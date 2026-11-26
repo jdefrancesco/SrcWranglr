@@ -16,6 +16,7 @@ mod code_panel;
 mod code_panel_actions;
 mod dangerous_editor;
 pub(crate) mod dangerous_lists;
+pub(crate) mod diag;
 mod dialogs;
 mod docs;
 mod docs_actions;
@@ -42,6 +43,7 @@ mod layout;
 mod lifetimes_view;
 mod line_comment;
 mod locations;
+mod log_view;
 mod markdown;
 mod matching;
 mod matching_actions;
@@ -58,6 +60,8 @@ pub(crate) mod project;
 mod range;
 mod readme;
 mod readme_view;
+mod report;
+mod report_actions;
 mod rule_actions;
 mod rule_editor;
 mod rule_files;
@@ -250,6 +254,13 @@ pub struct SrcWranglrApp {
     session_file: Option<(PathBuf, PathBuf)>,
     /// An audit bundle file dialog, while one is open.
     bundle_dialog: Option<bundle_actions::BundleDialog>,
+    /// A report "save as" dialog and the Markdown to write, while open.
+    report_dialog: Option<report_actions::ReportDialog>,
+    /// The Log window (SrcWranglr's own diagnostics), while open.
+    log_view: Option<log_view::LogView>,
+    /// The last error text mirrored into the log, so it isn't logged every
+    /// frame while it stays in the status bar.
+    logged_status: Option<String>,
     /// A bundle read, waiting for the user to import it.
     bundle_preview: Option<Box<bundle_actions::BundlePreview>>,
     /// The open project's TODO list.
@@ -320,6 +331,9 @@ impl SrcWranglrApp {
             session_dialog: None,
             session_file: None,
             bundle_dialog: None,
+            report_dialog: None,
+            log_view: None,
+            logged_status: None,
             bundle_preview: None,
             todos: Default::default(),
             todos_error: None,
@@ -449,6 +463,7 @@ impl eframe::App for SrcWranglrApp {
         self.poll_open_dialog(&ctx);
         self.poll_session_dialog(&ctx);
         self.poll_bundle_dialog();
+        self.poll_report_dialog();
         self.poll_sarif_import(&ctx);
         self.poll_job(&ctx);
         self.poll_tool_jobs();
@@ -459,6 +474,7 @@ impl eframe::App for SrcWranglrApp {
         self.poll_agent(&ctx);
         self.poll_in_app(&ctx);
         self.sync_agent_findings();
+        self.mirror_status_to_log();
         // Global shortcuts pause while the palette or a dialog is open.
         let is_dialog_open = self.note_editor.is_some()
             || self.finding_view.is_some()
@@ -516,6 +532,7 @@ impl eframe::App for SrcWranglrApp {
         self.show_xrefs_view(&ctx);
         self.show_docs_window(&ctx);
         readme_view::show(&ctx, &mut self.readme, &self.project.name);
+        self.show_log_view(&ctx);
         let notes = if self.palette.is_open() {
             self.note_candidates()
         } else {
@@ -650,10 +667,12 @@ impl SrcWranglrApp {
             Command::OpenSession => self.open_session_dialog(ctx),
             Command::ExportBundle => self.export_bundle_dialog(ctx),
             Command::ImportBundle => self.import_bundle_dialog(ctx),
+            Command::GenerateReport => self.generate_report_dialog(ctx),
             Command::ShowReadme => {
                 let root = self.project.root.clone();
                 self.readme = Some(readme_view::ReadmeWindow::open(root, ctx));
             }
+            Command::ShowLog => self.open_log(),
             Command::About => self.is_about_open = true,
             Command::EditNote => {
                 if let Some(target) = self.selected_target() {

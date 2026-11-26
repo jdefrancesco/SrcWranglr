@@ -340,6 +340,10 @@ impl SrcWranglrApp {
             "Running {} on {where_}… results go to Findings.",
             tool.name()
         ));
+        super::diag::record(
+            super::diag::Level::Info,
+            format!("{} started on {where_}", tool.name()),
+        );
         let search = self.settings.search_path();
         // The project's own rules only once you trust its files, asked
         // now: rules may have appeared since the project was opened.
@@ -372,6 +376,10 @@ impl SrcWranglrApp {
             self.status = match result {
                 Ok(found) => {
                     let count = found.len();
+                    super::diag::record(
+                        super::diag::Level::Info,
+                        format!("{} finished: {count} finding(s)", tool.name()),
+                    );
                     let found = tool_job::with_symbols(found, &self.project.graph);
                     self.findings = self.findings.with_tool_results(tool.name(), found);
                     self.refresh_verdicts();
@@ -380,6 +388,8 @@ impl SrcWranglrApp {
                         tool.name()
                     ))
                 }
+                // A failed run's error is mirrored to the log by
+                // `mirror_status_to_log`, so it isn't recorded twice here.
                 Err(error) => Status::Error(error),
             };
         }

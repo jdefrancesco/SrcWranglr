@@ -358,6 +358,12 @@ Reopening a project puts you back where you were:
 
 Importing the same bundle twice changes nothing. A bundle can come from anyone, so every part is checked the way the project's own files are, and a bad one is refused with the reason.
 
+**File → Generate Report…** writes a human-readable **Markdown** report of the open project's audit — a summary (findings, verdict counts, notes, bookmarks, open TODOs, journal entries), the confirmed bugs first (each with its rule, place and your note), then the reviewed and false-positive verdicts, your notes and bookmarks, the TODO list, and the journal newest first. Unlike the audit bundle (a machine-readable file for re-importing elsewhere), the report is a document to read and hand off; text from the tree is shown safely (hidden characters are marked, not raw).
+
+## Diagnostics log
+
+**Help → Show Log** opens SrcWranglr's own log — its panics (with a backtrace), background-job failures, and internal errors. It's for troubles in the tool itself, not findings in your code. The same lines are written to `srcwranglr.log` in the config folder (`~/.config/srcwranglr/`), so if a crash takes the window down, the reason is there to read next launch (the window seeds from the file on start). **Copy All** puts the log on the clipboard for a bug report; **Clear** empties it. The file is rotated once it grows past about a megabyte, and it holds only the tool's own diagnostics, never your project's source.
+
 ## Git history
 
 When a project that is a git checkout opens, SrcWranglr reads its history in the background and looks for commits whose message says they fixed something: words like `fix`, `bug`, `revert`, `workaround`, `TODO`, and security words such as `overflow`, `use-after-free`, `oob`, `leak`, `race`, `crash`, `oss-fuzz` or a `CVE-…` id. It then traces each file those commits changed back line by line (blame), to find the lines of today's code that each fix commit last changed. Code fixed once is a good place to look for the same bug nearby, or for a fix that missed a case.
@@ -510,6 +516,8 @@ srcwranglr --version
 | Keep a journal of the audit | **⌘J / Ctrl+J**, or **Go → Write in the Journal**; **⌘Enter / Ctrl+Enter** adds the entry |
 | TODO list | **TODO** in the menu bar, or **Go → TODO List**; right-click a line, then **Add TODO Here…** |
 | Audit what changed since a tag, branch or commit | **History** in the menu bar, then **Changes**: pick a base and **Compare**; changed lines are marked in the source, and Findings can show only changed code |
+| Share the audit, or write it up | **File → Export Audit Bundle…** (a file to re-import into another checkout) or **File → Generate Report…** (a Markdown report to read) |
+| See SrcWranglr's own errors or a crash | **Help → Show Log**; also written to `~/.config/srcwranglr/srcwranglr.log` so it survives a crash |
 | Strings in the source, and where each is used | **Strings** in the menu bar, or **Analyze → Strings in the Source** |
 | Trace where a value comes from | **Trace Back** in a finding's window, or right-click a line, then **Trace Where It Comes From** |
 | Trace where a value goes | Right-click a line, then **Trace Where It Goes**; click a step to mark its path in the source |

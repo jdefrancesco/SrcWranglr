@@ -52,6 +52,9 @@ fn main() -> eframe::Result<()> {
         println!("srcwranglr {}", version::version_line());
         return Ok(());
     }
+    // Start the diagnostics log and panic hook before the window, so a crash
+    // during startup is recorded too. Help › Show Log reads it.
+    app::diag::install();
     // Maximized the first time; after that eframe restores the window as
     // it was left, overriding these. The app id matches the Linux .desktop
     // file, so docks group windows.
