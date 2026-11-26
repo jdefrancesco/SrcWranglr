@@ -488,6 +488,7 @@ srcwranglr --version
 | Highlight a name everywhere in the file | Click it in the source (any name: a variable, a call); **Esc** or a click on space clears it |
 | Open an `#include`d header, or a file named in a comment | Point at it in the source and press **G**, or right-click the line, then **Open …** |
 | Cross references (every use and call), as in IDA | Point at a name in the source and press **X**, or right-click a line, then **Cross References**; **X** elsewhere, or **Go → Cross References to Selected Symbol**, for the symbol selected |
+| Comment or uncomment code | Point at a line and press **;**. It toggles a `//` line comment on the line under the pointer — or the whole block when several lines are picked (Shift-click line numbers) and the pointer is within it — and writes the change to the file on disk. If every target line is already commented it uncomments them instead. Analysis (findings, cross references) refreshes on the next re-index. |
 | Step through a symbol's locations | **◀ / ▶** above the code |
 | Go back | **◀ Back** |
 | See all files | **Overview** |

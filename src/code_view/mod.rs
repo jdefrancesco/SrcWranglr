@@ -197,6 +197,9 @@ pub enum CodeEvent {
     /// Hovering a call to a library function whose man page isn't looked
     /// up yet: its name as looked up.
     HoveredCall(String),
+    /// Pressed `;` over the code: toggle a `//` comment on 1-based lines
+    /// `first..=last` (the lines picked, or the focused line).
+    ToggleComment { first: u32, last: u32 },
 }
 
 /// Source viewer. Keeps the line index of the file it last showed, so
@@ -317,7 +320,7 @@ impl Rows<'_> {
             .focus
             .selected_lines
             .is_some_and(|(first, last)| (first..=last).contains(&line_no));
-        ui.horizontal(|ui| {
+        let row = ui.horizontal(|ui| {
             if is_picked {
                 let size = egui::vec2(ui.available_width().max(GUTTER_WIDTH), self.row_height);
                 let row = egui::Rect::from_min_size(ui.cursor().min, size);
@@ -384,8 +387,22 @@ impl Rows<'_> {
                 .map(|a| CodeEvent::Line(line_no, a))
                 .or(number_clicked)
                 .or(event)
-        })
-        .inner
+        });
+        // `;` over this line toggles a `//` comment on it — or on the whole
+        // picked block, when the pointer is within one. Held back while a text
+        // field is being typed in, so a typed semicolon isn't stolen.
+        let pressed_semicolon = row.response.contains_pointer()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Semicolon));
+        if pressed_semicolon {
+            let (first, last) = self
+                .focus
+                .selected_lines
+                .filter(|(a, b)| (*a..=*b).contains(&line_no))
+                .unwrap_or((line_no, line_no));
+            return Some(CodeEvent::ToggleComment { first, last });
+        }
+        row.inner
     }
 
     /// Paints one line of code and handles hovering/clicking its names and

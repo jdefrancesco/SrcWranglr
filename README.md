@@ -118,6 +118,7 @@ Install them with `brew install semgrep cppcheck flawfinder`, or `pipx install s
 | Cross references to a name | Point at it in the source and press **X** |
 | Open an `#include`d header | Point at it in the source and press **G** |
 | Highlight a name in the file | Click it in the source; **Esc** clears |
+| Comment or uncomment code | Point at a line and press **;** (toggles that line's `//`, or the whole block when several are picked) |
 | Return to the previous symbol | **◀ Back** |
 | Trace a value, find similar code, or show docs | Right-click a source line (Shift-click line numbers to pick several) |
 | Manage semgrep rules | **Analyze → Semgrep Rules…** |
