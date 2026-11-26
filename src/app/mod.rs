@@ -156,6 +156,12 @@ enum Status {
     Error(String),
 }
 
+/// A findings-panel pick, with its data owned so `self` can be mutated after.
+enum FindingPickOwned {
+    Show(Option<crate::model::SymbolId>, String, u32),
+    Explore(crate::model::SymbolId),
+}
+
 pub struct SrcWranglrApp {
     project: Project,
     graph_view: GraphView,
@@ -521,13 +527,25 @@ impl eframe::App for SrcWranglrApp {
 }
 
 impl SrcWranglrApp {
+    /// Explore a finding's function: select it in the graph and show its
+    /// definition (the right-click **Explore** in the Findings panel).
+    fn explore_from_finding(&mut self, id: crate::model::SymbolId) {
+        match self.project.graph.symbols.get(&id) {
+            Some(symbol) => {
+                let (file, line) = (symbol.file.clone(), symbol.line);
+                self.go_to_place(Some(id), &file, line);
+            }
+            None => self.graph_view.select(id),
+        }
+    }
+
     /// The symbol list, notes, findings, source and graph of the open project.
     fn show_project_panes(&mut self, ui: &mut egui::Ui) {
         self.show_symbol_list(ui);
         self.show_notes_panel(ui);
         self.show_todo_panel(ui);
         self.show_agent_panel(ui);
-        let finding = self
+        let pick = self
             .findings_panel
             .show(
                 ui,
@@ -537,9 +555,18 @@ impl SrcWranglrApp {
                 self.layout,
                 self.history_panel.range(),
             )
-            .map(|f| (f.symbol, f.file.clone(), f.line));
-        if let Some((symbol, file, line)) = finding {
-            self.go_to_place(symbol, &file, line);
+            .map(|pick| match pick {
+                findings_panel::FindingPick::Show(f) => {
+                    FindingPickOwned::Show(f.symbol, f.file.clone(), f.line)
+                }
+                findings_panel::FindingPick::Explore(id) => FindingPickOwned::Explore(id),
+            });
+        match pick {
+            Some(FindingPickOwned::Show(symbol, file, line)) => {
+                self.go_to_place(symbol, &file, line);
+            }
+            Some(FindingPickOwned::Explore(id)) => self.explore_from_finding(id),
+            None => {}
         }
         self.show_strings_panel(ui);
         self.show_history_panel(ui);

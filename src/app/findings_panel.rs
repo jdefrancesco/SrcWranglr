@@ -13,13 +13,22 @@ use super::pane_bar::{self, Edge};
 use super::range::RangeView;
 use crate::analysis::reach::{describe, Reach};
 use crate::analysis::{Finding, Severity};
-use crate::model::CodeGraph;
+use crate::model::{CodeGraph, SymbolId};
 use crate::notes::triage::TriageStatus;
 use crate::style::{severity_text_color, INPUT_COLOR};
 
 /// A tool's name longer than this (an imported report's) is cut short.
 const MAX_TOOL_CHARS: usize = 24;
 const DEFAULT_WIDTH: f32 = 340.0;
+
+/// What the user did on a finding row.
+pub enum FindingPick<'f> {
+    /// Clicked it: go to the flagged line.
+    Show(&'f Finding),
+    /// Chose **Explore** in its right-click menu: explore the finding's
+    /// function in the graph.
+    Explore(SymbolId),
+}
 
 #[derive(Default)]
 pub struct FindingsPanel {
@@ -64,7 +73,7 @@ impl FindingsPanel {
         reach: &Reach,
         layout: Layout,
         range: Option<&RangeView>,
-    ) -> Option<&'f Finding> {
+    ) -> Option<FindingPick<'f>> {
         let mut is_open = self.is_open;
         let shown = pane_bar::right_pane(layout.pane_id("findings_panel"), DEFAULT_WIDTH)
             .show_collapsible(ui, &mut is_open, |ui| {
@@ -82,7 +91,7 @@ impl FindingsPanel {
         graph: &CodeGraph,
         reach: &Reach,
         range: Option<&RangeView>,
-    ) -> Option<&'f Finding> {
+    ) -> Option<FindingPick<'f>> {
         let title = format!("Findings ({})", findings.all().len());
         if pane_bar::heading(ui, title, Edge::Right) {
             self.is_open = false;
@@ -166,9 +175,8 @@ impl FindingsPanel {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 rows[range]
                     .iter()
-                    .filter(|(i, f)| finding_row(ui, f, findings.verdict(*i), graph, reach))
+                    .filter_map(|(i, f)| finding_row(ui, f, findings.verdict(*i), graph, reach))
                     .last()
-                    .map(|(_, f)| *f)
             })
             .inner
     }
@@ -176,13 +184,13 @@ impl FindingsPanel {
 
 /// One finding on one line; hover for the explanation. Returns whether
 /// it was clicked.
-fn finding_row(
+fn finding_row<'f>(
     ui: &mut egui::Ui,
-    finding: &Finding,
+    finding: &'f Finding,
     verdict: Option<TriageStatus>,
     graph: &CodeGraph,
     reach: &Reach,
-) -> bool {
+) -> Option<FindingPick<'f>> {
     ui.horizontal(|ui| {
         if reach.reaches_finding(finding) {
             ui.label(RichText::new("input").color(INPUT_COLOR).small())
@@ -220,9 +228,23 @@ fn finding_row(
             visible_lines(&finding.message),
             visible(&finding.tool)
         );
-        ui.selectable_label(false, text)
-            .on_hover_text(hover)
-            .clicked()
+        let row = ui.selectable_label(false, text).on_hover_text(hover);
+        let mut pick = row.clicked().then_some(FindingPick::Show(finding));
+        if let Some(id) = finding.symbol.filter(|id| graph.symbols.contains_key(id)) {
+            row.context_menu(|ui| {
+                let name = symbol_name(finding, graph);
+                let explore = if name.is_empty() {
+                    "Explore".to_string()
+                } else {
+                    format!("Explore {name}")
+                };
+                if ui.button(explore).clicked() {
+                    pick = Some(FindingPick::Explore(id));
+                    ui.close();
+                }
+            });
+        }
+        pick
     })
     .inner
 }
@@ -587,7 +609,7 @@ mod tests {
                     Layout::default(),
                     None,
                 );
-                if let Some(f) = picked {
+                if let Some(FindingPick::Show(f)) = picked {
                     state.picked = Some((f.rule.clone(), f.line));
                 }
             },
@@ -597,5 +619,57 @@ mod tests {
         harness.get_by_label("system  x.c:2  run").click();
         harness.run();
         assert_eq!(harness.state().picked, Some(("system".into(), 2)));
+    }
+
+    #[test]
+    fn right_clicking_a_row_offers_exploring_its_function() {
+        use egui_kittest::kittest::Queryable;
+
+        struct State {
+            panel: FindingsPanel,
+            findings: Findings,
+            graph: CodeGraph,
+            explored: Option<SymbolId>,
+        }
+        let graph = graph();
+        let mut panel = FindingsPanel::default();
+        panel.set_open(true);
+        let state = State {
+            panel,
+            findings: Findings::for_graph(&graph, &Default::default()),
+            graph,
+            explored: None,
+        };
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
+            |ui, state: &mut State| {
+                let picked = state.panel.show(
+                    ui,
+                    &state.findings,
+                    &state.graph,
+                    &Reach::default(),
+                    Layout::default(),
+                    None,
+                );
+                if let Some(FindingPick::Explore(id)) = picked {
+                    state.explored = Some(id);
+                }
+            },
+            state,
+        );
+        harness.run();
+        // The `system(c)` call on line 2 is inside `run`, so Explore targets it.
+        let expected = harness
+            .state()
+            .findings
+            .all()
+            .iter()
+            .find(|f| f.line == 2)
+            .and_then(|f| f.symbol);
+        assert!(expected.is_some(), "the fixture finding has a function");
+        harness.get_by_label("system  x.c:2  run").click_secondary();
+        harness.run();
+        harness.get_by_label("Explore run").click();
+        harness.run();
+        assert_eq!(harness.state().explored, expected);
     }
 }
