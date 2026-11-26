@@ -210,7 +210,9 @@ fn search_matches_text_file_or_symbol_newest_first() {
 }
 
 #[test]
-fn only_the_entries_in_view_are_drawn() {
+fn every_entry_is_drawn_newest_first() {
+    // No height-guessing virtualization (which made the list snap around as
+    // entries scrolled into view): every entry is laid out, newest first.
     let journal = (0..200).fold(Journal::default(), |journal, i| {
         let text = format!("Entry {i:03}.\n\nSome more\nlines.");
         journal
@@ -218,11 +220,9 @@ fn only_the_entries_in_view_are_drawn() {
             .expect("valid")
     });
     let harness = harness(journal, Ok(SAVED));
-    assert!(
-        harness.query_by_label("Entry 199.").is_some(),
-        "newest, at the top"
-    );
-    assert!(harness.query_by_label("Entry 000.").is_none(), "far below");
+    let newest = harness.get_by_label("Entry 199.").rect();
+    let oldest = harness.get_by_label("Entry 000.").rect();
+    assert!(newest.top() < oldest.top(), "newest first, all present");
 }
 
 #[test]

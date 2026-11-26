@@ -18,11 +18,9 @@ use crate::notes::journal::{date_time, Entry, Journal, Place};
 pub const ADD_SHORTCUT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Enter);
 const DRAFT_ROWS: usize = 4;
-/// Laid-out entries kept beyond the journal's own (old edits), before the
-/// cache is emptied.
+/// Parsed-Markdown entries kept beyond the journal's own (old edits),
+/// before the cache is emptied.
 const SPARE_RENDERED: usize = 64;
-/// An entry not drawn yet is guessed at this many rows at most.
-const MAX_GUESSED_ROWS: usize = 40;
 
 /// What the tab shows and where it is.
 pub struct JournalContext<'a> {
@@ -63,11 +61,9 @@ pub struct JournalView {
     query: String,
     /// What went wrong with the last change.
     error: Option<String>,
-    /// Each entry's text, laid out once, by a hash of the text.
+    /// Each entry's text, parsed to Markdown blocks once, by a hash of the
+    /// text, so it isn't re-parsed every frame.
     rendered: HashMap<u64, Vec<Block>>,
-    /// How tall each entry was drawn (or is guessed to be, until it is),
-    /// so only those in view are drawn.
-    heights: HashMap<EntryKey, f32>,
     /// The entries the query last matched.
     search: Option<Search>,
     /// Put the keyboard in the draft on the next frame.
@@ -115,16 +111,19 @@ impl JournalView {
         if self.rendered.len() > entries.len() + SPARE_RENDERED {
             self.rendered.clear();
         }
-        if self.heights.len() > entries.len() + SPARE_RENDERED {
-            self.heights.clear();
-        }
         let shown = self.matching(entries);
+        // Every matched entry is drawn, newest first. The list used to guess
+        // each entry's height and draw only those in view, but a wrapped-
+        // Markdown entry's real height never matched the guess, so the moment
+        // one scrolled into view its slot resized and the whole list snapped
+        // around. Drawing them all keeps every height real and the layout
+        // stable; the Markdown parse is still cached per entry.
         egui::ScrollArea::vertical()
             .id_salt("journal_entries")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for index in shown {
-                    let picked = self.entry_in_view(ui, context, index, is_editable);
+                    let picked = self.entry(ui, context, index, is_editable);
                     action = picked.or(action.take());
                 }
             });
@@ -149,35 +148,6 @@ impl JournalView {
         self.search
             .as_ref()
             .map_or_else(Vec::new, |s| s.shown.clone())
-    }
-
-    /// Entry `index` if it is in view; else just the room it takes, so a
-    /// long journal costs only what shows.
-    fn entry_in_view(
-        &mut self,
-        ui: &mut egui::Ui,
-        context: &JournalContext,
-        index: usize,
-        is_editable: bool,
-    ) -> Option<JournalAction> {
-        let entry = &context.journal.entries()[index];
-        let key = (entry.created, entry.updated, entry.text.len());
-        let height = *self
-            .heights
-            .entry(key)
-            .or_insert_with(|| guessed_height(ui, entry));
-        let room = egui::vec2(ui.available_width(), height);
-        let is_editing = self.editing.as_ref().is_some_and(|(i, _)| *i == index);
-        if !is_editing && !ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, room)) {
-            ui.allocate_space(room);
-            return None;
-        }
-        let top = ui.cursor().top();
-        let action = self.entry(ui, context, index, is_editable);
-        // `allocate_space` adds the spacing after it again.
-        let drawn = ui.cursor().top() - top - ui.spacing().item_spacing.y;
-        self.heights.insert(key, drawn.max(0.0));
-        action
     }
 
     /// The box to write a new entry in, and Add.
@@ -378,9 +348,6 @@ pub fn shown_entries(entries: &[Entry], query: &str) -> Vec<usize> {
         .collect()
 }
 
-/// An entry's identity for its drawn height: (created, updated, length).
-type EntryKey = (u64, u64, usize);
-
 /// What the query matched, and in which journal.
 struct Search {
     query: String,
@@ -396,13 +363,6 @@ fn fingerprint(entries: &[Entry]) -> u64 {
         (entry.created, entry.updated, entry.text.len()).hash(&mut hasher);
     }
     hasher.finish()
-}
-
-/// How tall an entry not drawn yet probably is: its lines, and its
-/// heading and buttons.
-fn guessed_height(ui: &egui::Ui, entry: &Entry) -> f32 {
-    let rows = entry.text.lines().take(MAX_GUESSED_ROWS).count() + 3;
-    rows as f32 * ui.text_style_height(&egui::TextStyle::Body)
 }
 
 /// `net/parse.c:42 · parse_header`.

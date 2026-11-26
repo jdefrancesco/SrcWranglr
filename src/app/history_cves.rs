@@ -52,7 +52,7 @@ pub fn cve_list(ui: &mut egui::Ui, view: &HistoryView, graph: &CodeGraph) -> Opt
                     }
                 });
                 for &index in cve.commits.iter().take(MAX_COMMITS_SHOWN) {
-                    picked = commit(ui, view, graph, index).or(picked.take());
+                    picked = commit(ui, view, graph, &cve.id, index).or(picked.take());
                 }
                 if cve.commits.len() > MAX_COMMITS_SHOWN {
                     let more = cve.commits.len() - MAX_COMMITS_SHOWN;
@@ -72,12 +72,23 @@ pub fn cve_list(ui: &mut egui::Ui, view: &HistoryView, graph: &CodeGraph) -> Opt
     picked
 }
 
+/// The salt for a commit's "files changed" header, made unique per CVE: one
+/// commit can fix several CVEs and so appear more than once in the list, so
+/// the commit index alone would clash (egui then paints a loud id-clash
+/// warning over the rows). egui hashes the salt into the header's id.
+fn files_header_salt(cve: &str, index: usize) -> (&'static str, &str, usize) {
+    ("cve_files_list", cve, index)
+}
+
 /// One commit naming a CVE: its date, id and summary (click to see it in
-/// Fix commits), and the files it changed.
+/// Fix commits), and the files it changed. `cve` makes the widget ids
+/// unique, since one commit can fix several CVEs and so appear more than
+/// once in the list (a shared index alone would clash).
 fn commit(
     ui: &mut egui::Ui,
     view: &HistoryView,
     graph: &CodeGraph,
+    cve: &str,
     index: usize,
 ) -> Option<CveAction> {
     let commit = view.history.fix_commits.get(index)?;
@@ -89,7 +100,7 @@ fn commit(
         commit.summary
     );
     let row = ui
-        .indent(("cve_commit", index), |ui| {
+        .indent(("cve_commit", cve, index), |ui| {
             ui.selectable_label(false, visible(&line))
         })
         .inner;
@@ -106,9 +117,9 @@ fn commit(
         1 => "1 file changed".to_string(),
         n => format!("{n} files changed"),
     };
-    ui.indent(("cve_files", index), |ui| {
+    ui.indent(("cve_files", cve, index), |ui| {
         egui::CollapsingHeader::new(title)
-            .id_salt(("cve_files_list", index))
+            .id_salt(files_header_salt(cve, index))
             .show(ui, |ui| {
                 for file in commit.files.iter().take(MAX_FILES_SHOWN) {
                     let is_in_project = graph.file_contents.contains_key(file);
@@ -130,4 +141,21 @@ fn commit(
             });
     });
     picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_same_commit_under_two_cves_gets_distinct_header_salts() {
+        // The collision that painted an id-clash warning over the list: a
+        // commit fixing two CVEs keyed its "files changed" header by index
+        // alone, so both appearances hashed to one id.
+        let a = files_header_salt("cve-2024-1111", 7);
+        let b = files_header_salt("cve-2024-2222", 7);
+        assert_ne!(a, b, "shared commit must not reuse one header salt");
+        // The same commit under the same CVE is still stable.
+        assert_eq!(a, files_header_salt("cve-2024-1111", 7));
+    }
 }

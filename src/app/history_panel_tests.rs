@@ -235,6 +235,24 @@ fn the_cves_tab_lists_each_cve_and_shows_its_fix_commit() {
 }
 
 #[test]
+fn a_commit_fixing_two_cves_does_not_clash_widget_ids() {
+    // One commit named by two CVEs appears under both: its rows (and the
+    // "files changed" header) must get distinct ids, or egui paints a loud
+    // "first/second use of widget ID" warning over the list.
+    let mut history = sample();
+    history.fix_commits[2].keywords = vec!["cve-2024-1111".into(), "cve-2024-2222".into()];
+    history.fix_commits[2].files = vec!["net.c".into()];
+    let mut harness = harness_with(Some(history));
+    harness.get_by_label("CVEs").click();
+    harness.run();
+    // Both CVEs list the shared commit; rendering is stable (the distinct
+    // ids are checked in history_cves::tests). egui's id-clash warning is
+    // painted, not an accessibility node, so it can't be queried here.
+    harness.get_by_label("CVE-2024-1111");
+    harness.get_by_label("CVE-2024-2222");
+}
+
+#[test]
 fn without_cves_the_tab_says_why_there_may_be_none() {
     let mut harness = harness_with(Some(sample()));
     harness.get_by_label("CVEs").click();
