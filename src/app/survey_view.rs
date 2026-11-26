@@ -20,6 +20,8 @@ use crate::model::{CodeGraph, SymbolId};
 use crate::survey::{self, format_bytes, Kind, Survey};
 
 const DEFAULT_SIZE: [f32; 2] = [760.0, 540.0];
+/// Keeps the window from collapsing to a tab's content when resized small.
+const MIN_SIZE: [f32; 2] = [560.0, 420.0];
 pub(super) const ERROR_COLOR: Color32 = Color32::from_rgb(0xE0, 0x6C, 0x6C);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -246,6 +248,7 @@ impl SurveyView {
         let action = egui::Window::new("Project Triage")
             .open(&mut is_open)
             .default_size(DEFAULT_SIZE)
+            .min_size(MIN_SIZE)
             .resizable(true)
             .collapsible(false)
             .show(ctx, |ui| self.contents(ui, project_name, graph))
@@ -273,7 +276,7 @@ impl SurveyView {
             }
         });
         ui.separator();
-        match self.tab {
+        let action = match self.tab {
             SurveyTab::Overview => {
                 self.overview(ui);
                 None
@@ -283,18 +286,30 @@ impl SurveyView {
                 survey_code::complexity_tab(ui, &self.functions, &mut self.query)
             }
             SurveyTab::Fuzz => survey_fuzz::fuzz_tab(ui, &self.fuzz_targets, &mut self.fuzz_query),
-            folder_tab => {
-                let survey = self.folder_survey(ui)?;
-                egui::ScrollArea::vertical()
-                    .auto_shrink(false)
-                    .show(ui, |ui| match folder_tab {
-                        SurveyTab::Languages => super::survey_tabs::languages_tab(ui, survey),
-                        SurveyTab::Links => super::survey_tabs::links_tab(ui, survey, project_name),
-                        _ => super::survey_tabs::binaries_tab(ui, survey),
-                    });
-                None
-            }
-        }
+            folder_tab => match self.folder_survey(ui) {
+                Some(survey) => {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(
+                        ui,
+                        |ui| match folder_tab {
+                            SurveyTab::Languages => super::survey_tabs::languages_tab(ui, survey),
+                            SurveyTab::Links => {
+                                super::survey_tabs::links_tab(ui, survey, project_name)
+                            }
+                            _ => super::survey_tabs::binaries_tab(ui, survey),
+                        },
+                    );
+                    None
+                }
+                // No scan yet: the placeholder is short, so fall through to
+                // fill the rest below rather than let the window shrink to it.
+                None => None,
+            },
+        };
+        // Every tab fills the window's height, so switching tabs — including to
+        // a short, unscanned folder tab — doesn't make the resizable window
+        // jump to each tab's content size.
+        ui.allocate_space(ui.available_size());
+        action
     }
 
     /// The scan's result, or (drawn in its place) why there is none yet.
