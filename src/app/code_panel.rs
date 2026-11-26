@@ -82,6 +82,8 @@ pub enum PanelAction {
     ShowDocs(String),
     /// List the functions most like the one holding `file:line`.
     FindLookAlikes { file: String, line: u32 },
+    /// Ask the in-app agent to review the function holding `file:line`.
+    CheckWithAgent { file: String, line: u32 },
     /// List the cross references to what is referenced.
     CrossReferences(Referenced),
     /// List the cross references to `name`, used on `file:line`.
@@ -237,6 +239,9 @@ impl CodePanel {
             CodeEvent::ToggleComment { first, last } => {
                 Some(PanelAction::ToggleComment { file, first, last })
             }
+            CodeEvent::Line(line, LineAction::CheckWithAgent) => {
+                Some(PanelAction::CheckWithAgent { file, line })
+            }
             CodeEvent::Line(line, LineAction::AddTodo) => Some(PanelAction::AddTodo { file, line }),
             CodeEvent::Line(line, LineAction::FindSimilar) => {
                 let (first, last) = self.lines_at(&file, line);
@@ -281,6 +286,7 @@ impl CodePanel {
                     | LineAction::AddRulePlace
                     | LineAction::UseAsRuleException
                     | LineAction::CrossReferences(_)
+                    | LineAction::CheckWithAgent
                     | LineAction::OpenFile(_) => return None,
                 })
             }

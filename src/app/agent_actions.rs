@@ -16,6 +16,19 @@ use crate::mcp::dispatch::Place;
 use crate::mcp::tools::notes::NoteChange;
 use crate::mcp::tools::verdicts::VerdictChange;
 
+/// The task for a function-scoped review: judge each memory operation's safety.
+fn function_review_prompt(function: &str, file: &str, line: u32) -> String {
+    format!(
+        "Focus only on the function `{function}` at {file}:{line}. For each memory operation in \
+         it (memcpy, memmove, strcpy, strncpy, sprintf, realloc, and writes through pointers or \
+         arrays), work out the destination buffer's size by tracing its allocation, the number \
+         of bytes written, and whether any input can make the write exceed the buffer. Say \
+         whether each is safe, and whether it is reachable from untrusted input. Use \
+         function_source and the trace tools; read the code rather than guessing. End with a \
+         per-operation and an overall verdict for the function."
+    )
+}
+
 impl SrcWranglrApp {
     /// Serves the project just opened to agents, instead of the last one.
     pub(super) fn serve_agents(&mut self, ctx: &egui::Context) {
@@ -222,6 +235,23 @@ impl SrcWranglrApp {
 
     /// Starts the in-app agent on the open project, or says what's missing.
     pub(super) fn start_in_app_agent(&mut self, ctx: &egui::Context) {
+        self.begin_in_app_agent(START_PROMPT.to_string(), ctx);
+    }
+
+    /// Starts an in-app run scoped to one function, asking the agent to judge
+    /// whether its memory operations are safe.
+    pub(super) fn start_in_app_agent_for(
+        &mut self,
+        function: &str,
+        file: &str,
+        line: u32,
+        ctx: &egui::Context,
+    ) {
+        self.begin_in_app_agent(function_review_prompt(function, file, line), ctx);
+    }
+
+    /// Shared setup for an in-app run with `user_prompt` as its task.
+    fn begin_in_app_agent(&mut self, user_prompt: String, ctx: &egui::Context) {
         if !self.is_project_open || self.project.root.is_none() {
             self.status = Status::Info("Open a project folder first.".into());
             return;
@@ -245,7 +275,7 @@ impl SrcWranglrApp {
             self.project.name.clone(),
             self.project.root.clone(),
             std::sync::Arc::clone(&self.project.graph),
-            START_PROMPT.to_string(),
+            user_prompt,
             ctx.clone(),
         ));
         self.agent_panel.set_in_app_running(true);
@@ -393,6 +423,15 @@ fn mcp_command() -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_function_review_prompt_names_the_function_and_place() {
+        let prompt = function_review_prompt("hpack_append_hdr", "src/hpack.c", 406);
+        assert!(prompt.contains("hpack_append_hdr"), "{prompt}");
+        assert!(prompt.contains("src/hpack.c:406"), "{prompt}");
+        assert!(prompt.contains("memcpy"), "{prompt}");
+    }
+
     use crate::app::launch::LaunchOptions;
     use crate::app::project::Project;
     use crate::index::graph_of_files;

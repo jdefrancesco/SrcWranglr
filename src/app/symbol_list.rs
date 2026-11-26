@@ -141,6 +141,8 @@ pub enum SymbolListAction {
     FindLike(SymbolId),
     /// Show the function's pointer lifetimes (its right-click menu).
     Lifetimes(SymbolId),
+    /// Ask the in-app agent to review the function (its right-click menu).
+    CheckWithAgent(SymbolId),
     /// Its hide arrow was clicked.
     Hide,
 }
@@ -195,6 +197,7 @@ impl SymbolList {
         let mut docs = None;
         let mut like = None;
         let mut lifetimes = None;
+        let mut check = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_rows(ui, row_height, self.rows.len(), |ui, range| {
@@ -223,11 +226,15 @@ impl SymbolList {
                             like = Some(*id);
                             ui.close();
                         }
-                        if matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method)
-                            && ui.button("Pointer Lifetimes").clicked()
-                        {
-                            lifetimes = Some(*id);
-                            ui.close();
+                        if matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method) {
+                            if ui.button("Pointer Lifetimes").clicked() {
+                                lifetimes = Some(*id);
+                                ui.close();
+                            }
+                            if ui.button("Check with Agent").clicked() {
+                                check = Some(*id);
+                                ui.close();
+                            }
                         }
                     });
                 }
@@ -235,6 +242,7 @@ impl SymbolList {
         docs.map(SymbolListAction::ShowDocs)
             .or(like.map(SymbolListAction::FindLike))
             .or(lifetimes.map(SymbolListAction::Lifetimes))
+            .or(check.map(SymbolListAction::CheckWithAgent))
             .or(clicked.map(SymbolListAction::Select))
     }
 

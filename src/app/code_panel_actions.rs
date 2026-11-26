@@ -75,7 +75,29 @@ impl SrcWranglrApp {
             PanelAction::FindLookAlikes { file, line } => {
                 self.find_code_like_line(&file, line, ctx);
             }
+            PanelAction::CheckWithAgent { file, line } => {
+                self.check_function_with_agent(&file, line, ctx);
+            }
             PanelAction::LookUpDocs(name) => self.look_up_docs(&name, ctx),
+        }
+    }
+
+    /// Asks the in-app agent to review the function holding `file:line`.
+    fn check_function_with_agent(&mut self, file: &str, line: u32, ctx: &egui::Context) {
+        let symbol = crate::index::functions_holding_lines(&self.project.graph, &[(file, line)])
+            .into_iter()
+            .next()
+            .flatten();
+        let name = symbol
+            .and_then(|id| self.project.graph.symbols.get(&id))
+            .map(|s| s.qualified_name.clone());
+        match name {
+            Some(name) => self.start_in_app_agent_for(&name, file, line, ctx),
+            None => {
+                self.status = Status::Info(
+                    "Right-click inside a function to check it with the agent.".into(),
+                );
+            }
         }
     }
 
@@ -125,7 +147,7 @@ impl SrcWranglrApp {
 mod tests {
     use super::super::launch::LaunchOptions;
     use super::super::SrcWranglrApp;
-    use super::PanelAction;
+    use super::{PanelAction, Status};
 
     /// An app with `a.c` of `source` indexed from a temp folder.
     fn indexed(source: &str) -> (SrcWranglrApp, egui::Context, tempfile::TempDir) {
@@ -178,6 +200,48 @@ mod tests {
             original
         );
         assert_eq!(app.project.graph.file_contents["a.c"], original);
+    }
+
+    #[test]
+    fn checking_a_line_inside_a_function_tries_to_start_the_agent() {
+        let (mut app, ctx, _dir) = indexed("int g;\nint main(void) {\n    return 0;\n}\n");
+        app.run_panel_action(
+            PanelAction::CheckWithAgent {
+                file: "a.c".into(),
+                line: 3,
+            },
+            &ctx,
+        );
+        // No agent model/key is set in the test, so the attempt stops at that
+        // message — which proves the enclosing function resolved.
+        assert!(
+            matches!(&app.status, Status::Info(m) if m.contains("agent's model")),
+            "{:?}",
+            status_text(&app)
+        );
+    }
+
+    #[test]
+    fn checking_a_line_outside_any_function_asks_to_pick_one() {
+        let (mut app, ctx, _dir) = indexed("int g;\nint main(void) {\n    return 0;\n}\n");
+        app.run_panel_action(
+            PanelAction::CheckWithAgent {
+                file: "a.c".into(),
+                line: 1,
+            },
+            &ctx,
+        );
+        assert!(
+            matches!(&app.status, Status::Info(m) if m.contains("inside a function")),
+            "{:?}",
+            status_text(&app)
+        );
+    }
+
+    fn status_text(app: &SrcWranglrApp) -> String {
+        match &app.status {
+            Status::Info(m) | Status::Error(m) => m.clone(),
+        }
     }
 
     #[test]

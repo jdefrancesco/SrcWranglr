@@ -151,6 +151,8 @@ pub enum LineAction {
     UseAsRuleException,
     /// List the functions most like the one holding this line.
     FindLookAlikes,
+    /// Ask the in-app agent to review the function holding this line.
+    CheckWithAgent,
     /// Make the variable `name` at this byte column the source of a trace
     /// to a sink.
     SetTraceSource {

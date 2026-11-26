@@ -754,6 +754,16 @@ impl SrcWranglrApp {
             Some(SymbolListAction::ShowDocs(id)) => self.show_symbol_docs(id),
             Some(SymbolListAction::FindLike(id)) => self.find_code_like(id, ui.ctx()),
             Some(SymbolListAction::Lifetimes(id)) => self.show_lifetimes_for(id),
+            Some(SymbolListAction::CheckWithAgent(id)) => {
+                if let Some(symbol) = self.project.graph.symbols.get(&id) {
+                    let (name, file, line) = (
+                        symbol.qualified_name.clone(),
+                        symbol.file.clone(),
+                        symbol.line,
+                    );
+                    self.start_in_app_agent_for(&name, &file, line, ui.ctx());
+                }
+            }
             Some(SymbolListAction::Hide) | None => {}
         }
     }

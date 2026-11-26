@@ -76,6 +76,14 @@ pub(super) fn line_menu(response: &Response, menu: &MenuContext) -> Option<LineA
         if like.clicked() {
             action = Some(LineAction::FindLookAlikes);
         }
+        let check = ui
+            .button("Check This Function with the Agent")
+            .on_hover_text(
+                "Ask the in-app agent whether this function's memory operations are safe",
+            );
+        if check.clicked() {
+            action = Some(LineAction::CheckWithAgent);
+        }
         if let Some(traced) = trace_menu(ui, shown) {
             action = Some(traced);
         }
