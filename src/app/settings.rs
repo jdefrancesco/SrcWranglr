@@ -18,6 +18,7 @@ use toml_edit::{value, Array, DocumentMut, Item};
 use super::dangerous_lists::{config_dir, write_user_file};
 use super::fonts::{BarFont, SymbolFont};
 use crate::code_view::scheme::Scheme;
+use crate::index::IndexOptions;
 use crate::programs::{fits_in_path, SearchPath};
 
 pub const SETTINGS_FILE: &str = "settings.toml";
@@ -44,6 +45,48 @@ pub struct Settings {
     pub bar_font: BarFont,
     /// Where the in-app agent's model is, and the key for it.
     pub agent: AgentSettings,
+    /// The largest source file indexing reads; larger files are skipped.
+    pub max_file_size: MaxFileSize,
+}
+
+/// The largest source file indexing reads before skipping it (bigger files
+/// are usually generated or amalgamated). Kept in whole MiB in the settings
+/// file as `max_file_mib`; 2 MiB by default, accepted from 1 MiB to 1 GiB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaxFileSize {
+    mib: u64,
+}
+
+/// The default per-file index cap, in MiB.
+pub const DEFAULT_MAX_FILE_MIB: u64 = 2;
+/// The largest per-file index cap the setting accepts, in MiB (1 GiB).
+pub const MAX_FILE_MIB: u64 = 1024;
+
+impl Default for MaxFileSize {
+    fn default() -> Self {
+        Self {
+            mib: DEFAULT_MAX_FILE_MIB,
+        }
+    }
+}
+
+impl MaxFileSize {
+    /// A cap of `mib` MiB, clamped into the accepted 1..=`MAX_FILE_MIB` range.
+    pub fn from_mib(mib: u64) -> Self {
+        Self {
+            mib: mib.clamp(1, MAX_FILE_MIB),
+        }
+    }
+
+    /// The cap in whole MiB.
+    pub fn mib(self) -> u64 {
+        self.mib
+    }
+
+    /// The cap in bytes, for [`IndexOptions`].
+    pub fn bytes(self) -> u64 {
+        self.mib * 1024 * 1024
+    }
 }
 
 /// The model the in-app agent uses: an OpenAI-compatible endpoint (z.ai,
@@ -98,6 +141,7 @@ impl Settings {
             symbol_font: symbol_font_in(&doc)?,
             bar_font: bar_font_of(&doc)?,
             agent: agent_of(doc.get("agent"))?,
+            max_file_size: max_file_size_of(&doc)?,
         };
         settings.check()?;
         Ok(settings)
@@ -118,6 +162,7 @@ impl Settings {
             symbol_font: recover("symbol_font", symbol_font_in(&doc), &mut warnings),
             bar_font: recover("bar_font", bar_font_of(&doc), &mut warnings),
             agent: recover("agent", agent_of(doc.get("agent")), &mut warnings),
+            max_file_size: recover("max_file_mib", max_file_size_of(&doc), &mut warnings),
         };
         // The recovered settings must still be saveable (and read back);
         // the only check-level risk is the tool folders, so drop them if so.
@@ -173,6 +218,7 @@ impl Settings {
         doc["source_colors"] = value(self.scheme.id());
         doc["symbol_font"] = value(self.symbol_font.id());
         doc["bar_font"] = value(self.bar_font.id());
+        doc["max_file_mib"] = value(self.max_file_size.mib() as i64);
         // The [agent] table is only written once configured, so a file
         // from someone who never uses the agent stays clean.
         if self.agent != AgentSettings::default()
@@ -266,6 +312,16 @@ impl Settings {
     pub fn search_path(&self) -> SearchPath {
         SearchPath::from_process(&self.tool_dirs)
     }
+
+    /// The indexing options these settings imply: the per-file size cap from
+    /// [`max_file_size`](Self::max_file_size), with the other limits left at
+    /// their defaults.
+    pub fn index_options(&self) -> IndexOptions {
+        IndexOptions {
+            max_file_bytes: self.max_file_size.bytes(),
+            ..IndexOptions::default()
+        }
+    }
 }
 
 /// Where your settings live.
@@ -329,6 +385,22 @@ fn bar_font_of(doc: &DocumentMut) -> Result<BarFont, String> {
         let known: Vec<&str> = BarFont::ALL.iter().map(|f| f.id()).collect();
         format!("unknown bar_font {id:?} (one of {})", known.join(", "))
     })
+}
+
+/// The `max_file_mib` key (a whole number of MiB), or the default when
+/// missing. An out-of-range value is rejected (and, when loading, recovered
+/// to the default with a warning).
+fn max_file_size_of(doc: &DocumentMut) -> Result<MaxFileSize, String> {
+    let Some(item) = doc.get("max_file_mib") else {
+        return Ok(MaxFileSize::default());
+    };
+    let mib = item
+        .as_integer()
+        .ok_or("max_file_mib must be a whole number of MiB")?;
+    if mib < 1 || mib as u64 > MAX_FILE_MIB {
+        return Err(format!("max_file_mib must be between 1 and {MAX_FILE_MIB}"));
+    }
+    Ok(MaxFileSize::from_mib(mib as u64))
 }
 
 /// The `[agent]` table, if present: base_url, model, api_key, each a
@@ -406,6 +478,7 @@ mod tests {
             symbol_font: SymbolFont::Iosevka,
             bar_font: BarFont::SourceCodePro,
             agent: AgentSettings::default(),
+            max_file_size: MaxFileSize::from_mib(16),
         }
     }
 
@@ -455,6 +528,7 @@ mod tests {
         );
         assert!(text.contains("symbol_font = \"iosevka\""), "{text}");
         assert!(text.contains("bar_font = \"source-code-pro\""), "{text}");
+        assert!(text.contains("max_file_mib = 16"), "{text}");
     }
 
     #[test]
@@ -533,6 +607,8 @@ mod tests {
             ("symbol_font = \"comic-sans\"", "unknown symbol_font"),
             ("symbol_font = 12", "symbol_font must be a string"),
             ("editor = \"vim\\u0007\"", "control characters"),
+            ("max_file_mib = 0", "between 1 and"),
+            ("max_file_mib = \"big\"", "whole number of MiB"),
             ("= broken", "not valid TOML"),
         ] {
             let error = Settings::parse(text).expect_err(text);
@@ -587,5 +663,56 @@ mod tests {
         let dir = tempfile::tempdir().expect("dir");
         assert!(relative.save_to(&dir.path().join(SETTINGS_FILE)).is_err());
         assert!(!dir.path().join(SETTINGS_FILE).exists());
+    }
+
+    #[test]
+    fn the_file_size_cap_defaults_to_two_mib() {
+        assert_eq!(Settings::default().max_file_size, MaxFileSize::default());
+        assert_eq!(MaxFileSize::default().mib(), 2);
+        assert_eq!(MaxFileSize::default().bytes(), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn the_file_size_cap_round_trips_and_feeds_index_options() {
+        let settings = Settings {
+            max_file_size: MaxFileSize::from_mib(32),
+            ..Settings::default()
+        };
+        let reloaded = Settings::parse(&settings.to_toml()).expect("parsed");
+        assert_eq!(reloaded.max_file_size.mib(), 32);
+        assert_eq!(
+            settings.index_options().max_file_bytes,
+            32 * 1024 * 1024,
+            "the cap feeds IndexOptions in bytes"
+        );
+        assert_eq!(
+            settings.index_options().max_files,
+            crate::index::IndexOptions::default().max_files,
+            "the other index limits stay at their defaults"
+        );
+    }
+
+    #[test]
+    fn a_bad_file_size_cap_degrades_to_the_default() {
+        for text in [
+            "max_file_mib = 0\n",
+            "max_file_mib = 99999\n",
+            "max_file_mib = \"big\"\n",
+        ] {
+            assert!(
+                Settings::parse(text).is_err(),
+                "strict parse rejects {text:?}"
+            );
+            let (recovered, warnings) = Settings::parse_recovering(text).expect("recovered");
+            assert_eq!(
+                recovered.max_file_size,
+                MaxFileSize::default(),
+                "a bad cap should fall back to 2 MiB for {text:?}"
+            );
+            assert!(
+                warnings.iter().any(|w| w.contains("max_file_mib")),
+                "{warnings:?}"
+            );
+        }
     }
 }

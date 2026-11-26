@@ -112,7 +112,7 @@ use crate::analysis;
 use crate::analysis::reach::Reach;
 use crate::graph::{Badge, GraphView, ViewMode};
 use crate::index::job::IndexJob;
-use crate::index::{IndexError, IndexOptions, IndexOutcome};
+use crate::index::{IndexError, IndexOutcome};
 use code_panel::CodePanel;
 use dangerous_lists::DangerousLists;
 use editor::SourcePosition;
@@ -659,6 +659,7 @@ impl SrcWranglrApp {
             Command::SemgrepRules => self.open_rules_view(),
             Command::RunCppcheck => self.run_tool(analysis::tools::Tool::Cppcheck, ctx),
             Command::RunFlawfinder => self.run_tool(analysis::tools::Tool::Flawfinder, ctx),
+            Command::RunAllAnalyzers => self.run_all_analyzers(ctx),
             Command::ImportSarif => self.import_sarif_dialog(ctx),
             Command::Settings => self.open_settings(),
             Command::SaveSession => self.save_session(ctx),

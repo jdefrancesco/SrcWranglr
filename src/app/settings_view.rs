@@ -9,7 +9,7 @@ use egui::{Id, RichText};
 
 use super::dialogs::{self, DialogState, PendingDialog};
 use super::fonts::{BarFont, SymbolFont};
-use super::settings::{AgentSettings, Settings, DEFAULT_AGENT_BASE_URL};
+use super::settings::{AgentSettings, MaxFileSize, Settings, DEFAULT_AGENT_BASE_URL, MAX_FILE_MIB};
 use crate::analysis::tools::Tool;
 use crate::code_view::scheme::{show_sample, Scheme};
 use crate::programs::SearchPath;
@@ -69,6 +69,8 @@ pub struct SettingsView {
     scheme: Scheme,
     symbol_font: SymbolFont,
     bar_font: BarFont,
+    /// The largest source file indexing reads, in whole MiB.
+    max_file_mib: u64,
     /// The model SrcWranglr's own agent uses, its API key, and endpoint.
     agent_model: String,
     agent_key: String,
@@ -124,6 +126,7 @@ impl SettingsView {
             scheme: settings.scheme,
             symbol_font: settings.symbol_font,
             bar_font: settings.bar_font,
+            max_file_mib: settings.max_file_size.mib(),
             agent_model: settings.agent.model.clone(),
             agent_key: settings.agent.api_key.clone(),
             agent_base_url: settings.agent.base_url.clone(),
@@ -172,6 +175,7 @@ impl SettingsView {
             scheme: self.scheme,
             symbol_font: self.symbol_font,
             bar_font: self.bar_font,
+            max_file_size: MaxFileSize::from_mib(self.max_file_mib),
             agent: AgentSettings {
                 base_url: match self.agent_base_url.trim() {
                     "" => DEFAULT_AGENT_BASE_URL.to_string(),
@@ -218,6 +222,8 @@ impl SettingsView {
                     self.colors_section(ui);
                     ui.separator();
                     self.font_section(ui);
+                    ui.separator();
+                    self.limits_section(ui);
                     is_typing_command || is_typing_folders || is_typing_agent
                 })
                 .inner;
@@ -503,6 +509,27 @@ impl SettingsView {
         });
     }
 
+    fn limits_section(&mut self, ui: &mut egui::Ui) {
+        let caption = ui.strong("Indexing");
+        ui.horizontal(|ui| {
+            ui.label("Skip source files larger than");
+            ui.add(
+                egui::DragValue::new(&mut self.max_file_mib)
+                    .range(1..=MAX_FILE_MIB)
+                    .suffix(" MiB"),
+            )
+            .labelled_by(caption.id);
+        });
+        ui.label(
+            RichText::new(
+                "Raise this to take in large amalgamated or generated sources \
+                 (e.g. sqlite3.c); bigger files are slower to parse. Re-index \
+                 to apply.",
+            )
+            .weak(),
+        );
+    }
+
     /// Why the settings as edited can't be saved, and Done. Returns
     /// whether Done was clicked.
     fn footer(&mut self, ui: &mut egui::Ui) -> bool {
@@ -596,6 +623,7 @@ mod tests {
         harness.get_by_label("Tools");
         harness.get_by_label("Source colors");
         harness.get_by_label("Symbol list font");
+        harness.get_by_label("Indexing");
         for tool in ["semgrep", "cppcheck", "flawfinder"] {
             harness.get_by_label(tool);
         }
@@ -668,6 +696,18 @@ mod tests {
     }
 
     #[test]
+    fn the_index_size_cap_is_kept_in_the_draft() {
+        let view = SettingsView {
+            max_file_mib: 64,
+            ..SettingsView::new(&Settings::default())
+        };
+        assert_eq!(
+            view.draft().expect("valid").max_file_size,
+            MaxFileSize::from_mib(64)
+        );
+    }
+
+    #[test]
     fn typed_text_is_applied_once_you_leave_the_field() {
         let custom = Settings {
             editor: Some("subl".into()),
@@ -702,6 +742,7 @@ mod tests {
             symbol_font: SymbolFont::SourceCodePro,
             bar_font: BarFont::Iosevka,
             agent: crate::app::settings::AgentSettings::default(),
+            max_file_size: MaxFileSize::default(),
         };
         let mut harness = harness(&settings);
         harness.get_by_label("Done").click();

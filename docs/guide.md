@@ -21,7 +21,7 @@ Detailed feature behavior, controls, configuration, and development reference fo
 - **Example timing:** LevelDB indexed in about 0.1 s (133 files, 1,909 symbols, 6,599 relationships). Timing varies by machine and project.
 - **Background indexing** with a progress bar and **Cancel**, keeping parsing work off the UI thread. **Re-index** at any time.
 - **Respects `.gitignore`** and skips hidden folders, `node_modules`, and `target`.
-- **Tolerant of real-world code:** indexes incomplete syntax, reads non-UTF-8 files with replacement characters, and skips oversized files with a warning.
+- **Tolerant of real-world code:** indexes incomplete syntax, reads non-UTF-8 files with replacement characters, and skips files larger than the per-file limit (2 MiB by default; raise it in **Settings → Indexing**) with a warning.
 - **Indexes** namespaces, classes, structs (including C `typedef struct {…} Name;`), functions, methods, and fields.
 - **Finds** *calls*, *inheritance*, *uses* (types and members), and *containment*, and records the exact line and column of each one. Name resolution follows enclosing scopes, base classes, and local variable types, so `Circle c; c.area()` links to `Circle::area`.
 

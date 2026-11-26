@@ -268,6 +268,7 @@ impl SrcWranglrApp {
         let picked = [
             Command::MarkDangerous,
             Command::TrustProject,
+            Command::RunAllAnalyzers,
             Command::RunSemgrep,
             Command::SemgrepRules,
             Command::RunCppcheck,

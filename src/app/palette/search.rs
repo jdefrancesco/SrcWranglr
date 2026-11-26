@@ -42,6 +42,8 @@ pub enum Command {
     SemgrepRules,
     RunCppcheck,
     RunFlawfinder,
+    /// Run every external analyzer (semgrep, cppcheck, flawfinder) at once.
+    RunAllAnalyzers,
     /// Run an external analyzer on a chosen subfolder instead of the whole tree.
     RunOnFolder(Tool),
     ImportSarif,
@@ -72,7 +74,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 54] = [
+    pub const ALL: [Command; 55] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -94,6 +96,7 @@ impl Command {
         Command::SemgrepRules,
         Command::RunCppcheck,
         Command::RunFlawfinder,
+        Command::RunAllAnalyzers,
         Command::RunOnFolder(Tool::Semgrep),
         Command::RunOnFolder(Tool::Cppcheck),
         Command::RunOnFolder(Tool::Flawfinder),
@@ -148,6 +151,7 @@ impl Command {
             Command::SemgrepRules => "Semgrep Rules…",
             Command::RunCppcheck => "Run cppcheck",
             Command::RunFlawfinder => "Run flawfinder",
+            Command::RunAllAnalyzers => "Run All Analyzers",
             Command::RunOnFolder(Tool::Semgrep) => "Run semgrep on a folder…",
             Command::RunOnFolder(Tool::Cppcheck) => "Run cppcheck on a folder…",
             Command::RunOnFolder(Tool::Flawfinder) => "Run flawfinder on a folder…",

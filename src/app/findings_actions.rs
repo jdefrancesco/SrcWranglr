@@ -262,6 +262,28 @@ impl SrcWranglrApp {
         self.start_tool(tool, root.clone(), root, None, ctx);
     }
 
+    /// Runs every external analyzer (semgrep, cppcheck, flawfinder) on the
+    /// whole project at once; each streams into Findings as it finishes, and
+    /// any already running (or not installed) is handled by `start_tool`.
+    pub(super) fn run_all_analyzers(&mut self, ctx: &egui::Context) {
+        let Some(root) = self.project.root.clone() else {
+            self.status = Status::Info(
+                "Open a project (⌘O) to run the analyzers on it; the demo isn't on disk.".into(),
+            );
+            return;
+        };
+        for tool in [Tool::Semgrep, Tool::Cppcheck, Tool::Flawfinder] {
+            self.start_tool(tool, root.clone(), root.clone(), None, ctx);
+        }
+        let running: Vec<&str> = self.tool_jobs.iter().map(|job| job.tool().name()).collect();
+        if !running.is_empty() {
+            self.status = Status::Info(format!(
+                "Running {}… results go to Findings (⇧⌘R).",
+                running.join(", ")
+            ));
+        }
+    }
+
     /// Asks for a subfolder, then runs `tool` on just that folder.
     pub(super) fn run_tool_on_folder(&mut self, tool: Tool, ctx: &egui::Context) {
         let Some(root) = self.project.root.clone() else {

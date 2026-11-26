@@ -25,7 +25,11 @@ impl SrcWranglrApp {
         self.warnings.clear();
         self.is_warnings_open = false;
         self.status = Status::Info(format!("Indexing {}…", root.display()));
-        self.job = Some(IndexJob::spawn(root, IndexOptions::default(), ctx.clone()));
+        self.job = Some(IndexJob::spawn(
+            root,
+            self.settings.index_options(),
+            ctx.clone(),
+        ));
     }
 
     /// Asks for a project folder, off the UI code (see `dialogs`);
@@ -338,6 +342,36 @@ mod tests {
             app.code_panel.scheme(),
             Scheme::Monokai,
             "the code view reset to the default scheme on project open"
+        );
+    }
+
+    #[test]
+    fn run_all_analyzers_starts_every_external_tool() {
+        use crate::analysis::tools::Tool;
+        let (mut app, ctx) = fresh_app();
+        let dir = project_dir();
+        index_and_load(&mut app, dir.path(), &ctx);
+
+        app.run_all_analyzers(&ctx);
+
+        let running: Vec<Tool> = app.tool_jobs.iter().map(|job| job.tool()).collect();
+        assert_eq!(
+            app.tool_jobs.len(),
+            3,
+            "Run All should start exactly the three external analyzers"
+        );
+        for tool in [Tool::Semgrep, Tool::Cppcheck, Tool::Flawfinder] {
+            assert!(running.contains(&tool), "{} was not started", tool.name());
+        }
+    }
+
+    #[test]
+    fn run_all_analyzers_without_a_project_starts_nothing() {
+        let (mut app, ctx) = fresh_app();
+        app.run_all_analyzers(&ctx);
+        assert!(
+            app.tool_jobs.is_empty(),
+            "no project is open, so nothing should run"
         );
     }
 
