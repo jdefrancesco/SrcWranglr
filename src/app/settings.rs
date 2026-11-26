@@ -84,56 +84,70 @@ impl AgentSettings {
 }
 
 impl Settings {
-    /// Settings from TOML; a key that is missing keeps its default.
+    /// Settings from TOML; a key that is missing keeps its default. A key
+    /// with a bad value fails the whole parse. Loading uses
+    /// [`parse_recovering`](Self::parse_recovering) instead, so this strict
+    /// form is kept as the round-trip contract the tests pin down.
+    #[cfg(test)]
     pub fn parse(text: &str) -> Result<Self, String> {
         let doc: DocumentMut = text.parse().map_err(|e| format!("not valid TOML: {e}"))?;
-        let editor = match doc.get("editor") {
-            None => None,
-            Some(item) => {
-                let editor = item.as_str().ok_or("editor must be a string")?.trim();
-                check_text(editor, "editor")?;
-                (!editor.is_empty()).then(|| editor.to_string())
-            }
-        };
-        let tool_dirs = match doc.get("tool_paths") {
-            None => Vec::new(),
-            Some(item) => tool_dirs_of(item)?,
-        };
-        let scheme = match doc.get("source_colors") {
-            None => Scheme::default(),
-            Some(item) => {
-                let id = item.as_str().ok_or("source_colors must be a string")?;
-                Scheme::from_id(id).ok_or_else(|| {
-                    let known: Vec<&str> = Scheme::ALL.iter().map(|s| s.id()).collect();
-                    format!("unknown source_colors {id:?} (one of {})", known.join(", "))
-                })?
-            }
-        };
-        let symbol_font = match doc.get("symbol_font") {
-            None => SymbolFont::default(),
-            Some(item) => symbol_font_of(item)?,
-        };
-        let bar_font = match doc.get("bar_font") {
-            None => BarFont::default(),
-            Some(item) => {
-                let id = item.as_str().ok_or("bar_font must be a string")?;
-                BarFont::from_id(id).ok_or_else(|| {
-                    let known: Vec<&str> = BarFont::ALL.iter().map(|f| f.id()).collect();
-                    format!("unknown bar_font {id:?} (one of {})", known.join(", "))
-                })?
-            }
-        };
-        let agent = agent_of(doc.get("agent"))?;
         let settings = Self {
-            editor,
-            tool_dirs,
-            scheme,
-            symbol_font,
-            bar_font,
-            agent,
+            editor: editor_of(&doc)?,
+            tool_dirs: tool_dirs_in(&doc)?,
+            scheme: scheme_of(&doc)?,
+            symbol_font: symbol_font_in(&doc)?,
+            bar_font: bar_font_of(&doc)?,
+            agent: agent_of(doc.get("agent"))?,
         };
         settings.check()?;
         Ok(settings)
+    }
+
+    /// Like `parse`, but one bad value falls back to that field's default
+    /// (with a warning) instead of discarding every setting. Used when
+    /// loading, so a single stale or renamed key can't silently reset
+    /// everything — colors included. A file that isn't valid TOML at all
+    /// still can't be recovered.
+    pub fn parse_recovering(text: &str) -> Result<(Self, Vec<String>), String> {
+        let doc: DocumentMut = text.parse().map_err(|e| format!("not valid TOML: {e}"))?;
+        let mut warnings = Vec::new();
+        let mut settings = Self {
+            editor: recover("editor", editor_of(&doc), &mut warnings),
+            tool_dirs: recover("tool_paths", tool_dirs_in(&doc), &mut warnings),
+            scheme: recover("source_colors", scheme_of(&doc), &mut warnings),
+            symbol_font: recover("symbol_font", symbol_font_in(&doc), &mut warnings),
+            bar_font: recover("bar_font", bar_font_of(&doc), &mut warnings),
+            agent: recover("agent", agent_of(doc.get("agent")), &mut warnings),
+        };
+        // The recovered settings must still be saveable (and read back);
+        // the only check-level risk is the tool folders, so drop them if so.
+        if let Err(e) = settings.check() {
+            warnings.push(format!("tool_paths: {e}; dropping them"));
+            settings.tool_dirs.clear();
+        }
+        Ok((settings, warnings))
+    }
+
+    /// The settings at `path`, recovering what it can: defaults if there is
+    /// no file, and any bad key degraded to its default (with warnings
+    /// naming them) rather than reverting the whole file. A missing home,
+    /// an oversized file or unreadable TOML is still a hard error.
+    pub fn load_recovering(path: &Path) -> Result<(Self, Vec<String>), String> {
+        let shown = path.display();
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Self::default(), Vec::new()))
+            }
+            Err(e) => return Err(format!("{shown}: {e}")),
+        };
+        if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
+            return Err(format!(
+                "{shown} isn't a settings file of at most {MAX_FILE_BYTES} bytes"
+            ));
+        }
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
+        Self::parse_recovering(&text).map_err(|e| format!("{shown}: {e}"))
     }
 
     /// What `parse` reads back as these settings.
@@ -204,8 +218,10 @@ impl Settings {
         Ok(())
     }
 
-    /// The settings at `path`: defaults if there is no file. Your own file,
-    /// so a symlink to it (a dotfile manager's) is followed.
+    /// The settings at `path`, parsed strictly: defaults if there is no
+    /// file. The app loads with [`load_recovering`](Self::load_recovering);
+    /// this strict form backs the round-trip tests.
+    #[cfg(test)]
     pub fn load_from(path: &Path) -> Result<Self, String> {
         let shown = path.display();
         let metadata = match std::fs::metadata(path) {
@@ -255,6 +271,64 @@ impl Settings {
 /// Where your settings live.
 pub fn settings_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join(SETTINGS_FILE))
+}
+
+/// A recovered value, or that field's default with a warning recorded.
+fn recover<T: Default>(field: &str, result: Result<T, String>, warnings: &mut Vec<String>) -> T {
+    result.unwrap_or_else(|e| {
+        warnings.push(format!("{field}: {e}; using the default"));
+        T::default()
+    })
+}
+
+/// The `editor` key: a command, or `None` when missing or blank.
+fn editor_of(doc: &DocumentMut) -> Result<Option<String>, String> {
+    let Some(item) = doc.get("editor") else {
+        return Ok(None);
+    };
+    let editor = item.as_str().ok_or("editor must be a string")?.trim();
+    check_text(editor, "editor")?;
+    Ok((!editor.is_empty()).then(|| editor.to_string()))
+}
+
+/// The `tool_paths` key, or an empty list when missing.
+fn tool_dirs_in(doc: &DocumentMut) -> Result<Vec<PathBuf>, String> {
+    match doc.get("tool_paths") {
+        None => Ok(Vec::new()),
+        Some(item) => tool_dirs_of(item),
+    }
+}
+
+/// The `source_colors` key, or the default scheme when missing.
+fn scheme_of(doc: &DocumentMut) -> Result<Scheme, String> {
+    let Some(item) = doc.get("source_colors") else {
+        return Ok(Scheme::default());
+    };
+    let id = item.as_str().ok_or("source_colors must be a string")?;
+    Scheme::from_id(id).ok_or_else(|| {
+        let known: Vec<&str> = Scheme::ALL.iter().map(|s| s.id()).collect();
+        format!("unknown source_colors {id:?} (one of {})", known.join(", "))
+    })
+}
+
+/// The `symbol_font` key, or the default font when missing.
+fn symbol_font_in(doc: &DocumentMut) -> Result<SymbolFont, String> {
+    match doc.get("symbol_font") {
+        None => Ok(SymbolFont::default()),
+        Some(item) => symbol_font_of(item),
+    }
+}
+
+/// The `bar_font` key, or the default font when missing.
+fn bar_font_of(doc: &DocumentMut) -> Result<BarFont, String> {
+    let Some(item) = doc.get("bar_font") else {
+        return Ok(BarFont::default());
+    };
+    let id = item.as_str().ok_or("bar_font must be a string")?;
+    BarFont::from_id(id).ok_or_else(|| {
+        let known: Vec<&str> = BarFont::ALL.iter().map(|f| f.id()).collect();
+        format!("unknown bar_font {id:?} (one of {})", known.join(", "))
+    })
 }
 
 /// The `[agent]` table, if present: base_url, model, api_key, each a
@@ -381,6 +455,51 @@ mod tests {
         );
         assert!(text.contains("symbol_font = \"iosevka\""), "{text}");
         assert!(text.contains("bar_font = \"source-code-pro\""), "{text}");
+    }
+
+    #[test]
+    fn one_bad_key_keeps_the_rest_instead_of_reverting_everything() {
+        // A stale tool_paths value used to fail the whole parse, reverting
+        // the color scheme (and all else) to defaults on the next launch.
+        let text = "source_colors = \"monokai\"\n\
+                    symbol_font = \"iosevka\"\n\
+                    tool_paths = [\"relative/bin\"]\n";
+        assert!(Settings::parse(text).is_err(), "strict parse still fails");
+        let (recovered, warnings) = Settings::parse_recovering(text).expect("recovered");
+        assert_eq!(recovered.scheme, Scheme::Monokai, "colors kept");
+        assert_eq!(recovered.symbol_font, SymbolFont::Iosevka, "font kept");
+        assert!(recovered.tool_dirs.is_empty(), "bad folders dropped");
+        assert!(
+            warnings.iter().any(|w| w.contains("tool_paths")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_color_scheme_degrades_only_itself() {
+        let text = "source_colors = \"neon\"\nsymbol_font = \"iosevka\"\n";
+        let (recovered, warnings) = Settings::parse_recovering(text).expect("recovered");
+        assert_eq!(
+            recovered.scheme,
+            Scheme::default(),
+            "unknown color defaulted"
+        );
+        assert_eq!(
+            recovered.symbol_font,
+            SymbolFont::Iosevka,
+            "font still kept"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("source_colors")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_clean_file_recovers_with_no_warnings() {
+        let (recovered, warnings) = Settings::parse_recovering(&sample().to_toml()).expect("ok");
+        assert_eq!(recovered, sample());
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]

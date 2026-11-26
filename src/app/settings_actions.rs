@@ -8,15 +8,28 @@ use super::{SrcWranglrApp, Status};
 use crate::analysis::tools::Tool;
 
 impl SrcWranglrApp {
-    /// Reads your settings; a bad file is reported and the defaults used.
+    /// Reads your settings, recovering what it can: a single bad key is
+    /// degraded to its default (and reported) rather than reverting every
+    /// setting — so one stale key can't quietly reset your colors. Only an
+    /// unreadable file falls back to the defaults wholesale.
     pub(super) fn load_settings(&mut self) {
-        let loaded = settings_path().map(|path| Settings::load_from(&path));
-        match loaded {
-            Some(Ok(settings)) => self.use_settings(settings),
-            Some(Err(error)) => {
+        let Some(path) = settings_path() else {
+            return;
+        };
+        match Settings::load_recovering(&path) {
+            Ok((settings, warnings)) => {
+                self.use_settings(settings);
+                if !warnings.is_empty() {
+                    self.status = Status::Error(format!(
+                        "Some settings weren't read ({}): {}",
+                        path.display(),
+                        warnings.join("; ")
+                    ));
+                }
+            }
+            Err(error) => {
                 self.status = Status::Error(format!("Settings not read, using defaults: {error}"));
             }
-            None => {}
         }
     }
 
@@ -175,6 +188,23 @@ mod tests {
         assert_eq!(app.symbol_list.font(), SymbolFont::SourceCodePro);
         app.open_settings();
         assert!(app.settings_view.is_some());
+    }
+
+    #[test]
+    fn chosen_colors_survive_a_restart() {
+        let mut first = app();
+        let settings = Settings {
+            scheme: Scheme::Monokai,
+            ..Settings::default()
+        };
+        first.save_settings(settings).expect("saved");
+        // A fresh app reads the same config path (test config_dir is per-pid).
+        let mut fresh = app();
+        fresh.load_settings();
+        assert_eq!(fresh.settings.scheme, Scheme::Monokai, "colors reverted");
+        if let Status::Error(error) = &fresh.status {
+            panic!("load errored: {error}");
+        }
     }
 
     #[test]
