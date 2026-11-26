@@ -24,7 +24,12 @@ const OPEN_SYMBOL_CTRL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL
 const MAX_RESULTS: usize = 50;
 const WIDTH: f32 = 560.0;
 const TOP_OFFSET: f32 = 70.0;
-const LIST_HEIGHT: f32 = 360.0;
+/// The result list grows with the window, between these bounds, so entries
+/// aren't cut off on a tall screen but it never overflows a short one. The
+/// space above it (anchor offset, search box, separator, padding) is left out.
+const LIST_MIN_HEIGHT: f32 = 360.0;
+const LIST_MAX_HEIGHT: f32 = 680.0;
+const SPACE_ABOVE_LIST: f32 = 140.0;
 
 #[derive(Default)]
 pub struct Palette {
@@ -137,8 +142,11 @@ impl Palette {
             ui.weak("No matches");
             return None;
         }
+        let screen_height = ui.ctx().content_rect().height();
+        let max_height =
+            (screen_height - TOP_OFFSET - SPACE_ABOVE_LIST).clamp(LIST_MIN_HEIGHT, LIST_MAX_HEIGHT);
         egui::ScrollArea::vertical()
-            .max_height(LIST_HEIGHT)
+            .max_height(max_height)
             .show(ui, |ui| self.result_rows(ui, project, notes))
             .inner
     }
