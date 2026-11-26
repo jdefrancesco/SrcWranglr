@@ -217,7 +217,10 @@ impl SrcWranglrApp {
         self.serve_agents(ctx);
         // A new project starts with a fresh selection, in the same view mode.
         self.graph_view = GraphView::with_mode(self.graph_view.mode());
+        // A fresh code view for the new project, but keep the user's chosen
+        // color scheme: it's a preference, not the old project's state.
         self.code_panel = CodePanel::default();
+        self.code_panel.set_scheme(self.settings.scheme);
         // Palette results hold ids from the old project.
         self.palette = Palette::default();
         self.symbol_list.invalidate();
@@ -319,6 +322,23 @@ mod tests {
         let app = SrcWranglrApp::new(&ctx, None, options);
         assert!(app.is_project_open);
         assert_eq!(app.graph_view.selected(), app.project.find("main"));
+    }
+
+    #[test]
+    fn opening_a_project_keeps_the_chosen_color_scheme() {
+        use crate::code_view::scheme::Scheme;
+        let (mut app, ctx) = fresh_app();
+        // As if the user had picked a scheme in Settings: saved to settings
+        // and applied to the live code view (what launch does).
+        app.settings.scheme = Scheme::Monokai;
+        app.code_panel.set_scheme(Scheme::Monokai);
+        let dir = project_dir();
+        index_and_load(&mut app, dir.path(), &ctx);
+        assert_eq!(
+            app.code_panel.scheme(),
+            Scheme::Monokai,
+            "the code view reset to the default scheme on project open"
+        );
     }
 
     #[test]

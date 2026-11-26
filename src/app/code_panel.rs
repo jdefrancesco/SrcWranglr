@@ -154,6 +154,12 @@ impl CodePanel {
         self.scheme = scheme;
     }
 
+    /// The color scheme the source is currently drawn in.
+    #[cfg(test)]
+    pub fn scheme(&self) -> Scheme {
+        self.scheme
+    }
+
     /// Shows the selected symbol's current location, with its note and
     /// the notes of the lines shown. Returns what the user asked for.
     pub fn show(
