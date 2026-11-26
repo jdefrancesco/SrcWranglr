@@ -425,6 +425,59 @@ mod resize_tests {
         (before, harness.state().central_avail)
     }
 
+    /// Long entries full of unbreakable path/crash-id tokens must not widen
+    /// the content-sized pane. Before the Markdown wrapped such tokens, one
+    /// over-wide line made the pane snap to the content and balloon across the
+    /// window; the pane must instead hold its width and stay put.
+    #[test]
+    fn the_journal_tab_does_not_balloon_the_pane() {
+        let project = Project::demo().expect("demo");
+        let mut panel = NotesPanel::default();
+        panel.set_open(true);
+        panel.open_journal();
+        let longs = [
+            "Confirmed the SDP out-of-bounds read in `rtp.c:313` (stream peek, no NUL sentinel). Artifacts: `.aavr/crashes/sdp-oob-196/`, `.aavr/crashes/docker-easy/{crash-4b8b8c1e,sdp2-oob-196}`.",
+            "AV1 sequence header 45, parseAttributes 45, ParseFlacPicture 40, config_StringUnescape 40, json_unescape 36 with a reachability blocker. Verified real callers for each.",
+        ];
+        let journal = (0..10).fold(Journal::default(), |j, i| {
+            j.with_added(crate::notes::journal::Entry::new(
+                longs[i % longs.len()],
+                None,
+                i as u64,
+            ))
+            .expect("added")
+        });
+        let mut harness = crate::app::fonts::test_harness()
+            .with_size(vec2(900.0, 600.0))
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, s: &mut S| {
+                    let context = JournalContext {
+                        journal: &s.journal,
+                        here: None,
+                        storage: Ok("in memory"),
+                        now: 0,
+                    };
+                    s.panel.show(ui, &s.notebook, &context, Layout::default());
+                    s.central_avail = ui.available_width();
+                },
+                S {
+                    panel,
+                    notebook: Notebook::open(&project),
+                    journal,
+                    central_avail: 0.0,
+                },
+            );
+        (0..30).for_each(|_| harness.step());
+        let central = harness.state().central_avail;
+        // The pane holds near its ~280px default, leaving most of the 900px
+        // window as central space. A ballooned pane would shrink this toward 0.
+        assert!(
+            central > 500.0,
+            "the Journal tab ballooned the pane: only {central} central of 900"
+        );
+    }
+
     #[test]
     fn the_journal_tab_resizes_and_sticks() {
         let (before, after) = widen_journal(true);
