@@ -78,7 +78,53 @@ impl SrcWranglrApp {
             PanelAction::CheckWithAgent { file, line } => {
                 self.check_function_with_agent(&file, line, ctx);
             }
+            PanelAction::Emulate { file, line } => self.open_emulator(&file, line),
             PanelAction::LookUpDocs(name) => self.look_up_docs(&name, ctx),
+        }
+    }
+
+    /// Opens the step-through emulator for the function holding `file:line`.
+    fn open_emulator(&mut self, file: &str, line: u32) {
+        let empty = std::collections::HashMap::new();
+        match crate::analysis::emulate::run(&self.project.graph, file, line, &empty) {
+            Some(trace) => {
+                self.emulate_view = Some(super::emulate_view::EmulateView::new(
+                    file.to_string(),
+                    line,
+                    trace,
+                ));
+            }
+            None => {
+                self.status = Status::Info("Right-click inside a C function to emulate it.".into());
+            }
+        }
+    }
+
+    /// Shows the emulator window and acts on what it asks for.
+    pub(super) fn show_emulate_view(&mut self, ctx: &egui::Context) {
+        let (outcome, file, line) = match self.emulate_view.as_mut() {
+            Some(view) => (view.show(ctx), view.file.clone(), view.line),
+            None => return,
+        };
+        match outcome {
+            None => {}
+            Some(super::emulate_view::EmulateOutcome::Closed) => self.emulate_view = None,
+            Some(super::emulate_view::EmulateOutcome::Reveal(at)) => {
+                self.go_to_place(None, &file, at);
+            }
+            Some(super::emulate_view::EmulateOutcome::Rerun(inputs)) => {
+                let given = inputs
+                    .into_iter()
+                    .map(|(n, v)| (n, v as i128))
+                    .collect::<std::collections::HashMap<_, _>>();
+                if let Some(trace) =
+                    crate::analysis::emulate::run(&self.project.graph, &file, line, &given)
+                {
+                    if let Some(view) = self.emulate_view.as_mut() {
+                        view.set_trace(trace);
+                    }
+                }
+            }
         }
     }
 

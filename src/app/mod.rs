@@ -21,6 +21,7 @@ mod docs;
 mod docs_actions;
 mod docs_view;
 mod editor;
+mod emulate_view;
 mod finding_view;
 pub(crate) mod findings;
 mod findings_actions;
@@ -228,6 +229,8 @@ pub struct SrcWranglrApp {
     settings_view: Option<settings_view::SettingsView>,
     /// A background analyzer install, while one runs.
     install_job: Option<tool_install::InstallJob>,
+    /// The step-through emulator window, while it is open.
+    emulate_view: Option<emulate_view::EmulateView>,
     /// Whether Help > About is showing.
     is_about_open: bool,
     /// Where you were in each project opened.
@@ -308,6 +311,7 @@ impl SrcWranglrApp {
             settings: settings::Settings::default(),
             settings_view: None,
             install_job: None,
+            emulate_view: None,
             is_about_open: false,
             sessions: session::Sessions::load(storage),
             pending_session: None,
@@ -489,6 +493,7 @@ impl eframe::App for SrcWranglrApp {
         self.show_lifetimes_view(&ctx);
         self.show_dangerous_editor(&ctx);
         self.show_settings_view(&ctx);
+        self.show_emulate_view(&ctx);
         about::show(&ctx, &mut self.is_about_open);
         self.show_session_confirm(&ctx);
         self.show_start_confirm(&ctx);
@@ -762,6 +767,15 @@ impl SrcWranglrApp {
                         symbol.line,
                     );
                     self.start_in_app_agent_for(&name, &file, line, ui.ctx());
+                }
+            }
+            Some(SymbolListAction::Emulate(id)) => {
+                if let Some(symbol) = self.project.graph.symbols.get(&id) {
+                    let action = code_panel::PanelAction::Emulate {
+                        file: symbol.file.clone(),
+                        line: symbol.line,
+                    };
+                    self.run_panel_action(action, ui.ctx());
                 }
             }
             Some(SymbolListAction::Hide) | None => {}

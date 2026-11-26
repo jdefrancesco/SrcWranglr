@@ -143,6 +143,8 @@ pub enum SymbolListAction {
     Lifetimes(SymbolId),
     /// Ask the in-app agent to review the function (its right-click menu).
     CheckWithAgent(SymbolId),
+    /// Open the step-through emulator for the function (its right-click menu).
+    Emulate(SymbolId),
     /// Its hide arrow was clicked.
     Hide,
 }
@@ -198,6 +200,7 @@ impl SymbolList {
         let mut like = None;
         let mut lifetimes = None;
         let mut check = None;
+        let mut emulate = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_rows(ui, row_height, self.rows.len(), |ui, range| {
@@ -235,6 +238,10 @@ impl SymbolList {
                                 check = Some(*id);
                                 ui.close();
                             }
+                            if ui.button("Emulate…").clicked() {
+                                emulate = Some(*id);
+                                ui.close();
+                            }
                         }
                     });
                 }
@@ -243,6 +250,7 @@ impl SymbolList {
             .or(like.map(SymbolListAction::FindLike))
             .or(lifetimes.map(SymbolListAction::Lifetimes))
             .or(check.map(SymbolListAction::CheckWithAgent))
+            .or(emulate.map(SymbolListAction::Emulate))
             .or(clicked.map(SymbolListAction::Select))
     }
 

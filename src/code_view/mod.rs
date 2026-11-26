@@ -153,6 +153,8 @@ pub enum LineAction {
     FindLookAlikes,
     /// Ask the in-app agent to review the function holding this line.
     CheckWithAgent,
+    /// Open the step-through emulator for the function holding this line.
+    Emulate,
     /// Make the variable `name` at this byte column the source of a trace
     /// to a sink.
     SetTraceSource {

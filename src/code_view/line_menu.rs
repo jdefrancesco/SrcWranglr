@@ -84,6 +84,12 @@ pub(super) fn line_menu(response: &Response, menu: &MenuContext) -> Option<LineA
         if check.clicked() {
             action = Some(LineAction::CheckWithAgent);
         }
+        let emulate = ui
+            .button("Emulate This Function…")
+            .on_hover_text("Set input sizes and step through the function, watching for overflows");
+        if emulate.clicked() {
+            action = Some(LineAction::Emulate);
+        }
         if let Some(traced) = trace_menu(ui, shown) {
             action = Some(traced);
         }

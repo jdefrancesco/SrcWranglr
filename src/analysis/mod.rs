@@ -5,6 +5,7 @@
 pub mod behavior;
 pub mod capabilities;
 pub mod dangerous;
+pub mod emulate;
 pub mod flawfinder;
 pub mod fuzz;
 pub mod heuristics;
@@ -12,6 +13,7 @@ pub mod includes;
 pub mod injection;
 pub mod lookalike;
 pub mod memory;
+pub(crate) mod parse;
 pub mod reach;
 pub mod risky;
 pub mod sarif;
