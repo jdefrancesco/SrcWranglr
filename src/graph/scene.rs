@@ -50,6 +50,9 @@ pub struct Group {
     pub pills: Vec<Pill>,
     /// Members left out to keep the box small.
     pub hidden_members: usize,
+    /// Whether the box is expanded to show every member; then `hidden_members`
+    /// is 0 and the footer collapses it instead of expanding it.
+    pub expanded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -105,6 +108,19 @@ impl Scene {
             })
     }
 
+    /// The id of the group whose "+N more" / "show less" footer `world` falls
+    /// in, for a group that has one — a click there expands or collapses it.
+    pub fn footer_hit(&self, world: Pos2) -> Option<SymbolId> {
+        self.groups.iter().find_map(|g| {
+            if g.hidden_members == 0 && !g.expanded {
+                return None;
+            }
+            let footer_top = g.rect.bottom() - GROUP_FOOTER_HEIGHT;
+            let footer = Rect::from_min_max(Pos2::new(g.rect.left(), footer_top), g.rect.max);
+            footer.contains(world).then_some(()).and(g.id)
+        })
+    }
+
     pub fn bounds(&self) -> Option<Rect> {
         self.pills
             .iter()
@@ -128,6 +144,7 @@ pub enum Block {
         kind: Option<SymbolKind>,
         members: Vec<(SymbolId, String, SymbolKind)>,
         hidden_members: usize,
+        expanded: bool,
     },
 }
 
@@ -149,6 +166,7 @@ pub fn block_size(block: &Block, measure: Measure) -> Vec2 {
             title,
             members,
             hidden_members,
+            expanded,
             ..
         } => {
             let title_width = measure(title, TextRole::Title);
@@ -157,7 +175,10 @@ pub fn block_size(block: &Block, measure: Measure) -> Vec2 {
                 .map(|(_, label, _)| pill_width(label, measure))
                 .fold(0.0, f32::max);
             let width = title_width.max(widest_member) + 2.0 * GROUP_PADDING;
-            Vec2::new(width, group_height(members.len(), *hidden_members))
+            Vec2::new(
+                width,
+                group_height(members.len(), *hidden_members, *expanded),
+            )
         }
     }
 }
@@ -166,8 +187,8 @@ pub fn pill_width(label: &str, measure: Measure) -> f32 {
     (measure(label, TextRole::Pill) + 2.0 * PILL_PADDING_X).max(MIN_PILL_WIDTH)
 }
 
-fn group_height(member_count: usize, hidden_members: usize) -> f32 {
-    let footer = if hidden_members > 0 {
+fn group_height(member_count: usize, hidden_members: usize, expanded: bool) -> f32 {
+    let footer = if hidden_members > 0 || expanded {
         GROUP_FOOTER_HEIGHT
     } else {
         0.0
@@ -215,14 +236,18 @@ pub fn stack_column(
                 kind,
                 members,
                 hidden_members,
+                expanded,
             } => {
                 groups.push(place_group(
                     rect,
                     id,
                     title,
                     kind,
-                    members,
-                    hidden_members,
+                    GroupBody {
+                        members,
+                        hidden_members,
+                        expanded,
+                    },
                     measure,
                 ));
             }
@@ -232,15 +257,27 @@ pub fn stack_column(
     (groups, pills)
 }
 
+/// A group's members and how its list is truncated — bundled to keep
+/// `place_group` within the argument limit.
+struct GroupBody {
+    members: Vec<(SymbolId, String, SymbolKind)>,
+    hidden_members: usize,
+    expanded: bool,
+}
+
 fn place_group(
     rect: Rect,
     id: Option<SymbolId>,
     title: String,
     kind: Option<SymbolKind>,
-    members: Vec<(SymbolId, String, SymbolKind)>,
-    hidden_members: usize,
+    body: GroupBody,
     measure: Measure,
 ) -> Group {
+    let GroupBody {
+        members,
+        hidden_members,
+        expanded,
+    } = body;
     let title_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), GROUP_TITLE_HEIGHT));
     let pills = members
         .into_iter()
@@ -265,6 +302,7 @@ fn place_group(
         title_rect,
         pills,
         hidden_members,
+        expanded,
     }
 }
 
@@ -304,6 +342,7 @@ pub mod tests {
                 .map(|(i, l)| (*i, l.to_string(), SymbolKind::Method))
                 .collect(),
             hidden_members: 0,
+            expanded: false,
         }
     }
 
@@ -313,6 +352,31 @@ pub mod tests {
         assert_eq!(size, Vec2::new(70.0 + 2.0 * PILL_PADDING_X, PILL_HEIGHT));
         let tiny = block_size(&pill_block(1, "a"), &fake_measure);
         assert_eq!(tiny.x, MIN_PILL_WIDTH);
+    }
+
+    #[test]
+    fn footer_hit_finds_a_group_with_a_more_footer() {
+        let block = Block::Group {
+            id: Some(7),
+            title: "G".into(),
+            kind: Some(SymbolKind::Class),
+            members: vec![(1, "a".into(), SymbolKind::Method)],
+            hidden_members: 5,
+            expanded: false,
+        };
+        let (groups, _) = stack_column(vec![block], 0.0, Align::Center, 0.0, &fake_measure);
+        let g = groups[0].clone();
+        let scene = Scene {
+            groups,
+            ..Scene::default()
+        };
+        let footer = Pos2::new(
+            g.rect.center().x,
+            g.rect.bottom() - GROUP_FOOTER_HEIGHT / 2.0,
+        );
+        assert_eq!(scene.footer_hit(footer), Some(7));
+        // The title area isn't the footer.
+        assert_eq!(scene.footer_hit(g.title_rect.center()), None);
     }
 
     #[test]

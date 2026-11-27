@@ -26,12 +26,17 @@ enum Side {
     Right,
 }
 
-pub fn build_trail(graph: &CodeGraph, active: SymbolId, measure: Measure) -> Scene {
+pub fn build_trail(
+    graph: &CodeGraph,
+    active: SymbolId,
+    expanded_group: Option<SymbolId>,
+    measure: Measure,
+) -> Scene {
     if !graph.symbols.contains_key(&active) {
         return Scene::default();
     }
     let index = Hierarchy::new(graph);
-    let (center, center_ids) = center_block(graph, &index, active);
+    let (center, center_ids) = center_block(graph, &index, active, expanded_group);
     let relations = relations_of(graph, &center_ids, active);
     let (neighbors, hidden_neighbors) = ranked_neighbors(graph, &relations, &center_ids);
     let shown: HashSet<SymbolId> = center_ids.iter().chain(neighbors.keys()).copied().collect();
@@ -134,14 +139,21 @@ fn center_block(
     graph: &CodeGraph,
     index: &Hierarchy,
     active: SymbolId,
+    expanded_group: Option<SymbolId>,
 ) -> (Block, HashSet<SymbolId>) {
     let symbol = &graph.symbols[&active];
     if is_container(graph, active) {
+        let expanded = expanded_group == Some(active);
         let all = index.children.get(&active).cloned().unwrap_or_default();
-        let hidden_members = all.len().saturating_sub(MAX_GROUP_MEMBERS);
+        let limit = if expanded {
+            all.len()
+        } else {
+            MAX_GROUP_MEMBERS
+        };
+        let hidden_members = all.len().saturating_sub(limit);
         let members: Vec<_> = all
             .iter()
-            .take(MAX_GROUP_MEMBERS)
+            .take(limit)
             .filter_map(|id| member_entry(graph, *id))
             .collect();
         let ids = std::iter::once(active)
@@ -153,6 +165,7 @@ fn center_block(
             kind: Some(symbol.kind),
             members,
             hidden_members,
+            expanded,
         };
         return (block, ids);
     }
@@ -186,6 +199,7 @@ fn center_block(
         kind: Some(owner_symbol.kind),
         members,
         hidden_members: 0,
+        expanded: false,
     };
     (block, ids)
 }
@@ -313,6 +327,7 @@ fn side_blocks(
                 kind: Some(s.kind),
                 members,
                 hidden_members: 0,
+                expanded: false,
             },
         );
     }
@@ -348,7 +363,7 @@ mod tests {
     }
 
     fn trail(graph: &CodeGraph, active: &str) -> Scene {
-        build_trail(graph, id(graph, active), &fake_measure)
+        build_trail(graph, id(graph, active), None, &fake_measure)
     }
 
     fn center_x(scene: &Scene, symbol: SymbolId) -> f32 {
@@ -379,6 +394,39 @@ mod tests {
             .map(|p| p.rect)
             .chain(scene.groups.iter().map(|g| g.rect))
             .collect()
+    }
+
+    #[test]
+    fn a_struct_expands_from_its_more_footer_to_show_every_member() {
+        let fields = (0..30)
+            .map(|i| format!("int f{i};"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let src = format!("struct Big {{ {fields} }};");
+        let graph = crate::index::graph_of_files(&[("big.c", &src)]);
+        let big = id(&graph, "Big");
+
+        // Collapsed: capped at MAX_GROUP_MEMBERS, the rest counted as hidden.
+        let collapsed = build_trail(&graph, big, None, &fake_measure);
+        let group = collapsed
+            .groups
+            .iter()
+            .find(|g| g.id == Some(big))
+            .expect("center group");
+        assert_eq!(group.pills.len(), MAX_GROUP_MEMBERS);
+        assert_eq!(group.hidden_members, 30 - MAX_GROUP_MEMBERS);
+        assert!(!group.expanded);
+
+        // Expanded (its footer clicked): every member shown, nothing hidden.
+        let expanded = build_trail(&graph, big, Some(big), &fake_measure);
+        let group = expanded
+            .groups
+            .iter()
+            .find(|g| g.id == Some(big))
+            .expect("center group");
+        assert_eq!(group.pills.len(), 30);
+        assert_eq!(group.hidden_members, 0);
+        assert!(group.expanded);
     }
 
     #[test]
@@ -458,7 +506,7 @@ mod tests {
     fn contains_edges_are_never_wires() {
         let graph = demo_codebase().expect("demo");
         for symbol in graph.symbols.values() {
-            let scene = build_trail(&graph, symbol.id, &fake_measure);
+            let scene = build_trail(&graph, symbol.id, None, &fake_measure);
             assert!(scene.wires.iter().all(|w| w.kind != EdgeKind::Contains));
             assert_disjoint(&all_rects(&scene));
             // Every wire endpoint is drawn.
@@ -497,7 +545,7 @@ mod tests {
     #[test]
     fn caps_neighbors_and_counts_the_rest() {
         let graph = hub(100);
-        let scene = build_trail(&graph, 0, &fake_measure);
+        let scene = build_trail(&graph, 0, None, &fake_measure);
         assert_eq!(scene.all_pills().count(), MAX_NEIGHBORS + 1);
         assert_eq!(scene.hidden_neighbors, 100 - MAX_NEIGHBORS);
         assert_disjoint(&all_rects(&scene));
@@ -506,7 +554,7 @@ mod tests {
     #[test]
     fn unknown_active_symbol_gives_empty_scene() {
         let graph = demo_codebase().expect("demo");
-        let scene = build_trail(&graph, 9_999, &fake_measure);
+        let scene = build_trail(&graph, 9_999, None, &fake_measure);
         assert!(scene.bounds().is_none());
     }
 }

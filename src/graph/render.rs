@@ -232,13 +232,25 @@ fn paint_group(painter: &Painter, frame: &Frame, group: &Group) {
         paint_badge(painter, title.right_top(), zoom, badge);
     }
     let footer_font = scaled(TextRole::Pill, zoom * 0.9);
-    if group.hidden_members > 0 && footer_font.size >= MIN_READABLE_FONT {
+    let has_footer = group.hidden_members > 0 || group.expanded;
+    if has_footer && footer_font.size >= MIN_READABLE_FONT {
         let pos = Pos2::new(
             rect.left() + GROUP_PADDING * zoom,
             rect.bottom() - GROUP_FOOTER_HEIGHT * zoom * 0.5,
         );
-        let text = format!("+{} more", group.hidden_members);
-        painter.text(pos, Align2::LEFT_CENTER, text, footer_font, palette.muted);
+        let text = if group.expanded {
+            "− show less".to_string()
+        } else {
+            format!("+{} more", group.hidden_members)
+        };
+        // Groups with an id (a class/struct) expand on click, so colour the
+        // footer as a control; the overview's file boxes (no id) stay muted.
+        let color = if group.id.is_some() {
+            palette.emphasis
+        } else {
+            palette.muted
+        };
+        painter.text(pos, Align2::LEFT_CENTER, text, footer_font, color);
     }
 }
 

@@ -44,6 +44,7 @@ pub fn build_overview(graph: &CodeGraph, measure: Measure) -> Scene {
                 id: None,
                 title: file.to_string(),
                 kind: None,
+                expanded: false,
                 hidden_members: symbols.len().saturating_sub(MAX_FILE_MEMBERS),
                 members: symbols
                     .iter()

@@ -59,7 +59,7 @@ impl ViewMode {
 }
 
 /// The selection and mode a scene was laid out for.
-type SceneKey = (Option<SymbolId>, ViewMode);
+type SceneKey = (Option<SymbolId>, ViewMode, Option<SymbolId>);
 
 /// Where "Go to Entry Point" landed: entry point `position` of `count`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +87,9 @@ pub struct GraphView {
     entry_points: Option<Vec<SymbolId>>,
     selected: Option<SymbolId>,
     history: Vec<SymbolId>,
+    /// The group expanded to show all its members (its "+N more" clicked), or
+    /// None. Only one is expanded at a time; it is part of the scene key.
+    expanded_group: Option<SymbolId>,
     hovered: Option<SymbolId>,
     /// Connection count for the hovered symbol, so hovering doesn't scan
     /// every edge on every frame.
@@ -107,6 +110,7 @@ impl Default for GraphView {
             entry_points: None,
             selected: None,
             history: Vec::new(),
+            expanded_group: None,
             hovered: None,
             hover_connections: None,
             notice: None,
@@ -222,7 +226,7 @@ impl GraphView {
         };
         render::paint(&painter, &frame);
         self.notice = notice(&scene, graph, self.mode);
-        self.scene = Some(((self.selected, self.mode), scene));
+        self.scene = Some(((self.selected, self.mode, self.expanded_group), scene));
 
         self.with_hover_tooltip(response, graph)
     }
@@ -231,7 +235,7 @@ impl GraphView {
     /// selection changed since it was laid out.
     fn take_scene(&mut self, ui: &egui::Ui, graph: &CodeGraph) -> Scene {
         if let Some((built_for, scene)) = self.scene.take() {
-            if built_for == (self.selected, self.mode) {
+            if built_for == (self.selected, self.mode, self.expanded_group) {
                 return scene;
             }
         }
@@ -249,7 +253,7 @@ impl GraphView {
                 let calls = self.call_index.get_or_insert_with(|| CallIndex::new(graph));
                 build_hierarchy(graph, calls, focus, &measure)
             }
-            (ViewMode::Trail, Some(id)) => build_trail(graph, id, &measure),
+            (ViewMode::Trail, Some(id)) => build_trail(graph, id, self.expanded_group, &measure),
             (ViewMode::Trail, None) => build_overview(graph, &measure),
         }
     }
@@ -327,10 +331,19 @@ impl GraphView {
         if response.double_clicked() && self.hovered.is_none() {
             self.fit();
         } else if response.clicked() {
-            if let Some(id) = self.hovered {
+            let world = pointer_local.map(|p| self.camera.local_to_world(p));
+            if let Some(group) = world.and_then(|w| scene.footer_hit(w)) {
+                self.toggle_expanded(group);
+            } else if let Some(id) = self.hovered {
                 self.select(id);
             }
         }
+    }
+
+    /// Expands a group — its "+N more" footer, clicked — to show every member,
+    /// or collapses it again. Only one group is expanded at a time.
+    fn toggle_expanded(&mut self, group: SymbolId) {
+        self.expanded_group = (self.expanded_group != Some(group)).then_some(group);
     }
 
     fn update_camera(&mut self, scene: &Scene, canvas_size: Vec2) {
