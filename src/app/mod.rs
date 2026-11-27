@@ -736,14 +736,14 @@ impl SrcWranglrApp {
                 None => {
                     if let Some(job) = self.tool_jobs.first() {
                         ui.spinner();
-                        ui.label(visible::visible(&job.status_line(&self.project.name)));
+                        ui.label(visible::one_line(&job.status_line(&self.project.name)));
                         ui.separator();
                     }
                     match &self.status {
                         // Tools' errors may quote the project's files.
-                        Status::Info(text) => ui.label(visible::visible(text)),
+                        Status::Info(text) => ui.label(visible::one_line(text)),
                         Status::Error(text) => {
-                            ui.label(RichText::new(visible::visible(text)).color(ERROR_COLOR))
+                            ui.label(RichText::new(visible::one_line(text)).color(ERROR_COLOR))
                         }
                     };
                     if !self.warnings.is_empty() {

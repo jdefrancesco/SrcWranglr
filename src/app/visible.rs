@@ -60,6 +60,18 @@ pub fn visible_lines(text: &str) -> String {
     text.lines().map(visible).collect::<Vec<_>>().join("\n")
 }
 
+/// Text for a one-line place such as the status bar: a tab or carriage return
+/// becomes a space, since there it is only spacing (and would otherwise read
+/// as a loud `‹TAB›`); a line break, a bidi control and the rest stay marked.
+pub fn one_line(text: &str) -> String {
+    let spaced: Cow<'_, str> = if text.contains(['\t', '\r']) {
+        Cow::Owned(text.replace(['\t', '\r'], " "))
+    } else {
+        Cow::Borrowed(text)
+    };
+    visible(&spaced).into_owned()
+}
+
 /// `text` in `font` and `color`, its marks in `MARK_COLOR`.
 pub fn job(text: &str, font: FontId, color: Color32) -> LayoutJob {
     let mut job = LayoutJob::default();
@@ -175,6 +187,18 @@ mod tests {
     fn lines_keep_their_breaks_and_lose_what_hides_in_them() {
         assert_eq!(visible_lines("one\ntwo\u{202E}"), "one\ntwo‹U+202E›");
         assert_eq!(visible_lines("a\r\nb"), "a\nb");
+    }
+
+    #[test]
+    fn one_line_flattens_tabs_but_marks_line_breaks() {
+        // A tool's tab-separated output line in the status bar: tabs read as
+        // spaces, not a loud `‹TAB›`.
+        assert_eq!(
+            one_line("atomic.c\t197\tportability"),
+            "atomic.c 197 portability"
+        );
+        assert_eq!(one_line("a\r\nb"), "a ‹LF›b");
+        assert_eq!(one_line("plain text"), "plain text");
     }
 
     #[test]
