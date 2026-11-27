@@ -240,20 +240,28 @@ impl AgentPanel {
             keep
         });
         if !self.in_app_log.is_empty() {
-            egui::ScrollArea::vertical()
-                .max_height(LIST_HEIGHT)
-                .auto_shrink([false, true])
-                .stick_to_bottom(true)
-                .id_salt("in_app_log")
+            // Drag the handle at the bottom-right to grow the transcript so it
+            // fills the window; egui remembers the height between runs.
+            egui::Resize::default()
+                .id_salt("in_app_log_resize")
+                .resizable([false, true])
+                .min_height(120.0)
+                .default_size([ui.available_width(), LIST_HEIGHT])
                 .show(ui, |ui| {
-                    for (is_error, line) in &self.in_app_log {
-                        let text = RichText::new(line).monospace().small();
-                        ui.label(if *is_error {
-                            text.color(ERROR_COLOR)
-                        } else {
-                            text
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .id_salt("in_app_log")
+                        .show(ui, |ui| {
+                            for (is_error, line) in &self.in_app_log {
+                                let text = RichText::new(line).monospace().small();
+                                ui.label(if *is_error {
+                                    text.color(ERROR_COLOR)
+                                } else {
+                                    text
+                                });
+                            }
                         });
-                    }
                 });
             ui.separator();
         }

@@ -211,6 +211,19 @@ fn the_transcript_records_each_step_of_an_in_app_run() {
 }
 
 #[test]
+fn the_transcript_is_shown_in_the_pane() {
+    let mut panel = AgentPanel::default();
+    panel.push_in_app(AgentStep::Running {
+        name: "find_symbol".into(),
+        arguments: "{}".into(),
+    });
+    let harness = harness(panel);
+    // The step is rendered in the pane (inside the resizable transcript),
+    // not left to an external terminal.
+    harness.get_by_label_contains("find_symbol");
+}
+
+#[test]
 fn finishing_denies_commands_still_waiting() {
     let (reply, answer) = std::sync::mpsc::sync_channel(1);
     let mut panel = AgentPanel::default();
