@@ -46,8 +46,6 @@ pub enum PanelAction {
     ShowFinding(usize),
     /// Add this function to the dangerous-functions list.
     MarkDangerous(String),
-    /// Toggle a `//` comment on lines `first..=last` of `file`, on disk.
-    ToggleComment { file: String, first: u32, last: u32 },
     /// Write a TODO about `file:line`.
     AddTodo { file: String, line: u32 },
     /// Draft a rule finding code like lines `first..=last` of `file`.
@@ -244,9 +242,6 @@ impl CodePanel {
                 Some(PanelAction::FindLookAlikes { file, line })
             }
             CodeEvent::HoveredCall(name) => Some(PanelAction::LookUpDocs(name)),
-            CodeEvent::ToggleComment { first, last } => {
-                Some(PanelAction::ToggleComment { file, first, last })
-            }
             CodeEvent::Line(line, LineAction::CheckWithAgent) => {
                 Some(PanelAction::CheckWithAgent { file, line })
             }

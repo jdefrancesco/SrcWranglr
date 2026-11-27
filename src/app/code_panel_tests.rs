@@ -250,6 +250,41 @@ fn right_clicking_a_line_offers_line_notes_and_bookmarks() {
 }
 
 #[test]
+fn pressing_semicolon_over_a_line_annotates_it() {
+    // `;` used to toggle a `//` comment in the source file; now it adds or
+    // edits a note on the line (like right-click → Add Note), without touching
+    // the file.
+    let mut harness = harness("helper");
+    let rect = harness
+        .get_by_label("int first() { return helper(); }")
+        .rect();
+    harness.hover_at(rect.center());
+    harness.run();
+    harness.key_press(egui::Key::Semicolon);
+    harness.run();
+    assert_eq!(
+        harness.state().last_action,
+        Some(PanelAction::EditNote(line(2)))
+    );
+}
+
+#[test]
+fn a_line_note_shows_inline_in_the_source() {
+    let mut harness = harness("helper");
+    let project = Project::new("t", None, harness.state().graph.clone());
+    harness
+        .state_mut()
+        .notebook
+        .set(&project, line(2), "watch this bound", false)
+        .expect("set");
+    harness.run();
+    // Shown inline after the code, like a trailing comment.
+    assert!(harness
+        .query_by_label_contains("//  watch this bound")
+        .is_some());
+}
+
+#[test]
 fn line_menu_offers_editing_and_unbookmarking_marked_lines() {
     let mut harness = harness("helper");
     let project = Project::new("t", None, harness.state().graph.clone());

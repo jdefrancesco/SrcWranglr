@@ -47,9 +47,6 @@ impl SrcWranglrApp {
             PanelAction::EditNote(target) => self.edit_note(target),
             PanelAction::ShowFinding(id) => self.explain_finding(id),
             PanelAction::MarkDangerous(name) => self.mark_dangerous(&name),
-            PanelAction::ToggleComment { file, first, last } => {
-                self.toggle_comment(&file, first, last);
-            }
             PanelAction::AddTodo { file, line } => self.todo_panel.add_here(file, line),
             PanelAction::FindSimilar { file, first, last } => {
                 self.find_similar(Example::lines(&file, first, last));
@@ -146,47 +143,6 @@ impl SrcWranglrApp {
             }
         }
     }
-
-    /// Toggles a `//` comment on lines `first..=last` of `file`, writing the
-    /// change to the file on disk and updating the source shown. Analysis
-    /// (findings, cross references) refreshes on the next re-index.
-    fn toggle_comment(&mut self, file: &str, first: u32, last: u32) {
-        let Some(root) = self.project.root.clone() else {
-            self.status = Status::Info(
-                "The demo's sources aren't on disk: open a project (⌘O) to edit.".into(),
-            );
-            return;
-        };
-        let Some(text) = self.project.graph.file_contents.get(file) else {
-            self.status = Status::Error(format!("{file} isn't in this index."));
-            return;
-        };
-        let updated = super::line_comment::toggle(text, first, last);
-        if updated == *text {
-            return;
-        }
-        let path = root.join(file);
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            self.status = Status::Error(format!("Couldn't work out the path for {file}."));
-            return;
-        };
-        let parent = path.parent().unwrap_or(root.as_path());
-        match crate::safe_fs::write_atomically(parent, name, &updated) {
-            Ok(()) => {
-                // Copy-on-write: free unless an agent run shares the graph.
-                std::sync::Arc::make_mut(&mut self.project.graph)
-                    .file_contents
-                    .insert(file.to_string(), updated);
-                let what = if first == last {
-                    format!("line {first}")
-                } else {
-                    format!("lines {first}\u{2013}{last}")
-                };
-                self.status = Status::Info(format!("Toggled // comment on {what} of {file}."));
-            }
-            Err(error) => self.status = Status::Error(format!("Couldn't write {file}: {error}")),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -210,42 +166,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         (app, ctx, dir)
-    }
-
-    fn toggle(app: &mut SrcWranglrApp, ctx: &egui::Context, first: u32, last: u32) {
-        app.run_panel_action(
-            PanelAction::ToggleComment {
-                file: "a.c".into(),
-                first,
-                last,
-            },
-            ctx,
-        );
-    }
-
-    #[test]
-    fn toggling_comments_the_file_on_disk_and_in_the_shown_source() {
-        let (mut app, ctx, dir) = indexed("int main(void) {\n    return 0;\n}\n");
-        toggle(&mut app, &ctx, 2, 2);
-        let commented = "int main(void) {\n    // return 0;\n}\n";
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("a.c")).expect("read"),
-            commented
-        );
-        assert_eq!(app.project.graph.file_contents["a.c"], commented);
-    }
-
-    #[test]
-    fn toggling_again_uncomments_it() {
-        let (mut app, ctx, dir) = indexed("int main(void) {\n    return 0;\n}\n");
-        toggle(&mut app, &ctx, 2, 2);
-        toggle(&mut app, &ctx, 2, 2);
-        let original = "int main(void) {\n    return 0;\n}\n";
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("a.c")).expect("read"),
-            original
-        );
-        assert_eq!(app.project.graph.file_contents["a.c"], original);
     }
 
     #[test]
@@ -288,16 +208,5 @@ mod tests {
         match &app.status {
             Status::Info(m) | Status::Error(m) => m.clone(),
         }
-    }
-
-    #[test]
-    fn toggling_on_the_demo_is_refused_and_writes_nothing() {
-        let ctx = egui::Context::default();
-        let mut app = SrcWranglrApp::new(&ctx, None, LaunchOptions::default());
-        app.open_demo(&ctx);
-        // No project root on disk: must not panic, and leaves the demo's text.
-        let before = app.project.graph.file_contents.clone();
-        toggle(&mut app, &ctx, 1, 1);
-        assert_eq!(app.project.graph.file_contents, before);
     }
 }

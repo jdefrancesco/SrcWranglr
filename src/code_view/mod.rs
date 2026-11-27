@@ -201,9 +201,6 @@ pub enum CodeEvent {
     /// Hovering a call to a library function whose man page isn't looked
     /// up yet: its name as looked up.
     HoveredCall(String),
-    /// Pressed `;` over the code: toggle a `//` comment on 1-based lines
-    /// `first..=last` (the lines picked, or the focused line).
-    ToggleComment { first: u32, last: u32 },
 }
 
 /// Source viewer. Keeps the line index of the file it last showed, so
@@ -365,6 +362,9 @@ impl Rows<'_> {
                 is_focus_line,
             };
             let (event, code) = self.show_code(ui, &line);
+            if let Some(note) = mark.as_ref().map(|m| m.note).filter(|n| !n.is_empty()) {
+                self.show_line_note(ui, note);
+            }
             let calls = self.calls_on_line(line_no);
             let names = self.names_on_line(line_no);
             let include = included(&shown);
@@ -392,21 +392,33 @@ impl Rows<'_> {
                 .or(number_clicked)
                 .or(event)
         });
-        // `;` over this line toggles a `//` comment on it — or on the whole
-        // picked block, when the pointer is within one. Held back while a text
-        // field is being typed in, so a typed semicolon isn't stolen.
+        // `;` over this line adds or edits a note on it — a line annotation
+        // kept with the project's notes, not a change to the source file. Held
+        // back while a text field is being typed in, so a typed semicolon
+        // isn't stolen.
         let pressed_semicolon = row.response.contains_pointer()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Semicolon));
         if pressed_semicolon {
-            let (first, last) = self
-                .focus
-                .selected_lines
-                .filter(|(a, b)| (*a..=*b).contains(&line_no))
-                .unwrap_or((line_no, line_no));
-            return Some(CodeEvent::ToggleComment { first, last });
+            return Some(CodeEvent::Line(line_no, LineAction::EditNote));
         }
         row.inner
+    }
+
+    /// Draws a line's note inline after its code: like a trailing `//` comment,
+    /// but in the note color — it is SrcWranglr's annotation, kept with the
+    /// project's notes, not text in the file. A multi-line note is flattened
+    /// onto the one line, its hidden characters marked.
+    fn show_line_note(&self, ui: &mut egui::Ui, note: &str) {
+        let one_line = note.split_whitespace().collect::<Vec<_>>().join(" ");
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("  //  {}", visible(&one_line)))
+                    .font(self.font.clone())
+                    .color(NOTE_COLOR),
+            )
+            .selectable(false),
+        );
     }
 
     /// Paints one line of code and handles hovering/clicking its names and

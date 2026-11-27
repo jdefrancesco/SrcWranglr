@@ -41,7 +41,6 @@ mod journal_view;
 pub mod launch;
 mod layout;
 mod lifetimes_view;
-mod line_comment;
 mod locations;
 mod log_view;
 mod markdown;
