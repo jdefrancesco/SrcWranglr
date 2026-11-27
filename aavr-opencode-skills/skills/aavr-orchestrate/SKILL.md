@@ -73,6 +73,22 @@ Use this default sequence and skip a phase only with an explicit reason:
 12. Load `aavr-variant-analysis` after a root cause is understood.
 13. Load `aavr-report` to produce the current assessment.
 
+## Optional specialist passes
+
+Insert these when the target warrants them; each produces candidates that feed
+`aavr-finding-triage` like any other analysis step. Skip them when nothing triggers them.
+
+- `aavr-differential-review` — when the assessment is scoped to a change (a diff, commit
+  range, or PR) rather than the whole tree. It can lead the workflow: review the change,
+  then drop into the default sequence for anything it surfaces.
+- `aavr-insecure-defaults` — during or alongside static analysis, when the target has
+  configuration, secrets, auth toggles, or startup code that could fail open.
+- `aavr-constant-time-analysis` — during analysis, when recon found cryptographic or
+  secret-handling code that could leak through timing.
+- `aavr-property-based-testing` — alongside target selection and harness generation, for
+  parsers, serializers, and normalizers where a roundtrip or invariant property strengthens
+  a harness.
+
 ## Phase gates
 
 Do not advance unless the gate is satisfied:

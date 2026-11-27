@@ -57,6 +57,25 @@ Write one JSON object per line to `.aavr/findings/candidates.jsonl`:
 
 Deduplicate only when results describe the same root cause and code path. Preserve provenance from all tools.
 
+## CodeQL and SARIF
+
+CodeQL earns its cost on interprocedural data-flow and taint questions the lighter tools can't
+answer. Build a database once against the canonical build, then query it:
+
+```bash
+codeql database create .aavr/runs/<run-id>/codeql-db --language=cpp --command='<canonical build>'
+codeql database analyze .aavr/runs/<run-id>/codeql-db \
+  codeql/cpp-queries:codeql-suites/cpp-security-and-quality.qls \
+  --format=sarifv2.1.0 --output=.aavr/runs/<run-id>/codeql.sarif
+```
+
+Use the high-precision security suite for a first pass; widen to security-and-quality only
+with a reason. Most scanners (CodeQL, Semgrep `--sarif`, clang-tidy via converters) emit
+SARIF — treat it as the common format: read `runs[].results[]`, map each `locations[]` to
+file and line, carry `ruleId` and `partialFingerprints`, and fold the results into
+`candidates.jsonl` above (dedupe by fingerprint, keep provenance). If SrcWranglr is open, it
+can import a SARIF report directly into the user's Findings (`aavr-srcwranglr`).
+
 ## Analysis discipline
 
 - Do not call a warning a vulnerability.

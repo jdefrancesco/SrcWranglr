@@ -1,6 +1,6 @@
 # AAVR OpenCode Skills
 
-Model-agnostic Agentic Augmented Vulnerability Research workflows for OpenCode. The bundle contains **15 skills** and does not select or require a particular model.
+Model-agnostic Agentic Augmented Vulnerability Research workflows for OpenCode. The bundle contains **20 skills** and does not select or require a particular model.
 
 ## Install globally
 
@@ -37,6 +37,8 @@ This creates `/path/to/repository/.opencode/skills/` and `.opencode/commands/`.
 - `/aavr-report` — report from existing artifacts
 - `/aavr-semgrep` — index, select, and run the private Semgrep corpus
 - `/aavr-semgrep-author` — author and test a targeted Semgrep rule
+- `/aavr-constant-time` — analyze cryptographic code for timing side-channels
+- `/aavr-diff-review` — security-focused review of a diff, commit range, or PR
 
 ## Included skills
 
@@ -45,13 +47,17 @@ This creates `/path/to/repository/.opencode/skills/` and `.opencode/commands/`.
 - `aavr-build-baseline`
 - `aavr-attack-surface`
 - `aavr-static-analysis`
+- `aavr-insecure-defaults`
+- `aavr-constant-time-analysis`
 - `aavr-finding-triage`
 - `aavr-sanitizer-validation`
 - `aavr-fuzz-target-selection`
 - `aavr-harness-generation`
+- `aavr-property-based-testing`
 - `aavr-fuzz-campaign`
 - `aavr-crash-triage`
 - `aavr-variant-analysis`
+- `aavr-differential-review`
 - `aavr-report`
 - `aavr-semgrep-database`
 - `aavr-semgrep-rule-authoring`

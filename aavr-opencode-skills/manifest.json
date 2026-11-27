@@ -1,6 +1,6 @@
 {
   "name": "aavr-opencode-skills",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "skills": [
     "aavr-orchestrate",
     "aavr-srcwranglr",
@@ -8,13 +8,17 @@
     "aavr-build-baseline",
     "aavr-attack-surface",
     "aavr-static-analysis",
+    "aavr-insecure-defaults",
+    "aavr-constant-time-analysis",
     "aavr-finding-triage",
     "aavr-sanitizer-validation",
     "aavr-fuzz-target-selection",
     "aavr-harness-generation",
+    "aavr-property-based-testing",
     "aavr-fuzz-campaign",
     "aavr-crash-triage",
     "aavr-variant-analysis",
+    "aavr-differential-review",
     "aavr-report",
     "aavr-semgrep-database",
     "aavr-semgrep-rule-authoring"
@@ -27,7 +31,9 @@
     "aavr-fuzz",
     "aavr-report",
     "aavr-semgrep",
-    "aavr-semgrep-author"
+    "aavr-semgrep-author",
+    "aavr-constant-time",
+    "aavr-diff-review"
   ],
   "model_agnostic": true
 }

@@ -41,6 +41,16 @@ Use targeted searches rather than dumping the entire tree into context.
 
 Verify candidate surfaces through callers and data flow. A function named `parse` may consume trusted configuration; a generic helper may receive remote input.
 
+## Build deep context on the hot components
+
+For the few components that recon marks as the real attack surface, go deeper than a summary
+before any bug hunting: read the key functions closely, line by line, and record the data and
+control flow that actually matters — who owns each buffer, where a length comes from, which
+checks constrain an index, and what state a parser carries between calls. This architectural
+context is what later phases (triage, harness generation, differential review) build on; a
+shallow recon produces shallow findings. Capture it in `summary.md` with precise file:line
+references rather than prose.
+
 ## Output
 
 Write `.aavr/recon/repository.json`:
