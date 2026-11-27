@@ -46,10 +46,19 @@ pub struct Layout {
     pub generation: u32,
     pub is_symbols_shown: bool,
     pub is_source_shown: bool,
+    /// Whether the graph fills the centre. Hidden, the source pane takes the
+    /// centre instead. Defaulted so layouts saved before it stay loadable.
+    #[serde(default = "shown")]
+    pub is_graph_shown: bool,
     /// Which defaults the layout was saved under: 0 for one saved before
     /// layouts had a version (missing in the file).
     #[serde(default)]
     version: u32,
+}
+
+/// The serde default for a shown-by-default pane flag.
+fn shown() -> bool {
+    true
 }
 
 impl Default for Layout {
@@ -61,6 +70,7 @@ impl Default for Layout {
             generation: 0,
             is_symbols_shown: true,
             is_source_shown: true,
+            is_graph_shown: true,
             version: BESIDE_BY_DEFAULT_VERSION,
         }
     }
@@ -117,6 +127,13 @@ impl Layout {
     pub fn with_source_shown(self, is_source_shown: bool) -> Self {
         Self {
             is_source_shown,
+            ..self
+        }
+    }
+
+    pub fn with_graph_shown(self, is_graph_shown: bool) -> Self {
+        Self {
+            is_graph_shown,
             ..self
         }
     }
@@ -303,6 +320,24 @@ mod tests {
         assert!(!hidden.is_symbols_shown && !hidden.is_source_shown);
         let reset = hidden.reset();
         assert!(reset.is_symbols_shown && reset.is_source_shown);
+    }
+
+    #[test]
+    fn the_graph_shows_by_default_and_can_be_hidden_then_reset() {
+        let layout = Layout::default();
+        assert!(layout.is_graph_shown);
+        let hidden = layout.with_graph_shown(false);
+        assert!(!hidden.is_graph_shown);
+        assert!(hidden.reset().is_graph_shown, "reset brings the graph back");
+    }
+
+    #[test]
+    fn a_layout_saved_before_the_graph_flag_defaults_to_the_graph_shown() {
+        // Older builds wrote no is_graph_shown; serde fills it in as shown,
+        // so an upgrade doesn't silently hide the graph.
+        let json = r#"{"source":"Beside","below_share":0.5,"beside_share":0.5,"generation":0,"is_symbols_shown":true,"is_source_shown":true,"version":1}"#;
+        let layout: Layout = serde_json::from_str(json).expect("deserialize");
+        assert!(layout.is_graph_shown);
     }
 
     #[test]

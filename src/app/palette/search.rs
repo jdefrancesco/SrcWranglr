@@ -74,7 +74,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 55] = [
+    pub const ALL: [Command; 56] = [
         Command::OpenProject,
         Command::OpenDemo,
         Command::Reindex,
@@ -121,6 +121,7 @@ impl Command {
         Command::SwapSourcePane,
         Command::TogglePane(Pane::Symbols),
         Command::TogglePane(Pane::Source),
+        Command::TogglePane(Pane::Graph),
         Command::ResetLayout,
         Command::Triage(SurveyTab::Overview),
         Command::Triage(SurveyTab::Languages),

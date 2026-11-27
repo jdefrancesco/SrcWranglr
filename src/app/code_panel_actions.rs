@@ -8,34 +8,44 @@ use super::{SrcWranglrApp, Status};
 use crate::analysis::similar::Example;
 
 impl SrcWranglrApp {
+    /// The source pane as a side/bottom panel beside the graph. When the
+    /// graph is hidden, the source takes the centre instead (see the
+    /// workspace's central panel), so this draws nothing.
     pub(super) fn show_code_panel(&mut self, ui: &mut egui::Ui) {
-        if !self.layout.is_source_shown {
+        if !self.layout.is_source_shown || !self.layout.is_graph_shown {
             return;
         }
         let layout = self.layout;
         let (layout, ()) = layout.show_source_pane(ui, |ui| {
-            let selected = self.graph_view.selected();
             let edge = match layout.source {
                 SourcePlacement::Beside => Edge::Right,
                 SourcePlacement::Below => Edge::Bottom,
             };
-            self.code_panel.is_drafting_rule = self.is_drafting_rule();
-            self.code_panel.range = self.history_panel.shared_range();
-            let action = self.code_panel.show(
-                ui,
-                &self.project.graph,
-                selected,
-                &self.notebook,
-                &self.findings,
-                edge,
-            );
-            if let Some(action) = action {
-                let ctx = ui.ctx().clone();
-                self.run_panel_action(action, &ctx);
-            }
+            self.show_code_contents(ui, edge);
         });
         // Kept hidden if its arrow was clicked.
         self.layout = layout.with_source_shown(self.layout.is_source_shown);
+    }
+
+    /// Draws the code view's contents into `ui` (shared by the side panel and
+    /// the centre), routing any action it returns. `edge` is where its hide
+    /// arrow points.
+    pub(super) fn show_code_contents(&mut self, ui: &mut egui::Ui, edge: Edge) {
+        let selected = self.graph_view.selected();
+        self.code_panel.is_drafting_rule = self.is_drafting_rule();
+        self.code_panel.range = self.history_panel.shared_range();
+        let action = self.code_panel.show(
+            ui,
+            &self.project.graph,
+            selected,
+            &self.notebook,
+            &self.findings,
+            edge,
+        );
+        if let Some(action) = action {
+            let ctx = ui.ctx().clone();
+            self.run_panel_action(action, &ctx);
+        }
     }
 
     pub(super) fn run_panel_action(&mut self, action: PanelAction, ctx: &egui::Context) {

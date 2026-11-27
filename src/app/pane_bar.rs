@@ -21,6 +21,7 @@ const TOGGLE_ROUNDING: u8 = 12;
 pub enum Pane {
     Symbols,
     Source,
+    Graph,
     Notes,
     Findings,
     Strings,
@@ -33,9 +34,10 @@ pub enum Pane {
 
 impl Pane {
     /// In the order the toggles are shown, left to right.
-    pub const ALL: [Pane; 10] = [
+    pub const ALL: [Pane; 11] = [
         Pane::Symbols,
         Pane::Source,
+        Pane::Graph,
         Pane::Notes,
         Pane::Findings,
         Pane::Strings,
@@ -51,6 +53,7 @@ impl Pane {
         match self {
             Pane::Symbols => "Symbols",
             Pane::Source => "Source",
+            Pane::Graph => "Graph",
             Pane::Notes => "Notes",
             Pane::Findings => "Findings",
             Pane::Strings => "Strings",
@@ -67,6 +70,7 @@ impl Pane {
         match self {
             Pane::Symbols => "Symbol List",
             Pane::Source => "Source Pane",
+            Pane::Graph => "Graph View",
             Pane::Notes => "Notes, Bookmarks & Journal",
             Pane::Findings => "Findings (risky calls)",
             Pane::Strings => "Strings in the Source",
@@ -168,6 +172,7 @@ impl SrcWranglrApp {
         match pane {
             Pane::Symbols => self.layout.is_symbols_shown,
             Pane::Source => self.layout.is_source_shown,
+            Pane::Graph => self.layout.is_graph_shown,
             Pane::Notes => self.notes_panel.is_open(),
             Pane::Findings => self.findings_panel.is_open(),
             Pane::Strings => self.strings_panel.is_open(),
@@ -185,6 +190,7 @@ impl SrcWranglrApp {
         match pane {
             Pane::Symbols => self.layout = self.layout.with_symbols_shown(is_shown),
             Pane::Source => self.layout = self.layout.with_source_shown(is_shown),
+            Pane::Graph => self.layout = self.layout.with_graph_shown(is_shown),
             Pane::Notes => self.notes_panel.set_open(is_shown),
             Pane::Findings => self.findings_panel.set_open(is_shown),
             Pane::Strings => self.strings_panel.set_open(is_shown),
@@ -290,13 +296,13 @@ mod tests {
     }
 
     #[test]
-    fn the_symbol_list_and_source_start_shown_and_the_rest_hidden() {
+    fn the_symbol_list_source_and_graph_start_shown_and_the_rest_hidden() {
         let (app, _) = demo_app();
         let shown: Vec<Pane> = Pane::ALL
             .into_iter()
             .filter(|&pane| app.is_pane_shown(pane))
             .collect();
-        assert_eq!(shown, [Pane::Symbols, Pane::Source]);
+        assert_eq!(shown, [Pane::Symbols, Pane::Source, Pane::Graph]);
     }
 
     #[test]

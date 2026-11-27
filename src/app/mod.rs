@@ -600,14 +600,24 @@ impl SrcWranglrApp {
         self.show_trace_panel(ui);
         self.show_code_panel(ui);
         egui::CentralPanel::default().show(ui, |ui| {
-            let notebook = &self.notebook;
-            let badge_of = |id| {
-                notebook.mark(id).map(|m| Badge {
-                    is_starred: m.is_starred,
-                    has_text: m.has_text,
-                })
-            };
-            self.graph_view.show(ui, &self.project.graph, &badge_of);
+            if self.layout.is_graph_shown {
+                let notebook = &self.notebook;
+                let badge_of = |id| {
+                    notebook.mark(id).map(|m| Badge {
+                        is_starred: m.is_starred,
+                        has_text: m.has_text,
+                    })
+                };
+                self.graph_view.show(ui, &self.project.graph, &badge_of);
+            } else if self.layout.is_source_shown {
+                // Graph hidden: the source fills the centre instead of
+                // leaving it blank.
+                self.show_code_contents(ui, pane_bar::Edge::Right);
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.weak("Graph and Source hidden — bring them back with the buttons in the menu bar.");
+                });
+            }
         });
     }
 
