@@ -305,10 +305,12 @@ impl SurveyView {
                 None => None,
             },
         };
-        // Every tab fills the window's height, so switching tabs — including to
-        // a short, unscanned folder tab — doesn't make the resizable window
-        // jump to each tab's content size.
-        ui.allocate_space(ui.available_size());
+        // Each tab fills the window itself (its content is wrapped in a
+        // `ScrollArea::auto_shrink(false)`), and egui's resizable window keeps
+        // the largest size it has had, so it doesn't shrink to a short tab.
+        // Don't `allocate_space(available_size())` to pad it: that reports the
+        // content as one item-spacing taller than the window every frame, and
+        // the window grows to fit it, forever (a visible creep on Linux/X11).
         action
     }
 
