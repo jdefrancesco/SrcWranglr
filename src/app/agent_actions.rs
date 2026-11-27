@@ -19,13 +19,16 @@ use crate::mcp::tools::verdicts::VerdictChange;
 /// The task for a function-scoped review: judge each memory operation's safety.
 fn function_review_prompt(function: &str, file: &str, line: u32) -> String {
     format!(
-        "Focus only on the function `{function}` at {file}:{line}. For each memory operation in \
-         it (memcpy, memmove, strcpy, strncpy, sprintf, realloc, and writes through pointers or \
-         arrays), work out the destination buffer's size by tracing its allocation, the number \
-         of bytes written, and whether any input can make the write exceed the buffer. Say \
-         whether each is safe, and whether it is reachable from untrusted input. Use \
-         function_source and the trace tools; read the code rather than guessing. End with a \
-         per-operation and an overall verdict for the function."
+        "Focus only on the function `{function}` at {file}:{line}. Start from what SrcWranglr has \
+         already computed for it: check findings for the risky calls already flagged here and \
+         input_paths for whether untrusted input already reaches it — don't re-derive those by \
+         hand. Then, for each memory operation in it (memcpy, memmove, strcpy, strncpy, sprintf, \
+         realloc, and writes through pointers or arrays), work out the destination buffer's size \
+         by tracing its allocation, the number of bytes written, and whether any input can make \
+         the write exceed the buffer. Use function_source and the trace tools to confirm; read \
+         the code rather than guessing. Say whether each operation is safe and whether it is \
+         reachable from untrusted input, and end with a per-operation and an overall verdict for \
+         the function."
     )
 }
 
@@ -430,6 +433,9 @@ mod tests {
         assert!(prompt.contains("hpack_append_hdr"), "{prompt}");
         assert!(prompt.contains("src/hpack.c:406"), "{prompt}");
         assert!(prompt.contains("memcpy"), "{prompt}");
+        // It leans on SrcWranglr's precomputed work rather than redoing it.
+        assert!(prompt.contains("findings"), "{prompt}");
+        assert!(prompt.contains("input_paths"), "{prompt}");
     }
 
     use crate::app::launch::LaunchOptions;
