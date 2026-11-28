@@ -105,8 +105,7 @@ fn lists_the_code_like_a_function_once_read() {
 fn lists_functions_with_every_behavior_picked() {
     let mut harness = harness();
     harness.get_by_label("By behavior").click();
-    harness.run();
-    harness.get_by_label_contains("Pick behaviors above");
+    wait_for(&mut harness, "Pick behaviors above");
     harness.get_by_label("reads input (1)").click();
     harness.run();
     harness.get_by_label("copies memory (1)").click();
