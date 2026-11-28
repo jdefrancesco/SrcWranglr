@@ -11,6 +11,7 @@ pub mod fuzz;
 pub mod heuristics;
 pub mod includes;
 pub mod injection;
+pub mod logic;
 pub mod lookalike;
 pub mod memory;
 pub(crate) mod parse;

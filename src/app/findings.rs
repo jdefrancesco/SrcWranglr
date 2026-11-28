@@ -167,6 +167,7 @@ fn own_findings(graph: &CodeGraph, list: &DangerousList) -> Vec<Finding> {
     found.extend(silencing_comments(graph));
     found.extend(injection::findings(graph));
     found.extend(crate::analysis::memory::findings(graph));
+    found.extend(crate::analysis::logic::findings(graph));
     found
 }
 
@@ -184,7 +185,13 @@ pub fn verdict_label(rule: &str, status: TriageStatus) -> &'static str {
 
 /// Whether SrcWranglr made `finding` itself, rather than a tool it ran.
 fn is_own(finding: &Finding) -> bool {
-    [risky::TOOL, risky::LIST_TOOL, silenced::TOOL].contains(&finding.tool.as_str())
+    [
+        risky::TOOL,
+        risky::LIST_TOOL,
+        silenced::TOOL,
+        crate::analysis::logic::TOOL,
+    ]
+    .contains(&finding.tool.as_str())
 }
 
 /// The lines of the files some findings are in, split once.
