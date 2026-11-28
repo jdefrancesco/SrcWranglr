@@ -354,6 +354,249 @@ fn a_checked_and_closed_file_descriptor_is_fine() {
 }
 
 #[test]
+fn multiplying_two_variables_for_an_allocation_size_is_flagged() {
+    let found = rules(
+        "void *f(int n, int m) {\n\
+         \x20   return malloc(n * m);\n\
+         }\n",
+    );
+    assert_eq!(found, [("allocation-size-overflow".to_string(), 2)]);
+}
+
+#[test]
+fn a_count_times_sizeof_allocation_is_flagged() {
+    let found = rules(
+        "void *f(int n) {\n\
+         \x20   return malloc(n * sizeof(int));\n\
+         }\n",
+    );
+    assert_eq!(found, [("allocation-size-overflow".to_string(), 2)]);
+}
+
+#[test]
+fn multiplying_by_a_constant_is_left_alone() {
+    let found = rules(
+        "void *f(int n) {\n\
+         \x20   return malloc(n * 4);\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn calloc_detects_its_own_overflow_and_is_left_alone() {
+    let found = rules(
+        "void *f(int n, int m) {\n\
+         \x20   return calloc(n, m);\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn an_overflowing_realloc_size_is_flagged() {
+    let found = rules(
+        "void *f(void *p, int n, int m) {\n\
+         \x20   return realloc(p, n * m);\n\
+         }\n",
+    );
+    assert_eq!(found, [("allocation-size-overflow".to_string(), 2)]);
+}
+
+#[test]
+fn a_plain_constant_allocation_is_fine() {
+    let found = rules(
+        "void *f(void) {\n\
+         \x20   return malloc(16);\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn an_unsigned_less_than_zero_guard_is_flagged() {
+    let found = rules(
+        "void f(size_t n) {\n\
+         \x20   if (n < 0) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert_eq!(found, [("unsigned-comparison".to_string(), 2)]);
+}
+
+#[test]
+fn an_unsigned_at_least_zero_test_is_flagged() {
+    let found = rules(
+        "void f(unsigned x) {\n\
+         \x20   if (x >= 0) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert_eq!(found, [("unsigned-comparison".to_string(), 2)]);
+}
+
+#[test]
+fn a_signed_less_than_zero_check_is_fine() {
+    let found = rules(
+        "void f(int n) {\n\
+         \x20   if (n < 0) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn an_unsigned_at_most_zero_test_is_not_a_tautology() {
+    let found = rules(
+        "void f(size_t n) {\n\
+         \x20   if (n <= 0) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_reversed_zero_at_most_unsigned_test_is_flagged() {
+    let found = rules(
+        "void f(size_t n) {\n\
+         \x20   if (0 <= n) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert_eq!(found, [("unsigned-comparison".to_string(), 2)]);
+}
+
+#[test]
+fn an_unsigned_countdown_loop_never_terminates() {
+    let found = rules(
+        "void f(size_t n) {\n\
+         \x20   for (size_t i = n; i >= 0; i--) {\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert_eq!(found, [("unsigned-comparison".to_string(), 2)]);
+}
+
+#[test]
+fn sizeof_of_a_pointer_as_a_memset_size_is_flagged() {
+    let found = rules(
+        "void f(char *p) {\n\
+         \x20   memset(p, 0, sizeof(p));\n\
+         }\n",
+    );
+    assert_eq!(found, [("sizeof-pointer".to_string(), 2)]);
+}
+
+#[test]
+fn sizeof_of_the_pointee_is_fine() {
+    let found = rules(
+        "void f(char *p) {\n\
+         \x20   memset(p, 0, sizeof(*p));\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn sizeof_of_a_real_array_is_fine() {
+    let found = rules(
+        "void f(void) {\n\
+         \x20   char buf[64];\n\
+         \x20   memset(buf, 0, sizeof(buf));\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn sizeof_of_a_pointer_as_a_malloc_size_is_flagged() {
+    let found = rules(
+        "void *f(char *p) {\n\
+         \x20   return malloc(sizeof(p));\n\
+         }\n",
+    );
+    assert_eq!(found, [("sizeof-pointer".to_string(), 2)]);
+}
+
+#[test]
+fn a_constant_index_past_the_array_end_is_flagged() {
+    let found = rules(
+        "void f(void) {\n\
+         \x20   char buf[10];\n\
+         \x20   buf[10] = 0;\n\
+         }\n",
+    );
+    assert_eq!(found, [("array-bounds".to_string(), 3)]);
+}
+
+#[test]
+fn a_constant_index_within_the_array_is_fine() {
+    let found = rules(
+        "void f(void) {\n\
+         \x20   char buf[10];\n\
+         \x20   buf[9] = 0;\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_loop_that_runs_one_past_the_end_is_flagged() {
+    let found = rules(
+        "void f(void) {\n\
+         \x20   char buf[10];\n\
+         \x20   for (int i = 0; i <= 10; i++) {\n\
+         \x20       buf[i] = 0;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert_eq!(found, [("array-bounds".to_string(), 4)]);
+}
+
+#[test]
+fn a_loop_with_a_correct_bound_is_fine() {
+    let found = rules(
+        "void f(void) {\n\
+         \x20   char buf[10];\n\
+         \x20   for (int i = 0; i < 10; i++) {\n\
+         \x20       buf[i] = 0;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_loop_bound_larger_than_the_array_is_flagged() {
+    let found = rules(
+        "void f(void) {\n\
+         \x20   char buf[10];\n\
+         \x20   for (int i = 0; i < 20; i++) {\n\
+         \x20       buf[i] = 0;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert_eq!(found, [("array-bounds".to_string(), 4)]);
+}
+
+#[test]
+fn an_array_parameters_size_is_not_trusted() {
+    let found = rules(
+        "void f(char buf[10]) {\n\
+         \x20   buf[10] = 0;\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
 fn logic_findings_are_tagged_and_carry_a_cwe() {
     let graph = graph_of_files(&[(
         "a.c",

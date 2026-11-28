@@ -8,9 +8,14 @@
 //! triage and the agent's `findings` tool pick them up like any other.
 
 mod allocation;
+mod arithmetic;
+mod bounds;
 mod condition;
 mod leak;
+mod sizeof_misuse;
+mod types;
 mod uninit;
+mod unsigned;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -88,11 +93,16 @@ impl Flaw {
 /// once per function body.
 fn walk(node: Node, source: &str, flaws: &mut Vec<Flaw>) {
     condition::check(node, source, flaws);
+    arithmetic::check(node, source, flaws);
     if node.kind() == "function_definition" {
         if let Some(body) = node.child_by_field_name("body") {
             allocation::check(body, source, flaws);
             uninit::check(body, source, flaws);
             leak::check(body, source, flaws);
+            let types = types::Types::from_function(node, source);
+            unsigned::check(body, source, &types, flaws);
+            sizeof_misuse::check(body, source, &types, flaws);
+            bounds::check(body, source, &types, flaws);
         }
     }
     for child in named_children(node) {
@@ -133,5 +143,25 @@ pub(super) fn identifier_nodes<'t>(node: Node<'t>, out: &mut Vec<Node<'t>>) {
     }
     for child in named_children(node) {
         identifier_nodes(child, out);
+    }
+}
+
+/// Parse a numeric literal node as a `u64`, through wrapping parentheses.
+pub(super) fn literal_u64(node: Node, source: &str) -> Option<u64> {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" {
+        node = named_children(node).into_iter().next()?;
+    }
+    if node.kind() != "number_literal" {
+        return None;
+    }
+    let digits = text(source, node).trim_end_matches(['u', 'U', 'l', 'L']);
+    if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        digits.parse().ok()
     }
 }
