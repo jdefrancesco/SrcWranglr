@@ -12,6 +12,7 @@ mod arithmetic;
 mod bounds;
 mod condition;
 mod leak;
+mod signedness;
 mod sizeof_misuse;
 mod types;
 mod uninit;
@@ -57,7 +58,7 @@ pub fn findings(graph: &CodeGraph) -> Vec<Finding> {
             continue;
         };
         let mut flaws = Vec::new();
-        walk(tree.root_node(), source, &mut flaws);
+        walk(graph, file.as_str(), tree.root_node(), source, &mut flaws);
         located.extend(flaws.into_iter().map(|flaw| (file.as_str(), flaw)));
     }
     let places: Vec<(&str, u32)> = located
@@ -89,9 +90,10 @@ impl Flaw {
     }
 }
 
-/// Run the node-local condition checks on every node, and the allocation check
-/// once per function body.
-fn walk(node: Node, source: &str, flaws: &mut Vec<Flaw>) {
+/// Run the node-local condition checks on every node, and the per-function
+/// checks once per function body. `graph`/`file` are carried for the taint-gated
+/// signedness check, the one check that reasons beyond a single function.
+fn walk(graph: &CodeGraph, file: &str, node: Node, source: &str, flaws: &mut Vec<Flaw>) {
     condition::check(node, source, flaws);
     arithmetic::check(node, source, flaws);
     if node.kind() == "function_definition" {
@@ -103,10 +105,11 @@ fn walk(node: Node, source: &str, flaws: &mut Vec<Flaw>) {
             unsigned::check(body, source, &types, flaws);
             sizeof_misuse::check(body, source, &types, flaws);
             bounds::check(body, source, &types, flaws);
+            signedness::check(graph, file, body, source, &types, flaws);
         }
     }
     for child in named_children(node) {
-        walk(child, source, flaws);
+        walk(graph, file, child, source, flaws);
     }
 }
 

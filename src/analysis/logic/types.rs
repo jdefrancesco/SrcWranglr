@@ -15,6 +15,9 @@ use crate::analysis::parse::{named_children, text};
 pub(super) struct VarType {
     /// Declared with an unsigned type (`unsigned …`, `size_t`, `uintN_t`, …).
     pub unsigned: bool,
+    /// Declared with a known signed integer type (`int`, `long`, `ssize_t`, …).
+    /// Mutually exclusive with `unsigned`; both are false for unknown typedefs.
+    pub signed_int: bool,
     /// Declared as a pointer.
     pub pointer: bool,
     /// Element count of a fixed-size local array (`char buf[10]` → 10). Never
@@ -100,13 +103,14 @@ fn insert(
     } else {
         (pointer, array_len)
     };
-    let unsigned = declaration
-        .child_by_field_name("type")
-        .is_some_and(|ty| is_unsigned_type(ty, source));
+    let type_node = declaration.child_by_field_name("type");
+    let unsigned = type_node.is_some_and(|ty| is_unsigned_type(ty, source));
+    let signed_int = type_node.is_some_and(|ty| is_signed_type(ty, source));
     vars.insert(
         name.to_string(),
         VarType {
             unsigned,
+            signed_int,
             pointer,
             array_len,
         },
@@ -135,6 +139,33 @@ fn unwrap_declarator<'s>(node: Node, source: &'s str) -> Option<(&'s str, bool, 
             unwrap_declarator(named_children(node).into_iter().next()?, source)
         }
         _ => None,
+    }
+}
+
+/// Whether a type node names a known signed integer type. `char` is excluded
+/// (its signedness is implementation-defined), as are unknown typedefs.
+fn is_signed_type(type_node: Node, source: &str) -> bool {
+    let name = text(source, type_node);
+    match type_node.kind() {
+        // `int`, `long`, `signed int`, `long long` — anything sized that is not
+        // spelled unsigned.
+        "sized_type_specifier" => !name.contains("unsigned"),
+        "primitive_type" => matches!(
+            name,
+            "int"
+                | "long"
+                | "short"
+                | "signed"
+                | "int8_t"
+                | "int16_t"
+                | "int32_t"
+                | "int64_t"
+                | "intptr_t"
+                | "intmax_t"
+                | "ssize_t"
+                | "ptrdiff_t"
+        ),
+        _ => false,
     }
 }
 

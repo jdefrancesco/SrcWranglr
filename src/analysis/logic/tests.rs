@@ -597,6 +597,45 @@ fn an_array_parameters_size_is_not_trusted() {
 }
 
 #[test]
+fn a_tainted_signed_value_compared_against_unsigned_is_flagged() {
+    let found = rules(
+        "void f(size_t cap) {\n\
+         \x20   int n = atoi(getenv(\"N\"));\n\
+         \x20   if (n < cap) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert_eq!(found, [("signed-unsigned-compare".to_string(), 3)]);
+}
+
+#[test]
+fn an_untainted_signed_unsigned_comparison_is_left_alone() {
+    let found = rules(
+        "void f(size_t cap) {\n\
+         \x20   int n = 5;\n\
+         \x20   if (n < cap) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_tainted_comparison_between_matching_signs_is_left_alone() {
+    let found = rules(
+        "void f(int cap) {\n\
+         \x20   int n = atoi(getenv(\"N\"));\n\
+         \x20   if (n < cap) {\n\
+         \x20       return;\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
 fn logic_findings_are_tagged_and_carry_a_cwe() {
     let graph = graph_of_files(&[(
         "a.c",
