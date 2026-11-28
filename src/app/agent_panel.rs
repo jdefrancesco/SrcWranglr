@@ -3,7 +3,7 @@
 //! where it was looking; with "Follow the agent", each call goes there as
 //! it comes.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -28,10 +28,56 @@ const MAX_PENDING: usize = 1000;
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x6C, 0x6C);
 const PENDING_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE0, 0x9A, 0x4C);
 const NEXT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x5A, 0xA0, 0xF0);
+/// Positive colour for the "reused SrcWranglr analysis" tally.
+const REUSE_COLOR: egui::Color32 = egui::Color32::from_rgb(0x5A, 0xC0, 0x8A);
 /// Height of the in-app transcript scroll area.
 const LIST_HEIGHT: f32 = 260.0;
 /// How often ages are redrawn while calls are shown.
 const AGE_REFRESH: Duration = Duration::from_secs(10);
+
+/// Whether a tool call reused SrcWranglr's precomputed analysis, read raw
+/// source, or acted (a write, command, or scan).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolKind {
+    /// Reuses the index or an analysis SrcWranglr already ran.
+    Analysis,
+    /// Reads raw source to reason by hand.
+    Source,
+    /// A write, command, or other action.
+    Action,
+}
+
+/// Classify an in-app tool by what it means for reuse of SrcWranglr's work.
+/// The analysis set mirrors the read tools in `crate::agent::tools`.
+fn tool_kind(name: &str) -> ToolKind {
+    match name {
+        "overview" | "find_symbol" | "findings" | "input_paths" | "fuzz_targets"
+        | "fuzz_harness" | "trace" | "callers" | "callees" | "xrefs" | "library_calls"
+        | "strings" | "notes" => ToolKind::Analysis,
+        "function_source" | "read_source" => ToolKind::Source,
+        // add_note, set_verdict, journal_entry, draft_rule, import_sarif, run_command, …
+        _ => ToolKind::Action,
+    }
+}
+
+/// A tally of the current run's tool calls, grouped for the reuse summary.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct ToolUsage {
+    /// Calls that reused SrcWranglr's index or analyses.
+    pub analysis: usize,
+    /// Calls that read raw source.
+    pub source: usize,
+    /// Writes, commands, and other actions.
+    pub action: usize,
+    /// The analysis tools used, most-used first then by name, for the breakdown.
+    pub analysis_breakdown: Vec<(String, usize)>,
+}
+
+impl ToolUsage {
+    fn is_empty(&self) -> bool {
+        self.analysis == 0 && self.source == 0 && self.action == 0
+    }
+}
 
 #[derive(Default)]
 pub struct AgentPanel {
@@ -46,6 +92,8 @@ pub struct AgentPanel {
     pending: Vec<VerdictChange>,
     /// The in-app agent's transcript (is_error, line), newest last.
     in_app_log: Vec<(bool, String)>,
+    /// How many times the current run called each tool, for the reuse summary.
+    in_app_tool_calls: BTreeMap<String, usize>,
     /// Commands the in-app agent wants to run, each blocking until the
     /// user approves or denies it.
     commands: Vec<(String, SyncSender<bool>)>,
@@ -105,7 +153,10 @@ impl AgentPanel {
     pub fn push_in_app(&mut self, event: AgentStep) {
         let line = match event {
             AgentStep::Said(text) => (false, format!("agent: {text}")),
-            AgentStep::Running { name, arguments } => (false, format!("▸ {name}  {arguments}")),
+            AgentStep::Running { name, arguments } => {
+                *self.in_app_tool_calls.entry(name.clone()).or_insert(0) += 1;
+                (false, format!("▸ {name}  {arguments}"))
+            }
             AgentStep::Result {
                 name,
                 is_error,
@@ -121,6 +172,64 @@ impl AgentPanel {
         self.in_app_log.drain(..overflow);
     }
 
+    /// The current run's tool calls grouped into reused analysis, source
+    /// reads, and actions — the evidence that the agent is leaning on
+    /// SrcWranglr's work rather than re-deriving it.
+    pub(super) fn in_app_tool_usage(&self) -> ToolUsage {
+        let mut usage = ToolUsage::default();
+        for (name, &count) in &self.in_app_tool_calls {
+            match tool_kind(name) {
+                ToolKind::Analysis => {
+                    usage.analysis += count;
+                    usage.analysis_breakdown.push((name.clone(), count));
+                }
+                ToolKind::Source => usage.source += count,
+                ToolKind::Action => usage.action += count,
+            }
+        }
+        // Most-used analysis tools first; ties keep the name order from the map.
+        usage
+            .analysis_breakdown
+            .sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        usage
+    }
+
+    /// A one-glance summary of how the run used SrcWranglr: analysis reuse vs
+    /// raw source reads vs actions, with the analysis tools broken down. This
+    /// is the visible answer to "is the agent using SrcWranglr's work?".
+    fn show_tool_usage(&self, ui: &mut egui::Ui) {
+        let usage = self.in_app_tool_usage();
+        if usage.is_empty() {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(format!("Reused SrcWranglr analysis {}×", usage.analysis))
+                    .color(REUSE_COLOR)
+                    .strong(),
+            )
+            .on_hover_text(
+                "Calls that reused SrcWranglr's index and prior analyses — findings, \
+                 input_paths, traces, call graph, fuzz targets and harnesses — instead of \
+                 re-deriving them by reading source.",
+            );
+            ui.label(RichText::new(format!("· read source {}×", usage.source)).weak());
+            if usage.action > 0 {
+                ui.label(RichText::new(format!("· acted {}×", usage.action)).weak());
+            }
+        });
+        if !usage.analysis_breakdown.is_empty() {
+            let breakdown = usage
+                .analysis_breakdown
+                .iter()
+                .take(8)
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            ui.label(RichText::new(breakdown).small().weak());
+        }
+    }
+
     /// Queues a command the in-app agent wants to run, for approval.
     pub fn queue_command(&mut self, command: String, reply: SyncSender<bool>) {
         self.commands.push((command, reply));
@@ -131,6 +240,7 @@ impl AgentPanel {
         // approvals, so a previous run's errors don't pile up below it.
         if running {
             self.in_app_log.clear();
+            self.in_app_tool_calls.clear();
             for (_, reply) in self.commands.drain(..) {
                 let _ = reply.send(false);
             }
@@ -165,6 +275,7 @@ impl AgentPanel {
         self.calls = 0;
         self.pending.clear();
         self.in_app_log.clear();
+        self.in_app_tool_calls.clear();
         // Denying frees the agent threads waiting on these.
         for (_, reply) in self.commands.drain(..) {
             let _ = reply.send(false);
@@ -219,6 +330,7 @@ impl AgentPanel {
             ),
             false => ui.label(RichText::new("Agent run finished.").weak()),
         };
+        self.show_tool_usage(ui);
         // Commands waiting on the user; each blocks the agent until answered.
         self.commands.retain(|(command, reply)| {
             let mut keep = true;

@@ -213,14 +213,70 @@ fn the_transcript_records_each_step_of_an_in_app_run() {
 #[test]
 fn the_transcript_is_shown_in_the_pane() {
     let mut panel = AgentPanel::default();
+    // An action tool: shown in the transcript but not the analysis breakdown,
+    // so the label appears exactly once.
     panel.push_in_app(AgentStep::Running {
-        name: "find_symbol".into(),
+        name: "run_command".into(),
         arguments: "{}".into(),
     });
     let harness = harness(panel);
     // The step is rendered in the pane (inside the resizable transcript),
     // not left to an external terminal.
-    harness.get_by_label_contains("find_symbol");
+    harness.get_by_label_contains("run_command");
+}
+
+fn running(name: &str) -> AgentStep {
+    AgentStep::Running {
+        name: name.into(),
+        arguments: "{}".into(),
+    }
+}
+
+#[test]
+fn the_tool_usage_summary_counts_reuse_versus_source_reads() {
+    let mut panel = AgentPanel::default();
+    for name in [
+        "findings",
+        "input_paths",
+        "findings",
+        "function_source",
+        "run_command",
+    ] {
+        panel.push_in_app(running(name));
+    }
+    let usage = panel.in_app_tool_usage();
+    assert_eq!(usage.analysis, 3, "findings x2 + input_paths x1");
+    assert_eq!(usage.source, 1, "function_source");
+    assert_eq!(usage.action, 1, "run_command");
+    // fuzz_harness counts as reuse of a SrcWranglr feature, not an action.
+    panel.push_in_app(running("fuzz_harness"));
+    assert_eq!(panel.in_app_tool_usage().analysis, 4);
+    // The most-used analysis tool leads the breakdown.
+    assert_eq!(
+        panel.in_app_tool_usage().analysis_breakdown.first(),
+        Some(&("findings".to_string(), 2))
+    );
+}
+
+#[test]
+fn a_fresh_run_clears_the_tool_usage_tally() {
+    let mut panel = AgentPanel::default();
+    panel.push_in_app(running("findings"));
+    assert_eq!(panel.in_app_tool_usage().analysis, 1);
+    panel.set_in_app_running(true);
+    assert_eq!(
+        panel.in_app_tool_usage().analysis,
+        0,
+        "a new run starts the tally fresh"
+    );
+}
+
+#[test]
+fn the_reuse_summary_is_shown_in_the_pane() {
+    let mut panel = AgentPanel::default();
+    panel.push_in_app(running("findings"));
+    let harness = harness(panel);
+    harness.get_by_label_contains("Reused SrcWranglr analysis");
 }
 
 #[test]
