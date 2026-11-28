@@ -165,6 +165,8 @@ enum Status {
 enum FindingPickOwned {
     Show(Option<crate::model::SymbolId>, String, u32),
     Explore(crate::model::SymbolId),
+    Emulate(crate::model::SymbolId),
+    CheckWithAgent(crate::model::SymbolId),
 }
 
 pub struct SrcWranglrApp {
@@ -586,12 +588,35 @@ impl SrcWranglrApp {
                     FindingPickOwned::Show(f.symbol, f.file.clone(), f.line)
                 }
                 findings_panel::FindingPick::Explore(id) => FindingPickOwned::Explore(id),
+                findings_panel::FindingPick::Emulate(id) => FindingPickOwned::Emulate(id),
+                findings_panel::FindingPick::CheckWithAgent(id) => {
+                    FindingPickOwned::CheckWithAgent(id)
+                }
             });
         match pick {
             Some(FindingPickOwned::Show(symbol, file, line)) => {
                 self.go_to_place(symbol, &file, line);
             }
             Some(FindingPickOwned::Explore(id)) => self.explore_from_finding(id),
+            Some(FindingPickOwned::Emulate(id)) => {
+                if let Some(symbol) = self.project.graph.symbols.get(&id) {
+                    let action = code_panel::PanelAction::Emulate {
+                        file: symbol.file.clone(),
+                        line: symbol.line,
+                    };
+                    self.run_panel_action(action, ui.ctx());
+                }
+            }
+            Some(FindingPickOwned::CheckWithAgent(id)) => {
+                if let Some(symbol) = self.project.graph.symbols.get(&id) {
+                    let (name, file, line) = (
+                        symbol.qualified_name.clone(),
+                        symbol.file.clone(),
+                        symbol.line,
+                    );
+                    self.start_in_app_agent_for(&name, &file, line, ui.ctx());
+                }
+            }
             None => {}
         }
         self.show_strings_panel(ui);

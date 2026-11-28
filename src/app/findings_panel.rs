@@ -28,6 +28,12 @@ pub enum FindingPick<'f> {
     /// Chose **Explore** in its right-click menu: explore the finding's
     /// function in the graph.
     Explore(SymbolId),
+    /// Chose **Emulate…**: step through the finding's function in the emulator
+    /// to see the flaw happen concretely.
+    Emulate(SymbolId),
+    /// Chose **Check with the agent**: have the in-app agent audit the
+    /// finding's function and try to confirm it.
+    CheckWithAgent(SymbolId),
 }
 
 #[derive(Default)]
@@ -240,6 +246,14 @@ fn finding_row<'f>(
                 };
                 if ui.button(explore).clicked() {
                     pick = Some(FindingPick::Explore(id));
+                    ui.close();
+                }
+                if ui.button("Emulate…").clicked() {
+                    pick = Some(FindingPick::Emulate(id));
+                    ui.close();
+                }
+                if ui.button("Check with the agent").clicked() {
+                    pick = Some(FindingPick::CheckWithAgent(id));
                     ui.close();
                 }
             });
@@ -671,5 +685,57 @@ mod tests {
         harness.get_by_label("Explore run").click();
         harness.run();
         assert_eq!(harness.state().explored, expected);
+    }
+
+    #[test]
+    fn right_clicking_a_row_offers_emulate_and_agent() {
+        use egui_kittest::kittest::Queryable;
+
+        struct State {
+            panel: FindingsPanel,
+            findings: Findings,
+            graph: CodeGraph,
+            emulated: Option<SymbolId>,
+        }
+        let graph = graph();
+        let mut panel = FindingsPanel::default();
+        panel.set_open(true);
+        let state = State {
+            panel,
+            findings: Findings::for_graph(&graph, &Default::default()),
+            graph,
+            emulated: None,
+        };
+        let mut harness = crate::app::fonts::test_harness().build_ui_state(
+            |ui, state: &mut State| {
+                let picked = state.panel.show(
+                    ui,
+                    &state.findings,
+                    &state.graph,
+                    &Reach::default(),
+                    Layout::default(),
+                    None,
+                );
+                if let Some(FindingPick::Emulate(id)) = picked {
+                    state.emulated = Some(id);
+                }
+            },
+            state,
+        );
+        harness.run();
+        let expected = harness
+            .state()
+            .findings
+            .all()
+            .iter()
+            .find(|f| f.line == 2)
+            .and_then(|f| f.symbol);
+        harness.get_by_label("system  x.c:2  run").click_secondary();
+        harness.run();
+        // Both confirmation routes are offered next to Explore.
+        harness.get_by_label_contains("Check with the agent");
+        harness.get_by_label("Emulate…").click();
+        harness.run();
+        assert_eq!(harness.state().emulated, expected);
     }
 }
